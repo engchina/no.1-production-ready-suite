@@ -23,9 +23,11 @@ from app.features.agent.run_facts import (
     fact_from_run,
 )
 from app.features.agent.run_facts_store import (
+    ANSWER_BASIS_BINDS,
     LEGACY_MERGE_SQL,
     MERGE_SQL,
     MERGE_SQL_012,
+    MERGE_SQL_014,
     SIGNAL_BINDS,
     MemoryRunFactsStore,
     OracleRunFactsStore,
@@ -61,10 +63,10 @@ NOW = datetime(2026, 10, 14, 3, 0, tzinfo=UTC)
 ALICE = "aaaaaaaa-0000-0000-0000-000000000001"
 
 
-def _answer(outcome: str | None) -> Artifact:
+def _answer(outcome: str | None, basis: str = "answer_passages") -> Artifact:
     content: dict[str, Any] = {"text": "回答"}
     if outcome is not None:
-        content["outcome"] = {"value": outcome, "basis": "answer_passages", "signals": []}
+        content["outcome"] = {"value": outcome, "basis": basis, "signals": []}
     return Artifact(name="回答", kind="answer", content=content)
 
 
@@ -78,6 +80,7 @@ def _fact(
     feedback: FeedbackRating | None = None,
     admin: FeedbackRating | None = None,
     outcome: str | None = None,
+    basis: str | None = None,
     tool_failures: int = 0,
     approvals_rejected: int = 0,
     data_tool_calls: int | None = 0,
@@ -98,6 +101,7 @@ def _fact(
         feedback=rating(feedback),
         admin_review=rating(admin),
         answer_outcome=outcome,
+        answer_basis=basis,
         tool_failures=tool_failures,
         approvals_rejected=approvals_rejected,
         data_tool_calls=data_tool_calls,
@@ -159,7 +163,33 @@ def test_fact_counts_failed_tools_rejected_approvals_and_keeps_the_outcome() -> 
     # 回答の対応の無い（記録していない）Run は None。
     bare = run.model_copy(update={"artifacts": [_answer(None)], "steps": [], "approvals": []})
     assert fact_from_run(bare).answer_outcome is None
+    assert fact_from_run(bare).answer_basis is None
     assert fact_signals(fact_from_run(bare)) == []
+
+
+def test_fact_keeps_the_basis_and_flags_the_ungrounded_answer() -> None:
+    """ツールを呼ばずに作った回答をそのまま出した Run は「根拠を使わずに答えた」（#5859）。
+
+    回答の対応の basis（`ungrounded_answer`）で数える。拒答に置き換えた Run（basis
+    `no_tool_grounding`）は「答えられなかった」のままで、ここには数えない。
+    """
+    run = RunState(id="r1", goal="質問", agent_id="default", status=RunStatus.COMPLETED)
+
+    shown = fact_from_run(
+        run.model_copy(update={"artifacts": [_answer("answered", "ungrounded_answer")]})
+    )
+    refused = fact_from_run(
+        run.model_copy(
+            update={"artifacts": [_answer("insufficient_evidence", "no_tool_grounding")]}
+        )
+    )
+    grounded = fact_from_run(run.model_copy(update={"artifacts": [_answer("answered")]}))
+
+    assert (shown.answer_outcome, shown.answer_basis) == ("answered", "ungrounded_answer")
+    assert fact_signals(shown) == [SignalKind.UNGROUNDED_ANSWER]
+    assert refused.answer_basis == "no_tool_grounding"
+    assert fact_signals(refused) == [SignalKind.UNANSWERED]
+    assert grounded.answer_basis == "answer_passages" and fact_signals(grounded) == []
 
 
 def _step(name: str, *, success: bool = True, trace_id: str | None = None) -> RunStep:
@@ -181,6 +211,9 @@ _PARITY_FACTS = [
     _fact("insufficient", outcome="insufficient_evidence"),
     _fact("needs-human", outcome="needs_human"),
     _fact("conditional", outcome="conditional"),
+    _fact("ungrounded", outcome="answered", basis="ungrounded_answer"),
+    _fact("grounded", outcome="answered", basis="answer_passages"),
+    _fact("refused", outcome="insufficient_evidence", basis="no_tool_grounding"),
     _fact("clarification", outcome="needs_clarification"),
     _fact("rejected", approvals_rejected=1),
     _fact("tool-failed", tool_failures=3),
@@ -204,6 +237,9 @@ def test_signals_follow_the_definitions() -> None:
     assert signals["plain"] == [] and signals["owner-good"] == []
     assert signals["owner-bad"] == signals["admin-bad"] == [SignalKind.NOT_HELPFUL]
     assert signals["insufficient"] == signals["needs-human"] == [SignalKind.UNANSWERED]
+    # そのまま出した回答は「根拠を使わずに答えた」、拒答に置き換えた回答は「答えられなかった」。
+    assert signals["ungrounded"] == [SignalKind.UNGROUNDED_ANSWER]
+    assert signals["refused"] == [SignalKind.UNANSWERED] and signals["grounded"] == []
     assert signals["conditional"] == signals["clarification"] == []
     assert signals["rejected"] == [SignalKind.APPROVAL_REJECTED]
     assert signals["tool-failed"] == [SignalKind.TOOL_FAILED]
@@ -224,13 +260,13 @@ def _sqlite_with(facts: list[RunFact]) -> sqlite3.Connection:
     connection = sqlite3.connect(":memory:")
     columns = (
         "RUN_ID, STATUS, RUN_SOURCE, FEEDBACK_RATING, ADMIN_RATING, "
-        "ANSWER_OUTCOME, TOOL_FAILURES, APPROVALS_REJECTED, DATA_TOOL_CALLS"
+        "ANSWER_OUTCOME, TOOL_FAILURES, APPROVALS_REJECTED, DATA_TOOL_CALLS, ANSWER_BASIS"
     )
     connection.execute(f"CREATE TABLE AGENT_RUN_FACTS ({columns})")
     for fact in facts:
         binds = fact_binds(fact)
         connection.execute(
-            f"INSERT INTO AGENT_RUN_FACTS ({columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO AGENT_RUN_FACTS ({columns}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 binds["run_id"],
                 binds["status"],
@@ -241,6 +277,7 @@ def _sqlite_with(facts: list[RunFact]) -> sqlite3.Connection:
                 binds["tool_failures"],
                 binds["approvals_rejected"],
                 binds["data_tool_calls"],
+                binds["answer_basis"],
             ),
         )
     return connection
@@ -417,35 +454,64 @@ def test_upsert_writes_the_signal_columns() -> None:
     assert connection.commits == 1
 
 
-def test_upsert_keeps_writing_signals_before_the_data_tool_column_exists() -> None:
-    """migration 014 の前は、業務データの道具の列だけを除いて書く（#1834）。"""
+def test_upsert_writes_the_answer_basis() -> None:
+    connection = _Connection()
+
+    _oracle(connection).upsert([_fact("r1", outcome="answered", basis="ungrounded_answer")])
+
+    [(sql, rows)] = connection.executed
+    assert sql == MERGE_SQL
+    assert rows[0]["answer_basis"] == "ungrounded_answer"
+    assert "target.ANSWER_BASIS = source.ANSWER_BASIS" in MERGE_SQL
+
+
+def test_upsert_keeps_writing_signals_before_the_answer_basis_column_exists() -> None:
+    """migration 019 の前は、回答の対応の手がかりの列だけを除いて書く（#5859）。"""
     connection = _Connection()
     connection.missing_columns = {MERGE_SQL}
+
+    _oracle(connection).upsert(
+        [_fact("r1", outcome="answered", basis="ungrounded_answer", data_tool_calls=3)]
+    )
+
+    [(sql, rows)] = connection.executed
+    assert sql == MERGE_SQL_014
+    assert ANSWER_BASIS_BINDS.isdisjoint(rows[0]) and rows[0]["data_tool_calls"] == 3
+    assert all(f":{name}" in MERGE_SQL_014 for name in rows[0])
+    assert "ANSWER_BASIS" not in MERGE_SQL_014 and "DATA_TOOL_CALLS" in MERGE_SQL_014
+    assert (connection.rollbacks, connection.commits) == (1, 1)
+
+
+def test_upsert_keeps_writing_signals_before_the_data_tool_column_exists() -> None:
+    """migration 014 の前は、業務データの道具の列（と、その後に足した列）を除いて書く（#1834）。"""
+    connection = _Connection()
+    connection.missing_columns = {MERGE_SQL, MERGE_SQL_014}
 
     _oracle(connection).upsert([_fact("r1", tool_failures=1, data_tool_calls=3)])
 
     [(sql, rows)] = connection.executed
     assert sql == MERGE_SQL_012
     assert "data_tool_calls" not in rows[0] and rows[0]["tool_failures"] == 1
-    assert "data_tool_calls" not in connection.input_sizes[1]
+    assert "answer_basis" not in rows[0]
+    assert "data_tool_calls" not in connection.input_sizes[2]
     assert all(f":{name}" in MERGE_SQL_012 for name in rows[0])
     assert "DATA_TOOL_CALLS" not in MERGE_SQL_012 and "ANSWER_OUTCOME" in MERGE_SQL_012
-    assert (connection.rollbacks, connection.commits) == (1, 1)
+    assert (connection.rollbacks, connection.commits) == (2, 1)
 
 
 def test_upsert_keeps_writing_facts_before_the_signal_columns_exist() -> None:
     """システムテーブルを更新する（migration 012）までは、シグナルの列を除いて書く。"""
     connection = _Connection()
-    connection.missing_columns = {MERGE_SQL, MERGE_SQL_012}
+    connection.missing_columns = {MERGE_SQL, MERGE_SQL_014, MERGE_SQL_012}
 
     _oracle(connection).upsert([_fact("r1", tool_failures=1)])
 
     [(sql, rows)] = connection.executed
     assert sql == LEGACY_MERGE_SQL
-    assert SIGNAL_BINDS.isdisjoint(rows[0]) and SIGNAL_BINDS.isdisjoint(connection.input_sizes[2])
+    assert SIGNAL_BINDS.isdisjoint(rows[0]) and SIGNAL_BINDS.isdisjoint(connection.input_sizes[3])
     assert all(f":{name}" in LEGACY_MERGE_SQL for name in rows[0])
     assert "ANSWER_OUTCOME" not in LEGACY_MERGE_SQL
-    assert (connection.rollbacks, connection.commits) == (2, 1)
+    assert (connection.rollbacks, connection.commits) == (3, 1)
 
 
 def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
@@ -453,8 +519,8 @@ def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
     connection = _Connection(
         {
             "GROUP BY IN_PERIOD": [
-                (1, 20, 6, 2, 1, 1, 3, 1),
-                (0, 10, 2, 1, 0, 0, 1, 0),
+                (1, 20, 6, 2, 4, 1, 1, 3, 1),
+                (0, 10, 2, 1, 0, 0, 0, 1, 0),
             ],
             "SELECT COUNT(*)": [(13,)],
             "OFFSET :page_offset": [
@@ -483,6 +549,7 @@ def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
                     None,
                     "user",
                     0,
+                    "no_tool_grounding",
                 )
             ],
         }
@@ -509,6 +576,7 @@ def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
     counts = {item.kind: item.count for item in report.summary.counts}
     assert counts == {
         SignalKind.NOT_HELPFUL: 2,
+        SignalKind.UNGROUNDED_ANSWER: 4,
         SignalKind.UNANSWERED: 1,
         SignalKind.APPROVAL_REJECTED: 1,
         SignalKind.TOOL_FAILED: 3,
@@ -528,6 +596,7 @@ def test_signal_report_is_aggregated_and_paged_in_sql() -> None:
         0,
     )
     assert item.created_at == created.replace(tzinfo=UTC)
+    assert item.answer_basis == "no_tool_grounding"
     executed = dict(connection.executed)
     summary_sql = next(sql for sql in executed if "GROUP BY IN_PERIOD" in sql)
     # 集計は種類で絞らず、対象の Run（終わった Run・評価の Run を除く）を期間で数える。

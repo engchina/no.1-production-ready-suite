@@ -732,6 +732,9 @@ def test_existing_grounding_retry_receives_frozen_body_instead_of_selector(
     repo: AgentRuntimeRepository, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     agent = create(repo, contract())
+    # 差し戻すのは拒答の設定だけ（#5859。既定は差し戻さずに注意を付ける）。
+    repo.patch_agent(agent, AgentProfilePatch(ungrounded_answer_policy="refuse"))
+    repo.publish_agent(agent)
     seen: list[str] = []
 
     def needs(text: str, **kwargs: Any) -> bool:

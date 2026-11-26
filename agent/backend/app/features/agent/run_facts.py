@@ -69,6 +69,11 @@ class RunFact(BaseModel):
     answer: str | None = None
     # 回答の対応（成果物 `answer` の `outcome.value`。#1305）。記録の無い Run は None。
     answer_outcome: str | None = None
+    # 回答の対応を決めた手がかり（`outcome.basis`。#5859）。根拠・データのツールを呼ばずに作った
+    # 回答をそのまま出した Run は `ungrounded_answer`（確かめるべき実行の「根拠を使わずに
+    # 答えた」）。
+    # 記録していない古い事実は None（シグナルにしない）。
+    answer_basis: str | None = None
     # 失敗したツールの呼び出しの数と、却下した承認の数（#1822）。
     tool_failures: int = 0
     approvals_rejected: int = 0
@@ -130,6 +135,14 @@ def run_answer_outcome(run: RunState) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def run_answer_basis(run: RunState) -> str | None:
+    """回答の対応を決めた手がかり（成果物 `answer` の `outcome.basis`。#5859）。"""
+    content = _latest_artifact_content(run, "answer")
+    outcome = content.get("outcome") if content else None
+    basis = outcome.get("basis") if isinstance(outcome, dict) else None
+    return basis if isinstance(basis, str) and basis else None
+
+
 def run_tool_failures(run: RunState) -> int:
     """失敗した呼出しと、呼出し前に停止した必須 MCP 接続の取得失敗。"""
     discovery_failed = any(
@@ -168,6 +181,7 @@ def fact_from_run(run: RunState, *, agent_name: str = "") -> RunFact:
         question=run.goal,
         answer=run_answer_text(run),
         answer_outcome=run_answer_outcome(run),
+        answer_basis=run_answer_basis(run),
         tool_failures=run_tool_failures(run),
         approvals_rejected=run_approvals_rejected(run),
         data_tool_calls=environment_tool_calls(run.steps),
@@ -185,6 +199,7 @@ __all__ = [
     "RUN_SOURCE_USER",
     "RunFact",
     "fact_from_run",
+    "run_answer_basis",
     "run_answer_outcome",
     "run_approvals_rejected",
     "run_source",

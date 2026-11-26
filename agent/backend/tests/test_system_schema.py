@@ -46,6 +46,7 @@ from app.system_schema import (
     RECREATE_CONFIRMATION,
     RETIRED_MANAGED_OBJECTS,
     RETIRED_TABLES_APPROVAL,
+    RUN_FACTS_ANSWER_BASIS_STATEMENTS,
     RUN_FACTS_DATA_TOOL_STATEMENTS,
     RUN_FACTS_SIGNAL_STATEMENTS,
     RUN_FACTS_STATEMENTS,
@@ -446,7 +447,7 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # ない）。006 の checksum を変えないよう RUNTIME_STATEMENTS とは別に持ち、未初期化の DB は
     # 正本の DDL の同じ CREATE TABLE で作る。
     migration_018 = next(item for item in MIGRATIONS if item.name.startswith("20261125_018"))
-    assert migration_018 is MIGRATIONS[-1]
+    assert migration_018 is MIGRATIONS[-2]
     assert migration_018.statements == RUNTIME_ARTIFACT_FILE_STATEMENTS
     assert not migration_018.destructive and not migration_018.rewrites
     [artifact_files] = migration_018.statements
@@ -490,6 +491,14 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     assert not migration_014.destructive
     assert "ADD (DATA_TOOL_CALLS NUMBER(10))" in migration_014.statements[0]
     assert "DATA_TOOL_CALLS NUMBER(10)" in RUN_FACTS_STATEMENTS[0]
+    # 回答の対応の手がかり（#5859。「根拠を使わずに答えた」のシグナル）も列を足すだけで、最新の
+    # 形の CREATE TABLE にもある。
+    migration_019 = next(item for item in MIGRATIONS if item.name.startswith("20261126_019"))
+    assert migration_019 is MIGRATIONS[-1]
+    assert migration_019.statements == RUN_FACTS_ANSWER_BASIS_STATEMENTS
+    assert not migration_019.destructive and not migration_019.rewrites
+    assert "ADD (ANSWER_BASIS VARCHAR2(32))" in migration_019.statements[0]
+    assert "ANSWER_BASIS VARCHAR2(32)" in RUN_FACTS_STATEMENTS[0]
     migration_012 = next(item for item in MIGRATIONS if item.name.startswith("20261014_012"))
     assert migration_012.statements == RUN_FACTS_SIGNAL_STATEMENTS
     assert not migration_012.destructive

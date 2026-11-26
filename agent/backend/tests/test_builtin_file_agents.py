@@ -33,9 +33,11 @@ from app.features.agent.runtime import (
     RunCreateRequest,
     RunState,
     RunStatus,
+    run_answer_notice,
     run_answer_text,
     runtime_repository,
 )
+from app.features.agent.tool_grounding import UNGROUNDED_NOTICE
 from app.features.agent.tools import MCP_TOOL_SEPARATOR
 from app.features.agent.xlsx_tool import XLSX_CREATE_TOOL
 
@@ -216,15 +218,19 @@ def test_data_and_file_agents_make_a_file_from_the_looked_up_table(
     model.assert_complete()
 
 
+@pytest.mark.parametrize("policy", ["annotate", "refuse"])
 def test_data_and_file_agent_keeps_the_answer_when_it_only_made_a_file(
-    monkeypatch: MonkeyPatch, script: Any
+    monkeypatch: MonkeyPatch, script: Any, policy: str
 ) -> None:
     """根拠のツールを呼ばずにファイルだけを作った Run は、回答を拒答に置き換えない（#5853）。
 
     利用者が会話に書いた内容をファイルにした Run。ファイルは成果物に残るので、回答も
-    モデルが返したまま出す（差し戻しもしない）。
+    モデルが返したまま出す（差し戻しもしない）。既定の設定でも、確かめていない回答の注意を
+    付けない（#5859。2 つの設定で同じ例外）。
     """
     fake_product_mcp(monkeypatch)
+    # 組み込みの業務 Agent の公開中の版を書き換えずに、Run の設定を決める。
+    monkeypatch.setattr(builtin_runtime, "_ungrounded_answer_policy", lambda _agent: policy)
     answer = "ファイル「合成の一覧.xlsx」を作りました。シート「合成の表」に 2 行あります。"
 
     run, model = script(
@@ -246,14 +252,18 @@ def test_data_and_file_agent_keeps_the_answer_when_it_only_made_a_file(
     assert _file_rows(run) == [["名前"], ["record-1"], ["record-2"]]
     assert run_answer_text(run) == answer
     assert [event for event in run.events if "tool_grounding" in event.model_dump_json()] == []
+    assert UNGROUNDED_NOTICE not in (run_answer_notice(run) or "")
     model.assert_complete()
 
 
 def test_data_and_file_agent_still_refuses_an_answer_without_tools_or_files(
     monkeypatch: MonkeyPatch, script: Any
 ) -> None:
-    """ファイルも作らず根拠のツールも呼ばない回答は、これまでどおり差し戻して拒答にする。"""
+    """拒答の設定では、ファイルも作らず根拠のツールも呼ばない回答を差し戻して拒答にする。"""
     fake_product_mcp(monkeypatch)
+    # 組み込みの業務 Agent は既定（そのまま出して注意を付ける。#5859）。公開中の版を書き換えずに、
+    # この Run を拒答の設定にする。
+    monkeypatch.setattr(builtin_runtime, "_ungrounded_answer_policy", lambda _agent: "refuse")
 
     run, model = script(
         RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
@@ -266,4 +276,31 @@ def test_data_and_file_agent_still_refuses_an_answer_without_tools_or_files(
     assert [item for item in run.artifacts if item.kind == FILE_ARTIFACT_KIND] == []
     assert run_answer_text(run) != "上限は 10 です。"
     assert any("refused" in event.model_dump_json() for event in run.events)
+    model.assert_complete()
+
+
+def test_builtin_agent_answers_as_is_with_the_notice_by_default(
+    monkeypatch: MonkeyPatch, script: Any
+) -> None:
+    """組み込みの業務 Agent は既定で、確かめていない回答をそのまま出して注意を付ける（#5859）。"""
+    fake_product_mcp(monkeypatch)
+    [agent] = [
+        item
+        for item in runtime_repository.list_agents()
+        if item.id == RAG_CHAT_DATA_DOC_CREATE_AGENT_ID
+    ]
+    published = agent.published()
+    assert agent.ungrounded_answer_policy == "annotate"
+    assert published is not None and published.ungrounded_answer_policy == "annotate"
+
+    run, model = script(
+        RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
+        "合成の規程の上限はいくつですか",
+        [assistant_message("上限は 10 です。")],
+    )
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].model_dump_json()
+    assert run_answer_text(run) == "上限は 10 です。"
+    assert (run_answer_notice(run) or "").startswith(UNGROUNDED_NOTICE)
+    assert [event for event in run.events if "tool_grounding" in event.model_dump_json()] == []
     model.assert_complete()

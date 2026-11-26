@@ -18,7 +18,7 @@ from pytest import MonkeyPatch
 from security_support import client
 from test_evaluation import _judgement, _script, no_background  # noqa: F401 - fixture
 
-from app.features.agent import evaluation
+from app.features.agent import evaluation, tool_grounding
 from app.features.agent.evaluation import (
     EvaluationCase,
     EvaluationCaseResult,
@@ -32,8 +32,11 @@ from app.features.agent.evaluation_aids import DISABLED_AIDS_METADATA_KEY, aid_e
 from app.features.agent.runtime import (
     EVALUATION_DRY_RUN_KEY,
     AgentProfile,
+    AgentProfilePatch,
     RunCreateRequest,
     reserved_run_metadata_keys,
+    run_answer_notice,
+    run_answer_text,
     runtime_repository,
 )
 from app.features.agent.skills import AgentSkillDefinition, SkillMcpRequirement, skill_registry
@@ -61,7 +64,14 @@ def agent(monkeypatch: MonkeyPatch) -> Iterator[None]:
         )
     )
     runtime_repository.create_agent(
-        AgentProfile(id=AGENT_ID, name="除去実験の業務 Agent", skill_ids=[SKILL_ID])
+        AgentProfile(
+            id=AGENT_ID,
+            name="除去実験の業務 Agent",
+            skill_ids=[SKILL_ID],
+            # 差し戻し・拒答の補助が動く設定（#5859。既定の「そのまま出して注意を付ける」は下の
+            # `test_default_policy_run_is_the_same_with_and_without_the_aid`）。
+            ungrounded_answer_policy="refuse",
+        )
     )
     evaluation_store.clear()
     evaluation_set_store.clear()
@@ -145,6 +155,47 @@ def test_disabled_aid_changes_the_code_path_only_in_evaluation_runs(
     assert report["base"]["metrics"]["model_calls"]["total"] == 2
     assert row["metrics"]["model_calls"]["total"] == 1
     assert row["metrics"]["latency_ms"]["p50"] is not None
+
+
+def test_default_policy_run_is_the_same_with_and_without_the_aid(
+    monkeypatch: MonkeyPatch, agent: None
+) -> None:
+    """既定の設定（そのまま出して注意を付ける。#5859）は差し戻さないので、補助を外しても回答は同じ。
+
+    全構成は注意を付けて basis を `ungrounded_answer` にし、補助を外した評価は注意も付けない。
+    補助のコード経路（差し戻し・拒答のイベント）は基準でも動かないので、比較は `not_applicable`。
+    """
+    del agent
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(ungrounded_answer_policy="annotate"))
+    runtime_repository.publish_agent(AGENT_ID)
+    answer = "制度 A の上限は 5 万円です。"
+    model = _script(
+        monkeypatch,
+        [assistant_message(answer)],
+        _judgement("correct", 1.0, "要点を満たしています。"),
+        [assistant_message(answer)],
+        _judgement("correct", 1.0, "要点を満たしています。"),
+    )
+
+    full = _run(_job())
+    ablated = _run(_job("tool_grounding"))
+
+    assert model.remaining_steps == 0
+    full_run = runtime_repository.get_run(str(full.results[0].run_id))
+    ablated_run = runtime_repository.get_run(str(ablated.results[0].run_id))
+    assert run_answer_text(full_run) == run_answer_text(ablated_run) == answer
+    # 評価の結果にも、確かめていない回答であることが basis で残る。
+    assert (full.results[0].answer_outcome, full.results[0].answer_basis) == (
+        "answered",
+        tool_grounding.BASIS_UNGROUNDED_ANSWER,
+    )
+    assert (run_answer_notice(full_run) or "").startswith(tool_grounding.UNGROUNDED_NOTICE)
+    assert ablated.results[0].answer_basis == "answer_passages"
+    assert tool_grounding.UNGROUNDED_NOTICE not in (run_answer_notice(ablated_run) or "")
+
+    [row] = ablation_report(full, [ablated], runtime_repository.get_run)["rows"]
+    assert row["observed"]["tool_grounding"] == {"base": 0, "target": 0}
+    assert row["decision"] == "not_applicable"
 
 
 def test_aid_metadata_is_ignored_outside_evaluation_runs(agent: None) -> None:

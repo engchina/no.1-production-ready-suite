@@ -1,28 +1,49 @@
-"""根拠・データのツールを呼ばずに作った回答の拒答（#1835）。
+"""根拠・データのツールを呼ばずに作った回答の扱い（#1835・#5859）。
 
 業務 Agent が、資料の根拠のツール（RAG）や業務データのツール（NL2SQL・登録した MCP 接続）を
 1 つも呼ばずに、モデルの知識だけで最終の回答を作ることがある。社内の資料・業務データで確かめて
-いない回答は作り話の可能性があるため、利用者には出さない（ユーザーの決定、2026-10-14）。
-プロンプトの指示だけでは拒答は安定しない（AbstentionBench など）ため、組み込み Runtime が
-回答を確定する前に決定的に確かめる（Amazon Bedrock Guardrails の contextual grounding check の
-BLOCK と同じ考え方）。
+いない回答をどう扱うかは、業務 Agent ごとの設定（`ungrounded_answer_policy`。版の項目）で決める
+（利用者の決定、2026-11-26。#5859。それまでは常に拒答していた）。
+
+- `annotate`（既定。画面「そのまま出して注意を付ける」）: モデルが返した回答をそのまま出し、
+  回答の注意書き（成果物 `answer` の `notice`）の先頭に決まった注意（`UNGROUNDED_NOTICE`）を足す。
+  差し戻さない・本文を置き換えない（モデルの外で回答を作り直さない）。回答の対応は値を変えず、
+  basis を `ungrounded_answer` にする（確かめるべき実行の「根拠を使わずに答えた」・品質評価の
+  `answer_basis` が読む）。Run の経過に差し戻し・拒答のイベントは残らない。確認のツールを渡した
+  Run・利用者に確認しない Run の、本文の確認の質問だけの回答（`refuse` では 1 回差し戻す。
+  #1881・#1903）も差し戻さず、そのまま出す（確認の質問なので注意は付けない）。
+- `refuse`（画面「出さずに「お答えできません」と返す」）: 1 回だけ差し戻し、それでも呼ばなければ
+  本文を決まった拒答の文に置き換える（下の「拒答の設定」。#1835 の動作のまま）。
+
+判定は「この Run でモデルが根拠・データのツールを呼んだか」だけで、回答の中身と資料を照合しない
+（どちらの設定でも同じ。照合する検査は持たない。#4714）。
+
+対象と例外（2 つの設定で同じ集合。`annotate` が注意を付けるのは、`refuse` なら拒答になる回答だけ）:
 
 - 対象: この Run でモデルに根拠・データのツールを渡した業務 Agent の Run（チャット・自動実行・
-  品質評価のどれも）。ツールを持たない Agent・利用者が資料の検索を取り消して根拠・データの
-  ツールが残らない Run は対象外（ガードをすり抜けた回答は #1834 の「根拠を使わずに答えた」に出る）。
+  品質評価のどれも、その業務 Agent の版の設定に従う）。ツールを持たない Agent・利用者が資料の
+  検索を取り消して根拠・データのツールが残らない Run は対象外。
 - 数える呼び出し: モデルが根拠・データのツールを呼んだ step（成功・失敗・承認の却下・評価の
   dry-run・自動実行で承認が要るため呼ばなかったものも、モデルが確かめようとしたので数える）。
   Control Plane が自分で呼んだもの（確認の取り消し・業務ガイドの照合）は数えない。
 - 除外: 同じ会話の前の Run（会話の履歴の上限 `PLATFORM_CHAT_HISTORY_MAX_TURNS` の中）が根拠・
   データのツールで答えた Run（前の回答の言い換え・整形）と、
   利用者が確認を取り消した Run（「資料の検索は不要」など。#1441・#1445）と、
-  利用者への確認の質問だけの回答（`is_clarification_only`）と、NL2SQL の SQL の生成前の確認で
-  止まった Run（`nl2sql_clarification_pending`）。曖昧で対象が分からない質問は拒答ではなく確認に
-  する（ユーザーの決定）。拒答の対象は、範囲外の質問と資料・データで確かめられない質問に限る。
+  利用者への確認の質問だけの回答（`is_clarification_only`。あいさつ・用件を聞くだけの回答を
+  含む）と、NL2SQL の SQL の生成前の確認で止まった Run（`nl2sql_clarification_pending`）。
 - ファイルを作った Run（#5853）: この Run の成果物にファイル（`xlsx_create`・`docx_create`・
-  `pptx_create` が作ったもの）があれば、差し戻しも拒答もしない（`builtin_runtime` が成果物で
-  確かめる）。利用者が会話に書いた内容をファイルにした Run で、作れたファイルと拒答の文が
-  食い違わないようにする。回答の中身は見ない（ファイルを作るツールが成功したかだけで分ける）。
+  `pptx_create` が作ったもの）があれば、差し戻しも拒答も注意もしない（`builtin_runtime` が
+  成果物で確かめる）。利用者が会話に書いた内容をファイルにした Run で、作れたファイルと拒答の
+  文・注意が食い違わないようにする。回答の中身は見ない（ファイルを作るツールが成功したかだけで
+  分ける）。
+- 実行補助を外した Run（`AGENT_TOOL_GROUNDING_REQUIRED=false` と、品質評価の除去実験の
+  `disabled_aids` の `tool_grounding`）は、どちらの設定でも何もしない（差し戻し・拒答・注意の
+  どれも無い）。
+
+拒答の設定（`refuse`）:
+
+- 曖昧で対象が分からない質問は拒答ではなく確認にする。拒答の対象は、範囲外の質問と資料・
+  データで確かめられない質問に限る。
 - 1 回だけ差し戻す: 「業務の事実はツールで確かめてから答える。確かめられないなら拒答する」を
   利用者のメッセージとしてモデルへ返して続けさせる（自己修正）。それでも呼ばなければ、本文を
   出さず、決まった形の拒答の文（`refusal_text`）に置き換える。元の回答は Run の経過に残す。
@@ -52,16 +73,16 @@ BLOCK と同じ考え方）。
   拒答にはせずそのまま出し、Run の経過に残す（拒答は範囲外・確かめられない質問のためのもので、
   対象が曖昧な質問の聞き返しを「お答えできません」にすると利用者が次に何をすればよいか分からない）。
 - 回答の対応は `insufficient_evidence`（basis `no_tool_grounding`。調べずに範囲外・答えられないと
-  判断した拒答は `declined_without_tools`）。
+  判断した拒答は `declined_without_tools`）。確かめるべき実行は「答えられなかった」に数える。
 
-ここは判定と文だけを持つ（差し戻し・保存は `builtin_runtime`）。
+ここは判定と文だけを持つ（差し戻し・注意・保存は `builtin_runtime`）。
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Collection, Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from app.features.agent import external_writes
 from app.features.agent.answer_outcome import INSUFFICIENT_EVIDENCE, OUTCOME_SCHEMA_VERSION
@@ -87,10 +108,22 @@ if TYPE_CHECKING:
 
 JsonObject = dict[str, Any]
 
-# 回答の対応の basis。ツールで確かめずに答えた回答を拒答に
-# 置き換えたものと、ツールで調べずに範囲外・答えられないと判断した拒答（#2608）を分ける（最終の
+# 根拠・データのツールを呼ばずに作った回答の扱い（業務 Agent の `ungrounded_answer_policy`。
+# #5859）。annotate = そのまま出して注意を付ける（既定）、refuse = 1 回差し戻し、それでも
+# 呼ばなければ拒答の文に置き換える（#1835）。
+UngroundedAnswerPolicy = Literal["annotate", "refuse"]
+POLICY_ANNOTATE: UngroundedAnswerPolicy = "annotate"
+POLICY_REFUSE: UngroundedAnswerPolicy = "refuse"
+# `annotate` で回答の注意書き（成果物 `answer` の `notice`）の先頭に足す注意。モデルには書かせず、
+# 本文（`text`。会話の履歴に使う）にも混ぜない。
+UNGROUNDED_NOTICE = "この回答は、資料・業務データで確かめていません。"
+
+# 回答の対応の basis。ツールで確かめずに答えた回答を拒答に置き換えたもの（`no_tool_grounding`）と、
+# ツールで調べずに範囲外・答えられないと判断した拒答（`declined_without_tools`。#2608）と、
+# ツールで確かめていない回答をそのまま出したもの（`ungrounded_answer`。#5859）を分ける。
 BASIS_NO_TOOL_GROUNDING = "no_tool_grounding"
 BASIS_DECLINED_WITHOUT_TOOLS = "declined_without_tools"
+BASIS_UNGROUNDED_ANSWER = "ungrounded_answer"
 REASON_NO_TOOL_GROUNDING = "no_tool_grounding"
 # Run の metadata に残す、差し戻しの記録（承認待ちから再開しても 2 回目を差し戻さない）。
 METADATA_KEY = "tool_grounding"
@@ -549,6 +582,23 @@ def refusal_outcome(*, declined: bool = False) -> JsonObject:
     }
 
 
+def ungrounded_outcome(outcome: JsonObject) -> JsonObject:
+    """ツールで確かめていない回答をそのまま出したときの回答の対応（`annotate`。#5859）。
+
+    値（`answered` など）・シグナルは `answer_outcome` が決めたまま、basis だけを
+    `ungrounded_answer` にする（確かめるべき実行の「根拠を使わずに答えた」と品質評価が読む）。
+    """
+    return {**outcome, "basis": BASIS_UNGROUNDED_ANSWER}
+
+
+def ungrounded_notice(notice: str | None) -> str:
+    """回答の注意書きの先頭に、資料・業務データで確かめていない注意を足した文（#5859）。
+
+    `notice` は運用設定の回答の注意書き（無効なら None。そのときは注意だけ）。
+    """
+    return f"{UNGROUNDED_NOTICE}\n{notice}" if notice else UNGROUNDED_NOTICE
+
+
 def refusal_stage(outcome: str | None, tool_calls: Iterable[str]) -> str | None:
     """拒答（回答の対応が insufficient_evidence）が、ツールで調べる前か後か（#2608）。
 
@@ -566,9 +616,12 @@ def refusal_stage(outcome: str | None, tool_calls: Iterable[str]) -> str | None:
 __all__ = [
     "BASIS_DECLINED_WITHOUT_TOOLS",
     "BASIS_NO_TOOL_GROUNDING",
+    "BASIS_UNGROUNDED_ANSWER",
     "GROUNDING_TOOL_FAILED_CODE",
     "MAX_RETRIES",
     "METADATA_KEY",
+    "POLICY_ANNOTATE",
+    "POLICY_REFUSE",
     "REASON_NO_TOOL_GROUNDING",
     "REFUSAL_AFTER_TOOLS",
     "REFUSAL_BEFORE_TOOLS",
@@ -578,6 +631,8 @@ __all__ = [
     "RETRY_MESSAGE_ASSUME",
     "RETRY_MESSAGE_CONFIRMABLE",
     "SEARCH_FIRST_INSTRUCTION",
+    "UNGROUNDED_NOTICE",
+    "UngroundedAnswerPolicy",
     "clarified_in_text",
     "declined",
     "grounding_attempted",
@@ -600,4 +655,6 @@ __all__ = [
     "tool_output_texts",
     "last_tool_failed",
     "tools_consulted",
+    "ungrounded_notice",
+    "ungrounded_outcome",
 ]
