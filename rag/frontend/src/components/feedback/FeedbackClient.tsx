@@ -197,11 +197,6 @@ export function FeedbackClient() {
     { value: "", label: t("feedback.filters.allSearchAnswerProfiles") },
     ...(searchAnswerProfilesQuery.data?.items ?? []).map((view) => ({ value: view.id, label: view.name })),
   ];
-  const targetOptions: SelectFieldOption[] = [
-    { value: "", label: t("feedback.filters.allTargets") },
-    { value: "answer", label: t("feedback.target.answer") },
-    { value: "citation", label: t("feedback.target.citation") },
-  ];
   const ratingOptions: SelectFieldOption[] = [
     { value: "", label: t("feedback.filters.allRatings") },
     { value: "helpful", label: t("feedback.rating.helpful") },
@@ -291,19 +286,12 @@ export function FeedbackClient() {
           secondaryFilters={
             <>
               <FilterSelect
-                id="feedback-target"
-                label={t("feedback.filters.target")}
-                value={urlState.targetType}
-                options={targetOptions}
-                onValueChange={(value) => setParam("target", value)}
-              />
-              <FilterSelect
                 id="feedback-rating"
                 label={t("feedback.filters.rating")}
                 value={urlState.rating}
                 options={ratingOptions}
                 onValueChange={(value) => setParam("rating", value)}
-                // 「評価: 役に立たなかった」が切れない幅。
+                // 評価の選択肢を表示する幅。
                 width="md"
               />
               <FilterSelect
@@ -321,7 +309,6 @@ export function FeedbackClient() {
             [
               isFilterActive(periodValue, DEFAULT_PERIOD),
               Boolean(urlState.searchAnswerProfileId),
-              Boolean(urlState.targetType),
               Boolean(urlState.rating),
               Boolean(urlState.reason),
             ].filter(Boolean).length
@@ -498,7 +485,7 @@ function FeedbackList({
               subtitle={<>
                 <span className="hidden lg:block truncate text-xs text-fg-muted">{item.search_answer_profile_name ?? t("feedback.list.unknownSearchAnswerProfile")}</span>
                 <span className="lg:hidden"><QuestionMeta item={item} />
-                  <span className="mt-1 block text-xs text-fg-muted">{t(`feedback.target.${item.target_type}`)}{item.reason ? ` · ${t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}` : ""}</span>
+                  <span className="mt-1 block text-xs text-fg-muted">{item.reason ? t(FEEDBACK_REASON_LABEL_KEYS[item.reason]) : ""}</span>
                   {item.comment_preview ? <span className="mt-1 line-clamp-2 text-xs text-fg-muted">{item.comment_preview}</span> : null}
                 </span>
               </>}
@@ -509,7 +496,6 @@ function FeedbackList({
             />
           ),
         },
-        { key: "target", header: t("feedback.filters.target"), headerClassName: "hidden lg:table-cell lg:w-[8%]", className: "hidden lg:table-cell align-top", render: (item) => t(`feedback.target.${item.target_type}`) },
         { key: "rating", header: t("feedback.filters.rating"), headerClassName: "hidden lg:table-cell lg:w-[18%]", className: "hidden lg:table-cell align-top", render: (item) => <RatingBadge rating={item.rating} /> },
         { key: "reason", header: t("feedback.detail.reason"), headerClassName: "hidden lg:table-cell lg:w-[16%]", className: "hidden lg:table-cell align-top", render: (item) => item.reason ? <span className="line-clamp-2" title={t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}>{t(FEEDBACK_REASON_LABEL_KEYS[item.reason])}</span> : "—" },
         { key: "comment", header: t("feedback.detail.comment"), headerClassName: "hidden lg:table-cell lg:w-[16%]", className: "hidden lg:table-cell align-top", render: (item) => <span className="line-clamp-2" title={item.comment_preview ?? undefined}>{item.comment_preview ?? (item.has_comment ? t("feedback.list.hasComment") : "—")}</span> },
@@ -591,9 +577,9 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
           </h2>
           <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-4">
             <Metric label={t("feedback.summary.total")} value={formatNumber(summary.total)} delta={countDelta(summary.total, previous?.total)} />
-            <Metric label={t("feedback.summary.helpfulRate")} value={formatRate(summary.helpful_rate)} delta={rateDelta(summary.helpful_rate, previous?.helpful_rate)} />
-            <Metric label={t("feedback.summary.answerRate")} value={formatRate(summary.answer_helpful_rate)} detail={t("feedback.summary.count", { count: summary.answer_total })} delta={rateDelta(summary.answer_helpful_rate, previous?.answer_helpful_rate)} />
-            <Metric label={t("feedback.summary.citationRate")} value={formatRate(summary.citation_helpful_rate)} detail={t("feedback.summary.count", { count: summary.citation_total })} delta={rateDelta(summary.citation_helpful_rate, previous?.citation_helpful_rate)} />
+            <Metric label={t("feedback.summary.questionRate")} value={summary.question_total ? formatRate((summary.resolved_questions ?? 0)/summary.question_total) : "—"} delta={summary.question_total && previous?.question_total ? rateDelta((summary.resolved_questions ?? 0)/summary.question_total,(previous.resolved_questions ?? 0)/previous.question_total) : null} />
+            <Metric label={t("feedback.summary.unretried")} value={formatNumber(summary.unretried_unresolved ?? 0)} />
+            <Metric label={t("feedback.summary.retryRate")} value={summary.regenerated_questions ? formatRate((summary.resolved_after_retry ?? 0)/summary.regenerated_questions) : "—"} />
           </div>
         </section>
         <section aria-labelledby="feedback-reasons-heading">
@@ -629,7 +615,7 @@ function SummaryPanel({ summary, previous }: { summary: FeedbackSummary; previou
   );
 }
 
-function Metric({ label, value, detail, delta }: { label: string; value: string; detail?: string; delta: string | null }) {
+function Metric({ label, value, detail, delta }: { label: string; value: string; detail?: string; delta?: string | null }) {
   return (
     <div className="min-w-0 border-l-2 border-accent-emphasis pl-3">
       <p className="truncate text-xs text-fg-muted" title={label}>{label}</p>
@@ -766,15 +752,13 @@ function EvidenceTab({ detail }: { detail: FeedbackDetail }) {
     <>
     <ViewportScrollRegion id="feedback-panel-evidence" role="tabpanel" aria-labelledby="feedback-tab-evidence" data-testid="feedback-evidence-scroll" className="space-y-3">
       {detail.citations.length ? detail.citations.map((citation, index) => {
-        const targeted = detail.target_type === "citation" && citation.chunk_id === detail.chunk_id;
         return (
-          <article key={`${citation.chunk_id}-${index}`} data-surface-tint={targeted ? "accent" : undefined} className={cn("rounded-lg border border-border p-3", targeted && "border-accent-emphasis bg-accent-subtle")}>
+          <article key={`${citation.chunk_id}-${index}`} className="rounded-lg border border-border p-3">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className={cn("truncate text-sm font-medium text-fg", !citation.file_name && "font-mono")}>{citation.file_name ?? citation.document_id}</p>
                 <p className="mt-0.5 text-xs text-fg-muted">{[citation.section_title, citation.page_number ? t("feedback.detail.page", { count: citation.page_number }) : null].filter(Boolean).join(" / ") || "—"}</p>
               </div>
-              {targeted ? <StatusBadge variant="info" icon={false} label={t("feedback.detail.targetCitation")} className="shrink-0" /> : null}
             </div>
             <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-fg/90">{citation.content_preview ?? t("feedback.detail.noCitationPreview")}</p>
             {canOpenDetail ? <div className="mt-3"><EvidenceSourceButton fileName={citation.file_name ?? citation.document_id} onOpen={() => source.open(citation)} labels={EVIDENCE_LABELS} /></div> : null}

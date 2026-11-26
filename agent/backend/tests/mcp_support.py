@@ -39,7 +39,14 @@ class _ContractInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class _FileSelection(_ContractInput):
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+    candidates_only: bool = False
+
+
 class _RagScopeIn(_ContractInput):
+    file_selection: _FileSelection | None = None
     query: str
     search_answer_profile_id: str | None = None
     knowledge_base_ids: list[str] | None = None
@@ -57,6 +64,7 @@ class RagSearchIn(_RagScopeIn):
 
 
 class RagChatIn(_ContractInput):
+    file_selection: _FileSelection | None = None
     # RAG のチャットの流れで 1 問に答える（#5339）。ナレッジベース・filters・top_k は受けない。
     query: str
     search_answer_profile_id: str | None = None

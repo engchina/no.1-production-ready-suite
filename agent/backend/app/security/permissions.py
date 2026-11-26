@@ -504,6 +504,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("DELETE", "/evaluations/{job_id}"): _any(MENU_EVALUATION),
     # チャットの回答への評価（#774。会話をした利用者だけ。router が作成者を確かめる）。
     ("PUT", f"{_RUN}/feedback"): _OPERATE,
+    ("GET", f"{_RUN}/review"): _RUN_DETAIL,
+    ("GET", f"{_RUN}/review/original"): _RUN_DETAIL,
+    ("POST", f"{_RUN}/review"): _OPERATE,
     # 管理者の評価（#774。だれの回答にも付けられる）。
     ("PUT", f"{_RUN}/admin-review"): _ADMIN_ONLY,
     # ---- 改善・運用 ----

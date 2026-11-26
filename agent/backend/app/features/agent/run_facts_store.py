@@ -299,12 +299,21 @@ def merge_sql(columns: Sequence[tuple[str, str]]) -> str:
     )
 
 
+MERGE_SQL_019 = merge_sql(
+    (
+        *_MERGE_COLUMNS,
+        *_SIGNAL_MERGE_COLUMNS,
+        *_DATA_TOOL_MERGE_COLUMNS,
+        *_ANSWER_BASIS_MERGE_COLUMNS,
+    )
+)
 MERGE_SQL = merge_sql(
     (
         *_MERGE_COLUMNS,
         *_SIGNAL_MERGE_COLUMNS,
         *_DATA_TOOL_MERGE_COLUMNS,
         *_ANSWER_BASIS_MERGE_COLUMNS,
+        ("file_review_outcome", "FILE_REVIEW_OUTCOME"),
     )
 )
 # システムテーブルを更新するまでの古いテーブルへの MERGE（ORA-00904 のときだけ、新しい方から
@@ -319,9 +328,10 @@ LEGACY_MERGE_SQL = merge_sql(_MERGE_COLUMNS)
 # (SQL, 除く bind)。最新の形から古い形の順。
 MERGE_FALLBACKS: tuple[tuple[str, frozenset[str]], ...] = (
     (MERGE_SQL, frozenset()),
-    (MERGE_SQL_014, ANSWER_BASIS_BINDS),
-    (MERGE_SQL_012, DATA_TOOL_BINDS),
-    (LEGACY_MERGE_SQL, SIGNAL_BINDS),
+    (MERGE_SQL_019, frozenset({"file_review_outcome"})),
+    (MERGE_SQL_014, ANSWER_BASIS_BINDS | {"file_review_outcome"}),
+    (MERGE_SQL_012, DATA_TOOL_BINDS | {"file_review_outcome"}),
+    (LEGACY_MERGE_SQL, SIGNAL_BINDS | {"file_review_outcome"}),
 )
 
 # 利用量の集計の測度（Run 数・利用量を記録した Run 数・各量の合計）。
@@ -385,6 +395,7 @@ def fact_binds(fact: RunFact) -> dict[str, Any]:
         "input_tokens": fact.input_tokens,
         "output_tokens": fact.output_tokens,
         "total_tokens": fact.total_tokens,
+        "file_review_outcome": fact.file_review_outcome,
         "feedback_rating": feedback.rating.value if feedback else None,
         "feedback_reason": feedback.reason.value if feedback and feedback.reason else None,
         "feedback_comment": _clip(feedback.comment, _COMMENT_MAX) if feedback else None,
@@ -478,7 +489,7 @@ def feedback_filters(
 
 def feedback_source_sql(filters: str) -> str:
     return (
-        "SELECT FEEDBACK_RATING, FEEDBACK_REASON, ADMIN_RATING, "
+        "SELECT FEEDBACK_RATING, FEEDBACK_REASON, ADMIN_RATING, FILE_REVIEW_OUTCOME, "
         "CASE WHEN RATED_AT >= :since THEN 1 ELSE 0 END AS IN_PERIOD "
         f"FROM {RUN_FACTS_TABLE} "  # nosec B608 - 固定のテーブル名と bind の条件
         f"WHERE RATED_AT >= :previous_since AND RATED_AT <= :until{filters}"
@@ -491,7 +502,11 @@ def feedback_summary_sql(filters: str) -> str:
         "SUM(CASE WHEN FEEDBACK_RATING = 'helpful' THEN 1 ELSE 0 END), "
         "SUM(CASE WHEN FEEDBACK_RATING = 'not_helpful' THEN 1 ELSE 0 END), "
         "COUNT(ADMIN_RATING), "
-        "SUM(CASE WHEN ADMIN_RATING = 'not_helpful' THEN 1 ELSE 0 END), COUNT(*) "
+        "SUM(CASE WHEN ADMIN_RATING = 'not_helpful' THEN 1 ELSE 0 END), COUNT(*), "
+        "SUM(CASE WHEN FILE_REVIEW_OUTCOME = 'unresolved' THEN 1 ELSE 0 END), "
+        "SUM(CASE WHEN FILE_REVIEW_OUTCOME IN "
+        "('retried_unresolved','retried_resolved','retried_unrated') THEN 1 ELSE 0 END), "
+        "SUM(CASE WHEN FILE_REVIEW_OUTCOME='retried_resolved' THEN 1 ELSE 0 END) "
         f"FROM ({feedback_source_sql(filters)}) GROUP BY IN_PERIOD"  # nosec B608
     )
 
@@ -723,7 +738,7 @@ class OracleRunFactsStore:
                         )
                     break
                 except Exception as exc:
-                    # システムテーブルの更新（migration 012 / 014 / 019）の前: 無い列を除いて
+                    # システムテーブルの更新（migration 012 / 014 / 019 / 020）の前: 無い列を除いて
                     # 書き直す。
                     if index == len(MERGE_FALLBACKS) - 1 or not _is_column_missing(exc):
                         raise
@@ -883,6 +898,9 @@ class OracleRunFactsStore:
                 period = int(row[0])
                 summary = FeedbackSummary(
                     rated_runs=int(row[6] or 0),
+                    unretried_unresolved=int(row[7] or 0),
+                    regenerated_questions=int(row[8] or 0),
+                    resolved_after_retry=int(row[9] or 0),
                     total=int(row[1] or 0),
                     helpful=int(row[2] or 0),
                     not_helpful=int(row[3] or 0),
@@ -1120,6 +1138,7 @@ __all__ = [
     "MERGE_SQL",
     "MERGE_SQL_012",
     "MERGE_SQL_014",
+    "MERGE_SQL_019",
     "RUN_FACTS_TABLE",
     "USAGE_DIMENSIONS",
     "MemoryRunFactsStore",

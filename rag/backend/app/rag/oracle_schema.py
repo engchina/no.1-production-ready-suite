@@ -1314,6 +1314,26 @@ END;
             sql=drop_wiki_page_text_index_sql(),
         )
     )
+    sections.append(
+        OracleSchemaSection(
+            name="20261127_5870_answer_file_review",
+            table_name="rag_answer_records",
+            sql="""
+DECLARE
+    n NUMBER;
+BEGIN
+    SELECT COUNT(*) INTO n FROM user_tab_columns WHERE table_name='RAG_ANSWER_RECORDS'
+        AND column_name='REVIEW_STATE';
+    IF n = 0 THEN
+        EXECUTE IMMEDIATE 'ALTER TABLE rag_answer_records ADD (review_state JSON'
+            || ', review_request JSON'
+            || ', review_root_id VARCHAR2(64), review_version NUMBER)';
+    END IF;
+END;
+/
+""".strip(),
+        )
+    )
     return sections
 
 

@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from app.features.agent.answer_evidence import ANSWER_EVIDENCE_KIND, passed_evidence
 from app.features.agent.config import runtime_config_store
-from app.features.agent.runtime import Artifact, RunState
+from app.features.agent.runtime import Artifact, RunState, runtime_repository
 from app.features.agent.tools import (
     MCP_TOOL_SEPARATOR,
     ExternalToolError,
@@ -182,6 +182,23 @@ def run_evidence_items(run: RunState, artifacts: list[Artifact]) -> list[dict[st
     return [item for item in items if isinstance(item, dict)]
 
 
+def _review_evidence(run: RunState) -> list[dict[str, Any]]:
+    from pr_backend_core.file_review import FileReview
+
+    if not run.file_review_revision:
+        return []
+    raw = runtime_repository.read_file_review(run.id)
+    if not raw:
+        return []
+    review = FileReview.model_validate_json(raw)
+    return [
+        hit
+        for version in review.versions
+        for source in version.sources.values()
+        for hit in source.citations
+    ]
+
+
 def run_has_figure_evidence(
     run: RunState, artifacts: list[Artifact], *, document_id: str, chunk_id: str
 ) -> bool:
@@ -190,7 +207,7 @@ def run_has_figure_evidence(
         item.get("document_id") == document_id
         and item.get("chunk_id") == chunk_id
         and isinstance(item.get("image_ref"), dict)
-        for item in run_evidence_items(run, artifacts)
+        for item in (*run_evidence_items(run, artifacts), *_review_evidence(run))
     )
 
 
@@ -200,7 +217,7 @@ def run_has_rag_evidence(
     """Run の RAG の根拠に、その根拠があるか。"""
     return any(
         item.get("document_id") == document_id and item.get("chunk_id") == chunk_id
-        for item in run_evidence_items(run, artifacts)
+        for item in (*run_evidence_items(run, artifacts), *_review_evidence(run))
     )
 
 

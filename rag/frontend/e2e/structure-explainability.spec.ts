@@ -325,7 +325,6 @@ test("RAG 検索は文書の分類と基準日を filters に入れて送る", a
 });
 
 test("検索引用で構造 metadata chip を確認できる", async ({ page }) => {
-  let feedbackPayload = null as Record<string, unknown> | null;
   await mockDocumentDetail(page);
   await page.route("**/api/search/stream", async (route) => {
     await fulfillDocumentInspection(route, {
@@ -339,27 +338,6 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
       json: { data: [], error_messages: [], warning_messages: [] },
     });
   });
-  await page.route("**/api/feedback", async (route) => {
-    feedbackPayload = route.request().postDataJSON() as Record<string, unknown>;
-    await fulfillDocumentInspection(route, {
-      json: {
-        data: {
-          feedback_id: "feedback-1",
-          trace_id: "trace-1",
-          search_answer_profile_id: "bv-1",
-          target_type: "citation",
-          source_surface: "search",
-          document_id: "doc-1",
-          chunk_id: "doc-1:1",
-          rating: "helpful",
-          reason: null,
-        },
-        error_messages: [],
-        warning_messages: [],
-      },
-    });
-  });
-
   await page.goto("/search");
   await selectSearchAnswerProfile(page, /経理ビュー/);
   await page.getByRole("textbox", { name: "RAG 検索" }).fill("料金表を確認");
@@ -384,22 +362,7 @@ test("検索引用で構造 metadata chip を確認できる", async ({ page }) 
   await citation.getByRole("button", { name: "policy.txt の根拠を表示" }).click();
   await expect(page.getByRole("dialog").getByRole("link", { name: "文書の詳細を別タブで開く" })).toHaveCount(0);
   await page.getByRole("dialog").getByRole("button", { name: "閉じる" }).click();
-  await citation.getByRole("button", { name: "この引用は役に立った" }).click();
-  await expect.poll(() => feedbackPayload).toMatchObject({
-    trace_id: "trace-1",
-    search_answer_profile_id: "bv-1",
-    target_type: "citation",
-    source_surface: "search",
-    document_id: "doc-1",
-    chunk_id: "doc-1:1",
-    message_id: null,
-    rating: "helpful",
-    reason: null,
-    comment: null,
-  });
-  expect((feedbackPayload?.content_snapshot as { question: string }).question).toBe("料金表を確認");
-  expect((feedbackPayload?.content_snapshot as { answer: string }).answer).toBe("料金表を確認しました。");
-  await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
+  await expect(citation.getByRole("button", { name: /この引用は役に立/ })).toHaveCount(0);
   // 文書の詳細の deep link（引用位置の query）の挙動を確かめる。
   await page.goto("/documents/doc-1?chunk_id=doc-1%3A1&page=2&element_id=tbl-1&cell_ref=B2&formula_cell_ref=B2");
   await expect(page).toHaveURL(

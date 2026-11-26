@@ -412,7 +412,8 @@ class RunHistoryStore:
                            ORDER BY f.created_at DESC, f.feedback_id DESC
                        ) AS feedback_rank
                 FROM rag_citation_feedback f
-                WHERE f.trace_id = :trace_id AND {" AND ".join(clauses)}
+                WHERE f.trace_id = :trace_id AND f.target_type = 'answer'
+                  AND {" AND ".join(clauses)}
             )
             WHERE feedback_rank = 1
             ORDER BY created_at DESC, feedback_id DESC

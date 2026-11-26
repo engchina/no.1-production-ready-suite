@@ -47,7 +47,7 @@ async def submit_feedback(
     http_request: Request,
     request: FeedbackRequest,
 ) -> ApiResponse[FeedbackSubmissionResponse]:
-    """回答または引用 feedback を追記する。"""
+    """この版の回答に対する利用者の判定を保存する。"""
     enforce_rate_limit("search", http_request)
     if is_guide_preview_trace(request.trace_id):
         # 業務ガイドの下書きで試した回答は、利用者のフィードバックに混ぜない（#1288）。
@@ -56,9 +56,29 @@ async def submit_feedback(
             detail="業務ガイドの下書きで試した回答にはフィードバックを送れません。",
         )
     oracle = OracleClient()
-    if await oracle.get_search_answer_profile(request.search_answer_profile_id) is None:
+    if (
+        request.search_answer_profile_id
+        and await oracle.get_search_answer_profile(request.search_answer_profile_id) is None
+    ):
         raise HTTPException(status_code=404, detail="検索・回答プロファイルが見つかりません。")
+    record_owner = await oracle.answer_owner_for_feedback(request.trace_id)
+    if record_owner is not None:
+        _ensure_conversation_owner(record_owner.get("user_id_hash"))
     details = await _resolve_feedback_details(oracle, request)
+    if details is None and record_owner is not None:
+        saved = await oracle.get_answer_record(request.trace_id)
+        if saved is None:
+            raise HTTPException(403, "この回答を利用する権限がありません。")
+        details = {
+            "content_source": (
+                FeedbackContentSource.CHAT_MESSAGE.value
+                if saved["surface"] == "chat"
+                else FeedbackContentSource.SEARCH_SNAPSHOT.value
+            ),
+            "question_text": saved.get("question"),
+            "answer_text": saved.get("answer"),
+            "citations": _feedback_citations(saved.get("citations_json")),
+        }
     payload = request.model_dump(
         mode="json",
         exclude={"message_id", "content_snapshot", "comment", "corrected_answer"},
@@ -97,7 +117,6 @@ async def current_feedback(
 async def list_feedback(
     paging: Annotated[OffsetParams, Depends(offset_params(default=50, max_limit=100))],
     search_answer_profile_id: str | None = Query(default=None, min_length=1, max_length=64),
-    target_type: FeedbackTargetType | None = None,
     rating: FeedbackRating | None = None,
     reason: FeedbackReason | None = None,
     # 省略したときは期間で絞らない（全期間）。画面は「すべて」のとき送らない（#978）。
@@ -112,7 +131,7 @@ async def list_feedback(
     """
     rows, total, groups, previous_groups = await OracleClient().list_feedback_dashboard_rows(
         search_answer_profile_id=search_answer_profile_id,
-        target_type=target_type.value if target_type else None,
+        target_type=FeedbackTargetType.ANSWER.value,
         rating=rating.value if rating else None,
         reason=reason.value if reason else None,
         period_days=period_days,
@@ -236,6 +255,8 @@ async def _scoped_feedback_detail(oracle: OracleClient, feedback_id: str) -> Fee
     if not cleaned_id or len(cleaned_id) > 64:
         raise HTTPException(status_code=404, detail="フィードバックが見つかりません。")
     row = await oracle.get_feedback_detail(cleaned_id)
+    if row is not None and row.get("target_type") == "citation":
+        raise HTTPException(status_code=404, detail="フィードバックが見つかりません。")
     if row is not None:
         return FeedbackDetail.model_validate(row)
     if not current_audit_request_context().feedback_all_users and await oracle.feedback_exists(
@@ -370,38 +391,41 @@ def _feedback_citations(value: object) -> list[dict[str, object]]:
 
 
 def _feedback_summary(groups: list[dict[str, object]]) -> FeedbackSummary:
-    total = helpful = answer_total = answer_helpful = citation_total = citation_helpful = 0
+    groups = [group for group in groups if group.get("target_type") == FeedbackTargetType.ANSWER]
+    total = helpful = 0
     reasons: dict[FeedbackReason, int] = {}
     for group in groups:
         raw_count = group.get("item_count")
         count = int(raw_count) if isinstance(raw_count, int | float | str | Decimal) else 0
-        target = str(group.get("target_type") or "")
         rating = str(group.get("rating") or "")
         total += count
         if rating == FeedbackRating.HELPFUL:
             helpful += count
-        if target == FeedbackTargetType.ANSWER:
-            answer_total += count
-            if rating == FeedbackRating.HELPFUL:
-                answer_helpful += count
-        elif target == FeedbackTargetType.CITATION:
-            citation_total += count
-            if rating == FeedbackRating.HELPFUL:
-                citation_helpful += count
         raw_reason = group.get("reason")
         if raw_reason:
             reason_key = FeedbackReason(str(raw_reason))
             reasons[reason_key] = reasons.get(reason_key, 0) + count
 
+    questions = sum(int(str(g.get("question_count") or 0)) for g in groups)
+    resolved = sum(
+        int(str(g.get("question_count") or 0)) for g in groups if g.get("rating") == "helpful"
+    )
+    retried = sum(int(str(g.get("retried_count") or 0)) for g in groups)
+    recovered = sum(
+        int(str(g.get("retried_count") or 0)) for g in groups if g.get("rating") == "helpful"
+    )
     return FeedbackSummary(
+        question_total=questions,
+        resolved_questions=resolved,
+        unretried_unresolved=questions - resolved - retried + recovered,
+        regenerated_questions=retried,
+        resolved_after_retry=recovered,
         total=total,
         helpful_count=helpful,
         not_helpful_count=total - helpful,
         helpful_rate=_rate(helpful, total),
-        answer_total=answer_total,
-        answer_helpful_rate=_rate(answer_helpful, answer_total),
-        citation_total=citation_total,
-        citation_helpful_rate=_rate(citation_helpful, citation_total),
+        answer_total=total,
+        answer_helpful_rate=_rate(helpful, total),
         reason_counts=[
             FeedbackReasonCount(reason=reason, count=count)
             for reason, count in sorted(reasons.items(), key=lambda item: (-item[1], item[0].value))

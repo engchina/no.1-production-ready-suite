@@ -224,7 +224,7 @@ test.describe("チャットの会話の見え方（#1889・#3244）", { tag: "@r
     await expect(page.getByTestId("chat-run-stop")).toHaveCount(0);
     await expect(page.getByTestId("chat-read-only-stop")).toHaveCount(0);
     // 回答と根拠の評価は持ち主だけ。
-    await expect(page.getByRole("button", { name: "この回答は役に立った" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "解決した", exact: true })).toHaveCount(0);
     expect(state.sent).toEqual([]);
 
     const overflow = await page.evaluate(
@@ -264,6 +264,6 @@ test.describe("チャットの会話の見え方（#1889・#3244）", { tag: "@r
     await expect(page.getByText("自分の回答です。")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "質問", exact: true })).toBeEditable();
     await expect(page.getByTestId("chat-read-only-notice")).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "この回答は役に立った" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "解決した", exact: true })).toBeVisible();
   });
 });

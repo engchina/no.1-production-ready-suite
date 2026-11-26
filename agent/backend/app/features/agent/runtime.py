@@ -649,8 +649,6 @@ class RunFeedbackRequest(BaseModel):
     @model_validator(mode="after")
     def _reason_for_not_helpful(self) -> RunFeedbackRequest:
         if self.rating == FeedbackRating.NOT_HELPFUL:
-            if self.reason is None:
-                raise ValueError("役に立たなかった理由を選んでください。")
             self.comment = self.comment.strip()
         else:
             # 役に立った評価には理由・コメントを残さない（RAG と同じ）。
@@ -853,6 +851,8 @@ class RunState(BaseModel):
     # 質問に添付したファイル（#2517。名前と種類。添付が期限で消えても発話の表示に残す）。
     attachments: list[ChatAttachmentReference] = Field(default_factory=list)
     # 回答への評価（#774）。評価していない Run は None。
+    file_review_revision: int = 0
+    file_review_outcome: str | None = None
     feedback: RunFeedback | None = None
     # 管理者の評価（Agent 管理の権限。だれの回答にも付けられ、本人の評価とは別に残す。#774）。
     admin_review: RunFeedback | None = None
@@ -1626,6 +1626,11 @@ class AgentRuntimeRepositoryContract(Protocol):
     def list_runs(self) -> list[RunState]: ...
     def list_run_summaries(self) -> list[RunSummary]: ...
     def list_approval_summaries(self) -> list[ApprovalSummary]: ...
+    def record_review_outcome(
+        self, run_id: str, revision: int, outcome: str, vote: RunFeedback | None
+    ) -> RunState: ...
+    def read_file_review(self, run_id: str) -> str | None: ...
+    def write_file_review(self, run_id: str, revision: int, content: str) -> None: ...
     def get_run_for_approval(self, approval_id: str) -> RunState: ...
     def get_run(self, run_id: str) -> RunState: ...
     def list_artifacts(self, run_id: str) -> list[Artifact]: ...
@@ -1828,6 +1833,7 @@ class AgentRuntimeRepository:
         # 成果物のファイルの中身（#5837。(Run, 成果物) → バイト列）。Run の JSON と分けて持ち、
         # snapshot に書かない（memory / file は再起動で消える。Oracle は表に持ち、ここは使わない）。
         self._artifact_files: dict[tuple[str, str], bytes] = {}
+        self._file_reviews: dict[str, str] = {}
         self._approvals: dict[str, ApprovalRequest] = {}
         self._agents: dict[str, AgentProfile] = {
             agent.id: _ensure_versioned(agent) for agent in _builtin_agents()
@@ -2100,6 +2106,44 @@ class AgentRuntimeRepository:
                 for approval in run.approvals
             ]
         return sorted(rows, key=lambda row: row.created_at, reverse=True)
+
+    def _review_path(self, run_id: str) -> Path | None:
+        if self._snapshot_path is None:
+            return None
+        # Run の ID はサーバーが払い出す。保存先のパスに利用者入力を使わない。
+        digest = hashlib.sha256(run_id.encode()).hexdigest()
+        return self._snapshot_path.with_name(self._snapshot_path.name + ".reviews") / digest
+
+    def read_file_review(self, run_id: str) -> str | None:
+        path = self._review_path(run_id)
+        if path is not None:
+            return path.read_text(encoding="utf-8") if path.exists() else None
+        with self._lock:
+            return self._file_reviews.get(run_id)
+
+    def write_file_review(self, run_id: str, revision: int, content: str) -> None:
+        from pr_backend_core.file_review import StaleReview
+
+        def check(current: str | None) -> None:
+            if (json.loads(current)["revision"] if current else 0) != revision:
+                raise StaleReview("資料の選択が更新されました。開き直してください。")
+
+        path = self._review_path(run_id)
+        if path is None:
+            with self._lock:
+                check(self._file_reviews.get(run_id))
+                self._file_reviews[run_id] = content
+            return
+        # ファイル保存でもプロセス間で比較と置換をまとめ、読取には完成した版だけを見せる。
+        import fcntl
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            check(self.read_file_review(run_id))
+            temporary = path.with_suffix(".new")
+            temporary.write_text(content, encoding="utf-8")
+            temporary.replace(path)
 
     def get_run_for_approval(self, approval_id: str) -> RunState:
         """承認の ID から、その承認を持つ Run を 1 件読む（全 Run を複製しない。#1897）。"""
@@ -3685,6 +3729,22 @@ class AgentRuntimeRepository:
             self._record_fact_locked(run)
             return run.model_copy(deep=True)
 
+    def record_review_outcome(
+        self, run_id: str, revision: int, outcome: str, vote: RunFeedback | None
+    ) -> RunState:
+        """最新の判定を Run と集計へ反映する。古い非同期処理からの上書きを防ぐ。"""
+        with self._lock:
+            run = self._require_run(run_id)
+            if revision > run.file_review_revision:
+                run.file_review_revision = revision
+                run.file_review_outcome = outcome
+                if vote and (run.feedback is None or run.feedback.rating != vote.rating):
+                    run.feedback = vote
+                self._mark_run_changed(run)
+                self._persist_locked()
+                self._record_fact_locked(run)
+            return run.model_copy(deep=True)
+
     def record_builtin_dry_run_steps(self, run_id: str, calls: Sequence[ToolCall]) -> None:
         """評価の Run で実行しなかった（承認が要る）ツールの呼び出しを step に残す（#776）。
 
@@ -4678,6 +4738,44 @@ class AgentRuntimeOracleCheckpointRepository(AgentRuntimeRepository):
     # 成果物のファイルの中身（#5837）は `AGENT_RUNTIME_ARTIFACT_FILES` に持つ（書いたらすぐ commit。
     # 別のプロセス（API・dispatcher）も Run・成果物の ID で読む）。Run の行を消すときに一緒に消す
     # （`runtime_checkpoint_store.write_entities`）。
+
+    def read_file_review(self, run_id: str) -> str | None:
+        with self._connect_oracle() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT content FROM agent_answer_reviews WHERE namespace=:ns AND run_id=:id",
+                {"ns": self._oracle_checkpoint_key, "id": run_id},
+            )
+            row = cur.fetchone()
+            return (row[0].read() if hasattr(row[0], "read") else str(row[0])) if row else None
+
+    def write_file_review(self, run_id: str, revision: int, content: str) -> None:
+        import oracledb
+        from pr_backend_core.file_review import StaleReview
+
+        with self._connect_oracle() as conn, conn.cursor() as cur:
+            cur.setinputsizes(content=oracledb.DB_TYPE_CLOB)
+            try:
+                cur.execute(
+                    """
+                    MERGE INTO agent_answer_reviews t USING (SELECT :ns ns, :id id FROM dual) s
+                    ON (t.namespace=s.ns AND t.run_id=s.id)
+                    WHEN MATCHED THEN UPDATE SET t.content=:content, t.revision=:rev+1
+                      WHERE t.revision=:rev
+                    WHEN NOT MATCHED THEN INSERT (namespace,run_id,content,revision)
+                      VALUES (:ns,:id,:content,1) WHERE :rev=0
+                    """,
+                    {
+                        "ns": self._oracle_checkpoint_key,
+                        "id": run_id,
+                        "rev": revision,
+                        "content": content,
+                    },
+                )
+            except oracledb.IntegrityError as exc:
+                raise StaleReview("資料の選択が更新されました。開き直してください。") from exc
+            if cur.rowcount != 1:
+                raise StaleReview("資料の選択が更新されました。開き直してください。")
+            conn.commit()
 
     def _store_artifact_file(self, run_id: str, artifact_id: str, file: ArtifactFile) -> None:
         with self._connect_oracle() as connection, connection.cursor() as cursor:

@@ -1,8 +1,13 @@
-import { TRACE_DETAILS_JA } from "@production-ready/ui";
+import { TRACE_DETAILS_JA, FILE_REVIEW_JA } from "@production-ready/ui";
 import { ja as ragJa } from "@/lib/rag-i18n";
 
 // 最小 i18n。日本語第一。UI 文言はここ経由で参照し、ハードコードしない。
 const agentJa = {
+  ...FILE_REVIEW_JA,
+  "chat.fileReview.task": "検索 {number}（{tool}）· {question}",
+  "chat.fileReview.chatTool": "RAG チャット",
+  "chat.fileReview.searchTool": "RAG 検索",
+  "feedback.summary.retry": "未解決・再回答なし {pending} 件 ／ 再回答あり {retried} 件（うち解決 {resolved} 件）",
   ...TRACE_DETAILS_JA,
   "app.title": "Production Ready Agent",
   "app.sidebarTitle.line1": "Production Ready",

@@ -245,6 +245,10 @@ CREATE TABLE rag_answer_records (
     evaluation_input_json JSON,
     evaluation_json     JSON,
     answer_notice       CLOB,
+    review_state        JSON,
+    review_request      JSON,
+    review_root_id      VARCHAR2(64),
+    review_version      NUMBER,
     user_id_hash        CHAR(64),
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT rag_answer_records_surface_ck CHECK (surface IN ('search', 'chat'))

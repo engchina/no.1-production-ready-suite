@@ -63,14 +63,13 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await expect(paging.getByRole("button", { name: "前へ", exact: true })).toBeDisabled();
 
   await expect(page.getByRole("heading", { name: "利用者フィードバック" })).toBeVisible();
+  await expect(page.getByText("質問の解決状況と、再回答で解決した割合を確認できます。")).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "質問" })).toBeVisible();
-  for (const name of ["評価対象", "評価", "低評価の理由", "利用者コメント", "日時"]) {
+  for (const name of ["評価", "低評価の理由", "利用者コメント", "日時"]) {
     await expect(page.getByRole("columnheader", { name, exact: true })).toBeVisible();
   }
   const toolbar = page.getByTestId("feedback-filters-toolbar");
-  const period = await toolbar.getByRole("combobox", {name: "期間", exact: true}).boundingBox();
-  const target = await toolbar.getByRole("combobox", {name: "評価対象", exact: true}).boundingBox();
-  expect(target!.y).toBeGreaterThanOrEqual(period!.y + period!.height);
+  await expect(toolbar.getByRole("combobox", {name:"評価対象", exact:true})).toHaveCount(0);
   await expect(page.getByRole("table").getByText("最新の経費申請期限を教えて", { exact: true })).toBeVisible();
   await expect(page.getByText("前期間比 +17pt", { exact: true }).first()).toBeVisible();
   // B 型：狭い一覧と広い詳細を ListDetailLayout で並べ、先頭を自動で選ばず、未選択の詳細は選び方を案内する（#2283）。
@@ -120,7 +119,7 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await expect(list).toBeHidden();
 
   await detail.getByRole("tab", { name: "根拠" }).click();
-  await expect(page.getByRole("tabpanel", { name: "根拠" }).getByText("評価対象", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: "根拠" }).getByText("評価対象", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /の根拠を表示$/ })).toBeVisible();
   await expect(page.getByRole("link", { name: "引用元を開く" })).toHaveCount(0);
 
@@ -395,7 +394,7 @@ test("見える範囲を案内する: SYSTEM_ADMIN はすべての利用者の�
   await expect(ownNotice).toContainText("SYSTEM_ADMIN のロールの利用者だけが確認できます");
   await expect(page.getByText("すべての利用者のフィードバックを表示しています")).toHaveCount(0);
   const noticeBox = await ownNotice.boundingBox();
-  const summaryBox = await page.getByText("全体の有用率", { exact: true }).first().boundingBox();
+  const summaryBox = await page.getByText("質問の解決率", { exact: true }).first().boundingBox();
   expect(noticeBox !== null && summaryBox !== null && noticeBox.y < summaryBox.y).toBe(true);
   await expectNoPageOverflow(page);
 });
@@ -430,7 +429,7 @@ test("絞り込みの検索・回答プロファイルを読み取れないと�
   await expect(failure.getByText("検索・回答プロファイルを読み取れませんでした。")).toBeHidden();
   expect(await findFieldLoadFailureViolations(page, { expectCount: 1 })).toEqual([]);
   // 一覧は読めるのでそのまま出す。失敗の表示はツールバーの直下。
-  await expect(page.getByText("全体の有用率", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("質問の解決率", { exact: true }).first()).toBeVisible();
   const toolbarBox = await page.getByTestId("feedback-filters-toolbar").boundingBox();
   const failureBox = await failure.boundingBox();
   expect(toolbarBox !== null && failureBox !== null && failureBox.y >= toolbarBox.y + toolbarBox.height).toBe(true);
@@ -473,7 +472,7 @@ for (const width of [1280, 1920]) {
 
     // 評価は状態なのでサムズアップ / ダウンのアイコンを持つ（色だけで表さない）。
     const notHelpful = table.locator("[data-status-variant='danger']:visible").first();
-    await expect(notHelpful).toHaveText("役に立たなかった");
+    await expect(notHelpful).toHaveText("未解決");
     await expect(notHelpful.locator("svg")).toHaveCount(1);
     await expectNoPageOverflow(page);
   });
@@ -536,6 +535,7 @@ function feedbackEnvelope(limit: number, offset: number) {
     data: {
       summary: {
         total: 120,
+        question_total: 120, resolved_questions:80, unretried_unresolved:20, regenerated_questions:40, resolved_after_retry:20,
         helpful_count: 80,
         not_helpful_count: 40,
         helpful_rate: 0.6667,
@@ -551,6 +551,7 @@ function feedbackEnvelope(limit: number, offset: number) {
       },
       previous_summary: {
         total: 100,
+        question_total: 100, resolved_questions:50, unretried_unresolved:40, regenerated_questions:20, resolved_after_retry:10,
         helpful_count: 50,
         not_helpful_count: 50,
         helpful_rate: 0.5,

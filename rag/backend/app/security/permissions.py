@@ -541,6 +541,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("GET", "/history/runs/{run_id}/trace/spans/{span_id}/{slot}/body"): _any(MENU_HISTORY),
     ("GET", "/search/answers"): _ANSWER_USE,
     ("GET", "/search/answers/{trace_id}"): _ANSWER_USE,
+    ("GET", "/search/answers/{trace_id}/review"): _any(MENU_CHAT, MENU_SEARCH),
+    ("POST", "/search/answers/{trace_id}/review"): _any(MENU_CHAT, MENU_SEARCH),
     ("GET", "/search/answers/{trace_id}/trace"): _ANSWER_USE,
     ("GET", "/search/answers/{trace_id}/trace/spans/{span_id}/{slot}/body"): _ANSWER_USE,
     # ---- 検索・回答プロファイル: 品質評価 ----

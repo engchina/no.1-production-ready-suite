@@ -440,6 +440,7 @@ class RagPipeline:
         run_recorder: RunRecorder | None = None,
         answer_notice: AnswerNoticeSource | None = None,
         attachment_conversation_id: str | None = None,
+        staged_answer: dict[str, object] | None = None,
         history_question_prepared: bool = False,
         prepared_history_rewrite: PreparedHistoryRewrite | None = None,
         materialize_images: bool = True,
@@ -467,6 +468,7 @@ class RagPipeline:
         # （品質評価・確かめのスクリプトは渡さない）。
         self._answer_notice = answer_notice
         # チャットの会話（#2517）。会話の添付の節・行を、質問の根拠の候補として検索の結果に足す。
+        self._staged_answer = staged_answer
         self._attachment_conversation_id = attachment_conversation_id
         self._history_question_prepared = history_question_prepared
         self._prepared_history_rewrite = (
@@ -789,6 +791,16 @@ class RagPipeline:
                 attachment_evidence(
                     attachment_question,
                     self._attachment_conversation_id,
+                    **(
+                        {"include": set(json.loads(request.filters["include_document_ids"]))}
+                        if "include_document_ids" in request.filters
+                        else {}
+                    ),
+                    **(
+                        {"exclude": set(json.loads(request.filters["exclude_document_ids"]))}
+                        if "exclude_document_ids" in request.filters
+                        else {}
+                    ),
                     rerank=self._genai.rerank if self._settings.rag_rerank_enabled else None,
                     report_degraded=degraded.record_degraded,
                 ),
@@ -1140,25 +1152,33 @@ class RagPipeline:
         warn_if_large_answer_record(
             trace_id=trace_id, citations=stored, evaluation_input=evaluation_input
         )
-        await self._oracle.save_answer_record(
-            {
-                "trace_id": trace_id,
-                "search_answer_profile_id": search_answer_profile_id,
-                "surface": surface,
-                "answer_engine": ANSWER_ENGINE,
-                "question": question,
-                "rewritten_question": rewritten_question,
-                "answer": answer,
-                "citations": stored,
-                "diagnostics": {
-                    **dict(diagnostics),
-                    # 処理の経過の記録(共通の span の表の trace id と工程の詳細。#3226)。
-                    **({"trace": self._trace.record()} if self._trace is not None else {}),
-                },
-                "evaluation_input": evaluation_input,
-                "answer_notice": answer_notice,
-            }
-        )
+        record: dict[str, object] = {
+            "trace_id": trace_id,
+            "search_answer_profile_id": search_answer_profile_id,
+            "surface": surface,
+            "answer_engine": ANSWER_ENGINE,
+            "question": question,
+            "rewritten_question": rewritten_question,
+            "answer": answer,
+            "citations": stored,
+            "review_request": {
+                "request": request.model_dump(mode="json"),
+                "flow": self._flow,
+                "conversation_id": self._attachment_conversation_id,
+            },
+            "diagnostics": {
+                **dict(diagnostics),
+                # 処理の経過の記録(共通の span の表の trace id と工程の詳細。#3226)。
+                **({"trace": self._trace.record()} if self._trace is not None else {}),
+            },
+            "evaluation_input": evaluation_input,
+            "answer_notice": answer_notice,
+        }
+        if self._staged_answer is not None:
+            # 再回答の記録と親の版・除外の確定は同じ transaction に含める。
+            self._staged_answer.update(record)
+            return
+        await self._oracle.save_answer_record(record)
         if self._settings.rag_answer_record_retention_days > 0:
             try:
                 await self._oracle.purge_answer_records(

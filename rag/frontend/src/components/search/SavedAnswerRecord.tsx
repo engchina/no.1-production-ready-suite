@@ -17,7 +17,6 @@ import { AnswerDetailsPanel } from "./AnswerDetailsPanel";
  */
 export function SavedAnswerRecord({
   traceId,
-  searchAnswerProfileId,
   showAnswer = true,
   showCitations = true,
 }: {
@@ -81,11 +80,6 @@ export function SavedAnswerRecord({
               citations={record.citations}
               withheldCount={record.withheld_evidence_count ?? 0}
               idPrefix={`answer-record-${record.trace_id}`}
-              cardProps={{
-                traceId: record.trace_id,
-                searchAnswerProfileId,
-                sourceSurface: record.surface,
-              }}
             />
           ) : null
         }

@@ -897,10 +897,17 @@
       "sha256": "74893177c6da97cf9694704be23e814551cc278e072f26ebf00836ff386d1d81",
       "statement_count": 1,
       "table_name": "rag_wiki_pages"
+    },
+    {
+      "destructive": false,
+      "name": "20261127_5870_answer_file_review",
+      "sha256": "2663bba0bad9ddef1a2e57b9f95549df6747339d6f4520f4117931413b9438eb",
+      "statement_count": 1,
+      "table_name": "rag_answer_records"
     }
   ],
   "schema_name": "production-ready-rag-oracle-26ai",
   "schema_version": "3",
-  "sha256": "3624b705e5af7737e7f74be8f4451263f4a08511a3a4405951ad8a53cc04ea85",
-  "statement_count": 192
+  "sha256": "039c1fae120f7f23da1efc64f102b6bcfb6bf7607fc63d1516da5f271fde72ee",
+  "statement_count": 193
 }

@@ -2256,7 +2256,7 @@ async def test_save_answer_record_binds_large_citations_as_clob_json_text() -> N
     assert json.loads(cast(str, call.parameters["diagnostics_json"])) == {"elapsed_ms": 10}
     assert call.parameters["evaluation_input_json"] is None
     assert call.input_sizes == oracle_module._json_input_sizes(
-        "citations_json", "diagnostics_json", "evaluation_input_json"
+        "citations_json", "diagnostics_json", "evaluation_input_json", "review_request"
     )
 
 
@@ -3203,8 +3203,8 @@ def test_oracle_feedback_and_eval_artifact_schema_use_oracle_tables() -> None:
 
 
 @pytest.mark.anyio
-async def test_feedback_write_and_current_read_use_append_only_latest_vote() -> None:
-    """投票は INSERT し、current は利用者・対象ごとの最新行だけを返す。"""
+async def test_feedback_upserts_one_vote_per_answer_and_user() -> None:
+    """同じ回答版と利用者の票を更新し、current は最新の判定を返す。"""
     created_at = datetime(2026, 7, 1, tzinfo=UTC)
     pool = FakeOraclePool(
         execute_results=[
@@ -3249,8 +3249,8 @@ async def test_feedback_write_and_current_read_use_append_only_latest_vote() -> 
 
     insert = pool.connection.calls[0]
     select = pool.connection.calls[1]
-    assert feedback_id == "feedback-1"
-    assert "INSERT INTO rag_citation_feedback" in insert.statement
+    assert feedback_id == insert.parameters["feedback_id"]
+    assert "MERGE INTO rag_citation_feedback" in insert.statement
     assert insert.parameters["target_type"] == "answer"
     assert insert.parameters["search_answer_profile_id"] == "bv-1"
     assert insert.parameters["document_id"] is None
@@ -3321,8 +3321,8 @@ async def test_feedback_details_are_committed_with_the_vote() -> None:
         reset_audit_request_context(token)
 
     assert len(pool.connection.calls) == 2
-    assert "INSERT INTO rag_citation_feedback" in pool.connection.calls[0].statement
-    assert "INSERT INTO rag_feedback_details" in pool.connection.calls[1].statement
+    assert "MERGE INTO rag_citation_feedback" in pool.connection.calls[0].statement
+    assert "MERGE INTO rag_feedback_details" in pool.connection.calls[1].statement
     assert pool.connection.calls[1].parameters["search_text"] == "質問\n回答\n古い回答です。"
     assert pool.connection.commits == 1
     assert pool.connection.rollbacks == 0

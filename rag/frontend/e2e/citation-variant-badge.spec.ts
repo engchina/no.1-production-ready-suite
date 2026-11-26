@@ -200,8 +200,6 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
     expect(scorePanelBox!.y).toBeGreaterThanOrEqual(citationMainBox!.y + citationMainBox!.height);
     for (const control of [
       citation.getByRole("button", { name: "policy.txt の根拠を表示" }),
-      citation.getByRole("button", { name: "この引用は役に立った" }),
-      citation.getByRole("button", { name: "この引用は役に立たなかった" }),
     ]) {
       const controlBox = await control.boundingBox();
       expect(controlBox).not.toBeNull();
@@ -213,6 +211,7 @@ test("引用カードに variant(chunk_set)バッジが出る", { tag: "@respons
     expect(citationTextBox!.y).toBeLessThan(scorePanelBox!.y + scorePanelBox!.height);
   }
   await expectNoPageOverflow(page);
+  await expect(citation.getByRole("button", { name: /この引用は役に立/ })).toHaveCount(0);
   await citation.scrollIntoViewIfNeeded();
   await citation.screenshot({
     path: testInfo.outputPath(`citation-card-${testInfo.project.name}.png`),

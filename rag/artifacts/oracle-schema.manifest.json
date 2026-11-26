@@ -40,7 +40,7 @@
     },
     {
       "name": "answer_records",
-      "sha256": "19eb3d039ed981ba2e649cca93c5e8f127c0976f623999b4b4d39dd989956a7e",
+      "sha256": "8056046b1101e3ad530a0903141ba3d524b363f4b736ca2a3bd30a16521916d4",
       "statement_count": 3,
       "table_name": "rag_answer_records"
     },
@@ -273,7 +273,7 @@
       "table_name": "rag_role_permissions"
     }
   ],
-  "sha256": "5dd38e79cee2ef5894fde3a78cf8eac326f6032ae1bbe6b38f1ed49f1b19917c",
+  "sha256": "974f201a84d13dad2bbd8cb74d1288606d649426cf183b398e796141bd25e878",
   "statement_count": 162,
   "vector_contract": "VECTOR(1536, FLOAT32)",
   "vector_index": {

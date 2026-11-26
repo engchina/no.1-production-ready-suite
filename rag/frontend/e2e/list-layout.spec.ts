@@ -398,7 +398,7 @@ test.describe("一覧の絞り込みの部品と条件のクリア (#1933)", { t
       // 期間（既定は 30 日）と評価の 2 つが既定と違う。
       await toolbar.getByRole("button", { name: "絞り込み（2）" }).click();
       const sheet = page.getByTestId("feedback-filters-toolbar-filters-sheet");
-      await expect(sheet.getByRole("combobox", { name: "評価", exact: true })).toContainText("評価:役に立たなかった");
+      await expect(sheet.getByRole("combobox", { name: "評価", exact: true })).toContainText("評価:未解決");
       await expect(sheet.getByRole("combobox", { name: "期間" })).toBeVisible();
       expect(await measureHorizontalOverflow(page)).toBeLessThanOrEqual(1);
       // 確定の操作はシートの footer（下端に固定。絞り込みが多くても本文と一緒にスクロールしない。#5522）。
@@ -413,7 +413,7 @@ test.describe("一覧の絞り込みの部品と条件のクリア (#1933)", { t
       await expect(sheet).toBeHidden();
     } else {
       await expect(toolbar).toHaveAttribute("data-list-toolbar-filters-layout", "inline");
-      await expect(toolbar.getByRole("combobox", { name: "評価", exact: true })).toContainText("評価:役に立たなかった");
+      await expect(toolbar.getByRole("combobox", { name: "評価", exact: true })).toContainText("評価:未解決");
       expect(await findToolbarMisalignment(page, { root: '[data-testid="feedback-filters-toolbar"]' })).toEqual([]);
       await page.screenshot({ path: testInfo.outputPath("feedback-filters-desktop.png") });
     }

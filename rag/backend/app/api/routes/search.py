@@ -11,6 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
+from pr_backend_core.file_review import FileReview, ReviewAction
 from pr_backend_core.mcp import report_tool_progress
 from pr_backend_core.observability.trace_bodies import BodyPage
 from pr_backend_core.observability.trace_body_reader import CallBodySlot
@@ -407,6 +408,13 @@ async def _resolve_query_context(
         ensure_search_answer_profile_not_archived(view, search_answer_profile_id)
         effective_request = request
         kb_ids = view.config.normalized_knowledge_base_ids()
+        if "exclude_document_ids" in request.filters or "include_document_ids" in request.filters:
+            ensure_search_answer_profile_has_knowledge_bases(kb_ids)
+            if request.knowledge_base_ids:
+                retained = [kb for kb in request.knowledge_base_ids if kb in kb_ids]
+                if not retained:
+                    raise HTTPException(403, "元の検索範囲を利用できません。")
+                effective_request = _with_knowledge_base_ids(request, retained)
         # 参照 KB が 0 件の検索・回答プロファイルで利用者の全 KB を検索しない（#304）。
         if not request.knowledge_base_ids:
             ensure_search_answer_profile_has_knowledge_bases(kb_ids)
@@ -454,6 +462,18 @@ async def _resolve_query_context(
                         "original_question": gated.original_question,
                     }
                 )
+            if (
+                "exclude_document_ids" in effective_request.filters
+                or "include_document_ids" in effective_request.filters
+            ):
+                # 資料を指定した再回答で、登録済みの回答や独立したガイドから本文を足さない。
+                settings = settings.model_copy(
+                    update={
+                        "rag_approved_faq_selected": {},
+                        "rag_support_guide_enabled": False,
+                    }
+                )
+                return effective_request, settings, None, applied_view
             if request.approved_faq_id and flow == BASIC_FLOW:
                 raise HTTPException(status_code=422, detail=APPROVED_FAQ_BASIC_FLOW_MESSAGE)
             if request.approved_faq_id:
@@ -856,6 +876,8 @@ async def _run_search_with_timeout(
     run_recorder: RunRecorder | None = None,
     scope: AnswerScope | None = None,
     deadline: float | None = None,
+    attachment_conversation_id: str | None = None,
+    staged_answer: dict[str, object] | None = None,
 ) -> SearchResponse:
     """検索・回答の pipeline を回答生成の上限（`rag_answer_timeout_seconds`。#375）付きで実行する。
 
@@ -901,6 +923,8 @@ async def _run_search_with_timeout(
                 answer_model_id=answer_model_id,
                 run_recorder=run_recorder,
                 scope=scope,
+                attachment_conversation_id=attachment_conversation_id,
+                staged_answer=staged_answer,
                 answer_notice=current_answer_notice,
                 flow=flow,
             ).run(
@@ -1379,6 +1403,23 @@ async def get_saved_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
             }
         )
     )
+
+
+@router.get("/answers/{trace_id}/review", response_model=ApiResponse[FileReview])
+async def get_answer_review(trace_id: str, request: Request) -> ApiResponse[FileReview]:
+    from app.rag.file_review import review_answer
+
+    return ApiResponse(data=await review_answer(request, trace_id))
+
+
+@router.post("/answers/{trace_id}/review", response_model=ApiResponse[FileReview])
+async def change_answer_review(
+    trace_id: str, request: Request, action: ReviewAction
+) -> ApiResponse[FileReview]:
+    from app.rag.file_review import review_answer
+
+    enforce_rate_limit("search", request)
+    return ApiResponse(data=await review_answer(request, trace_id, action))
 
 
 @router.get("/answers/{trace_id}/trace", response_model=ApiResponse[TraceSnapshot])

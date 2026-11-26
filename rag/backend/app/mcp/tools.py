@@ -553,6 +553,14 @@ class RecommendSearchAnswerProfileInput(BaseModel):
         return ids
 
 
+class FileSelection(BaseModel):
+    """この質問で利用者が確認した資料の範囲。"""
+
+    include: list[str] = Field(default_factory=list, description="この資料の中で根拠を探す。")
+    exclude: list[str] = Field(default_factory=list, description="今回の検索から除く文書 ID。")
+    candidates_only: bool = Field(default=False, description="回答を作らず資料の候補を返す。")
+
+
 class SearchInput(BaseModel):
     """rag_search の条件（基本の検索）。
 
@@ -561,6 +569,9 @@ class SearchInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    file_selection: FileSelection | None = Field(
+        default=None, description="利用者が選んだ再検索の範囲。"
+    )
     query: str = Field(..., min_length=1, max_length=8000, description="質問文。")
     search_answer_profile_id: OptionalText = Field(
         default=None,
@@ -635,6 +646,9 @@ class ChatInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    file_selection: FileSelection | None = Field(
+        default=None, description="利用者が選んだ再検索の範囲。"
+    )
     query: str = Field(
         ...,
         min_length=1,
@@ -3751,7 +3765,7 @@ def _search_request(arguments: SearchInput) -> SearchRequest:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
     if "top_k" in arguments.model_fields_set and arguments.top_k is not None:
         payload["top_k"] = arguments.top_k
-    return _validated_request(payload)
+    return _selected_request(payload, arguments.file_selection)
 
 
 def _chat_request(arguments: ChatInput) -> SearchRequest:
@@ -3767,6 +3781,18 @@ def _chat_request(arguments: ChatInput) -> SearchRequest:
         payload["search_answer_profile_id"] = arguments.search_answer_profile_id
     if arguments.conditions:
         payload["conditions"] = arguments.conditions
+    return _selected_request(payload, arguments.file_selection)
+
+
+def _selected_request(payload: dict[str, Any], selection: FileSelection | None) -> SearchRequest:
+    if selection is not None:
+        from app.rag.file_review import scoped_filters
+
+        payload["filters"] = scoped_filters(
+            payload.get("filters", {}), selection.include, selection.exclude
+        )
+        payload["generate_answer"] = not selection.candidates_only
+        payload.pop("approved_faq_id", None)
     return _validated_request(payload)
 
 
@@ -4151,7 +4177,7 @@ def _with_profile_selection[
         try:
             return await handler(arguments)
         except HTTPException as exc:
-            if not _is_profile_not_found(exc):
+            if arguments.file_selection is not None or not _is_profile_not_found(exc):
                 raise
             try:
                 return await run_selected(arguments, requested)
@@ -4277,7 +4303,7 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
         enforce_rate_limit("search", http_request)
         # 回答の前に登録済みQ&Aの候補を照会し、あれば候補だけを返す（#5134。画面と同じ入口の順:
         # 安全チェック → 照合）。
-        candidates = await _approved_faq_suggestions(arguments)
+        candidates = [] if arguments.file_selection else await _approved_faq_suggestions(arguments)
         if candidates:
             return ChatOutput(
                 status=APPROVED_FAQ_CANDIDATES_STATUS,

@@ -1,8 +1,9 @@
-import { TRACE_DETAILS_JA } from "@production-ready/ui";
+import { TRACE_DETAILS_JA, FILE_REVIEW_JA } from "@production-ready/ui";
 /**
  * 日本語文言。文言はハードコードせずここを経由する。
  */
 export const ja = {
+  ...FILE_REVIEW_JA,
   "evaluation.testsets.modelLoadError": "回答モデルの候補を読み込めませんでした。",
   "evaluation.testsets.loadError": "テストセットを読み込めませんでした。",
   "evaluation.testsets.modelDefault": "プロファイルの既定モデル",
@@ -3964,11 +3965,8 @@ export const ja = {
   "search.citation.citationLabelLabel": "引用",
   "search.citation.openPreview": "{file} の引用箇所",
   "search.citation.previewClose": "閉じる",
-  "search.citation.feedback.helpful": "この引用は役に立った",
-  "search.citation.feedback.notHelpful": "この引用は役に立たなかった",
 
   "feedback.controls.answerQuestion": "この回答は役に立ちましたか？",
-  "feedback.controls.citationQuestion": "この引用は役に立ちましたか？",
   "feedback.controls.answerHelpful": "この回答は役に立った",
   "feedback.controls.answerNotHelpful": "この回答は役に立たなかった",
   "feedback.controls.reasonLegend": "役に立たなかった理由を選択してください",
@@ -3994,13 +3992,13 @@ export const ja = {
   "feedback.reason.ambiguous_question": "質問が曖昧（意図や前提を特定できない）",
   "feedback.page.refresh": "最新情報を取得",
   "feedback.page.title": "利用者フィードバック",
-  "feedback.page.subtitle": "回答と引用への評価を確認し、改善が必要な箇所を特定します。",
+  "feedback.page.subtitle": "質問の解決状況と、再回答で解決した割合を確認できます。",
   "feedback.scope.allTitle": "すべての利用者のフィードバックを表示しています",
   "feedback.scope.allDescription":
     "一覧と集計には、すべての利用者が送った評価が入ります。SYSTEM_ADMIN 以外のロールの利用者には、自分が送ったフィードバックだけが表示されます。",
   "feedback.scope.ownTitle": "自分が送ったフィードバックだけを表示しています",
   "feedback.scope.ownDescription":
-    "一覧と集計は、あなたが送った回答・引用の評価だけです。すべての利用者のフィードバックは、SYSTEM_ADMIN のロールの利用者だけが確認できます。",
+    "一覧と集計には、自分が回答に付けた評価だけが表示されます。すべての利用者のフィードバックは、SYSTEM_ADMIN のロールの利用者だけが確認できます。",
   "feedback.page.loadError": "フィードバックを読み込めませんでした。",
   "feedback.filters.period": "期間",
   "feedback.filters.days": "過去 {count} 日",
@@ -4020,13 +4018,15 @@ export const ja = {
   "feedback.filters.oldest": "古い順",
   "feedback.target.answer": "回答",
   "feedback.target.citation": "引用",
-  "feedback.rating.helpful": "役に立った",
-  "feedback.rating.notHelpful": "役に立たなかった",
+  "feedback.rating.helpful": "解決した",
+  "feedback.rating.notHelpful": "未解決",
+  "feedback.summary.questionRate": "質問の解決率",
+  "feedback.summary.unretried": "未解決・再回答なし",
+  "feedback.summary.retryRate": "再回答後の解決率",
   "feedback.summary.title": "フィードバック集計",
   "feedback.summary.total": "有効な評価",
   "feedback.summary.helpfulRate": "全体の有用率",
   "feedback.summary.answerRate": "回答の有用率",
-  "feedback.summary.citationRate": "引用の有用率",
   "feedback.summary.count": "{count}件の評価",
   "feedback.summary.lowCount": "低評価 {count}件",
   "feedback.summary.previousCount": "前期間比 {value}件",
@@ -4071,7 +4071,7 @@ export const ja = {
   "feedback.promote.faq": "登録済みQ&Aに登録",
   "feedback.promote.faqConfirmTitle": "検索・回答プロファイルの登録済みQ&Aに登録しますか？",
   "feedback.promote.faqConfirmDescription":
-    "「役に立った」回答はそのまま、それ以外は修正した回答を Q&A の回答として登録します。同じ質問の Q&A があれば置き換えます。",
+    "「解決した」と評価された回答はそのまま、それ以外は修正した回答を Q&A の回答として登録します。同じ質問の Q&A があれば置き換えます。",
   "feedback.promote.faqDone": "登録済みQ&Aに登録しました: {question}",
   "feedback.promote.evaluation": "品質評価のケースを書き出す",
   "feedback.promote.evaluationDone":
@@ -4968,11 +4968,9 @@ export const ja = {
   "history.process.empty": "記録された段はありません。",
   "history.process.outcome.cancelled": "停止",
   "history.feedback.title": "この実行へのフィードバック",
-  "history.feedback.description": "利用者が回答・根拠に付けた評価です（送った利用者・対象ごとの最新の票）。",
+  "history.feedback.description": "各利用者がこの回答に付けた最新の評価です。",
   "history.feedback.target.answer": "回答",
   "history.feedback.target.citation": "根拠",
-  "history.feedback.helpful": "役に立った",
-  "history.feedback.notHelpful": "役に立たなかった",
   "history.feedback.open": "フィードバックを開く",
   "history.feedback.col.target": "対象",
   "history.feedback.col.rating": "評価",

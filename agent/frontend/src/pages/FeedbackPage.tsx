@@ -493,6 +493,9 @@ function FeedbackContent({
             />
           </div>
           <ReasonCounts summary={summary} />
+          {Boolean(summary.unretried_unresolved || summary.regenerated_questions) && <p className="text-sm text-fg-muted lg:col-span-2">
+            {t("feedback.summary.retry", {pending:summary.unretried_unresolved ?? 0, retried:summary.regenerated_questions ?? 0, resolved:summary.resolved_after_retry ?? 0})}
+          </p>}
           <p className="text-xs text-fg-muted lg:col-span-2" data-testid="feedback-admin-summary">
             {t("feedback.summary.admin", {
               count: formatNumber(summary.admin_reviewed),

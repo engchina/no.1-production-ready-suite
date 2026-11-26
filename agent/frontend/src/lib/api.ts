@@ -1411,6 +1411,9 @@ export interface RunFeedbackPayload {
 export type FeedbackPeriodDays = ReportPeriodDays;
 
 export interface FeedbackSummary {
+  unretried_unresolved?: number;
+  regenerated_questions?: number;
+  resolved_after_retry?: number;
   rated_runs: number;
   total: number;
   helpful: number;
@@ -2087,8 +2090,8 @@ export const agentApi = {
   deleteThread: (threadId: string) =>
     request<null>(`/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }),
   /** チャットの回答への評価（#774）。会話をした利用者だけ。付け直すと上書きする。 */
-  putRunFeedback: (runId: string, payload: RunFeedbackPayload) =>
-    requestRun(`/api/runs/${encodeURIComponent(runId)}/feedback`, {
+  putRunFeedback: (runId: string, payload: RunFeedbackPayload, versionId?: string) =>
+    requestRun(`/api/runs/${encodeURIComponent(runId)}/feedback${versionId ? "?version_id="+encodeURIComponent(versionId) : ""}`, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),

@@ -1072,3 +1072,6 @@ export { callBodyPath } from "./lib/call-body";
 export { failureDiagnosisReason, type FailureDiagnosis, type FailureDiagnosisReason } from "./lib/failure-diagnosis";
 
 export { TracePartialNotice } from "./components/feedback/trace-partial-notice";
+
+export * from "./components/feedback/file-review-model";
+export { AnswerFileReview } from "./components/feedback/answer-file-review";

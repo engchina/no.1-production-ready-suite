@@ -137,7 +137,7 @@ class FeedbackRequest(BaseModel):
     """回答または引用に対するフィードバック登録。"""
 
     trace_id: str = Field(..., min_length=1, max_length=64)
-    search_answer_profile_id: str = Field(..., min_length=1, max_length=64)
+    search_answer_profile_id: str | None = Field(default=None, min_length=1, max_length=64)
     target_type: FeedbackTargetType
     source_surface: FeedbackSourceSurface
     document_id: str | None = Field(default=None, max_length=64)
@@ -181,24 +181,15 @@ class FeedbackRequest(BaseModel):
             and self.target_type == FeedbackTargetType.ANSWER
         ):
             raise ValueError("回答の評価には回答の本文を入力してください。")
-        if self.target_type == FeedbackTargetType.CITATION:
-            if not self.document_id or not self.chunk_id:
-                raise ValueError("引用フィードバックには文書 ID とチャンク ID が必要です。")
-            allowed_reasons = CITATION_REASONS
-        else:
-            if self.document_id is not None or self.chunk_id is not None:
-                raise ValueError("回答フィードバックには文書 ID とチャンク ID を指定できません。")
-            allowed_reasons = ANSWER_REASONS
-
-        if self.corrected_answer is not None and self.target_type != FeedbackTargetType.ANSWER:
-            raise ValueError("修正した回答は回答のフィードバックだけに指定できます。")
+        if self.target_type != FeedbackTargetType.ANSWER:
+            raise ValueError("評価は回答単位で記録します。")
+        if self.document_id is not None or self.chunk_id is not None:
+            raise ValueError("回答の評価に文書 ID とチャンク ID は指定できません。")
         if self.rating == FeedbackRating.HELPFUL:
             self.reason = None
             self.comment = None
             self.corrected_answer = None
-        elif self.reason is None:
-            raise ValueError("役に立たなかった理由を選択してください。")
-        elif self.reason not in allowed_reasons:
+        elif self.reason is not None and self.reason not in ANSWER_REASONS:
             raise ValueError("評価対象に対応していない理由です。")
         return self
 
@@ -250,6 +241,11 @@ class FeedbackSummary(BaseModel):
     helpful_count: int = 0
     not_helpful_count: int = 0
     helpful_rate: float = 0.0
+    question_total: int = 0
+    resolved_questions: int = 0
+    unretried_unresolved: int = 0
+    regenerated_questions: int = 0
+    resolved_after_retry: int = 0
     answer_total: int = 0
     answer_helpful_rate: float = 0.0
     citation_total: int = 0

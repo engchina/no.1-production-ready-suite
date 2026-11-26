@@ -668,7 +668,7 @@ function RunFeedbackSection({ feedback, canOpen }: { feedback: RunFeedback[]; ca
         <StatusBadge
           variant={item.rating === "helpful" ? "success" : "warning"}
           label={
-            item.rating === "helpful" ? t("history.feedback.helpful") : t("history.feedback.notHelpful")
+            item.rating === "helpful" ? t("feedback.rating.helpful") : t("feedback.rating.notHelpful")
           }
         />
       ),

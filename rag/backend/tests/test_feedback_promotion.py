@@ -37,7 +37,7 @@ def test_answer_feedback_accepts_rag_poc_reasons(reason: str) -> None:
 
 
 def test_rag_poc_reasons_are_answer_only() -> None:
-    with pytest.raises(ValidationError, match="対応していない理由"):
+    with pytest.raises(ValidationError, match="回答単位"):
         FeedbackRequest.model_validate(
             {
                 **BASE_REQUEST,
@@ -54,7 +54,7 @@ def test_corrected_answer_is_answer_only_and_cleared_for_helpful() -> None:
     helpful = FeedbackRequest.model_validate(
         {**BASE_REQUEST, "rating": "helpful", "corrected_answer": "修正"}
     )
-    with pytest.raises(ValidationError, match="修正した回答"):
+    with pytest.raises(ValidationError, match="回答単位"):
         FeedbackRequest.model_validate(
             {
                 **BASE_REQUEST,
@@ -177,8 +177,8 @@ def test_promote_helpful_feedback_uses_saved_answer(monkeypatch: pytest.MonkeyPa
         (
             _detail(target_type="citation", document_id="doc-1", chunk_id="doc-1:c1"),
             None,
-            409,
-            "回答のフィードバックだけ",
+            404,
+            "フィードバックが見つかりません",
         ),
     ],
 )
@@ -284,6 +284,9 @@ def _faq_records(payload: dict[str, object]) -> list[dict[str, Any]]:
 
 
 class FakePromotionClient:
+    async def answer_owner_for_feedback(self, trace_id: str) -> dict[str, object] | None:
+        return None
+
     def __init__(
         self,
         *,

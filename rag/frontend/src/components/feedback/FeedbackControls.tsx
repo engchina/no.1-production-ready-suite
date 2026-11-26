@@ -1,145 +1,114 @@
-import { FeedbackControls as SharedFeedbackControls } from "@production-ready/ui";
+import { AnswerFileReview, AnswerFooter, type FileReviewState } from "@production-ready/ui";
 import {
-  ApiError,
-  type CitationFeedbackReason,
+  request,
+  ANSWER_GENERATION_TIMEOUT_MS,
   type FeedbackContentSnapshot,
-  type FeedbackRequestBody,
   type FeedbackSourceSurface,
-  type FeedbackTargetType,
   type RetrievedChunk,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
-import { useCurrentFeedback, useSubmitFeedback } from "@/lib/queries";
 import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
-import { toast } from "@/lib/toast";
-import {
-  FEEDBACK_ANSWER_REASONS,
-  FEEDBACK_CITATION_REASONS,
-  FEEDBACK_REASON_LABEL_KEYS,
-} from "./FeedbackClient.logic";
-
+import { useCurrentFeedback, useSubmitFeedback } from "@/lib/queries";
+import { AnswerCitations } from "@/components/search/CitationList";
+import { AnswerText } from "@/components/search/AnswerText";
 
 interface FeedbackControlsProps {
   traceId: string | null | undefined;
   searchAnswerProfileId: string | null | undefined;
-  targetType: FeedbackTargetType;
   sourceSurface: FeedbackSourceSurface;
-  documentId?: string | null;
-  chunkId?: string | null;
   messageId?: string | null;
   contentSnapshot?: FeedbackContentSnapshot | null;
-  compact?: boolean;
+  readOnly?: boolean;
+  onHistory: (rootId: string) => void;
 }
 
-/**
- * 回答・引用への評価。見た目と操作は共有の `FeedbackControls`（#805）で、ここは RAG の API（trace・検索・回答プロファイル・
- * 回答 / 引用・回答の記録）と文言をつなぐだけ。
- */
 export function FeedbackControls({
   traceId,
   searchAnswerProfileId,
-  targetType,
   sourceSurface,
-  documentId = null,
-  chunkId = null,
-  messageId = null,
-  contentSnapshot = null,
-  compact = false,
+  messageId,
+  contentSnapshot,
+  readOnly,
+  onHistory,
 }: FeedbackControlsProps) {
-  const currentQuery = useCurrentFeedback(traceId ?? null);
+  const current = useCurrentFeedback(!readOnly && traceId ? traceId : null);
   const mutation = useSubmitFeedback();
-  const current = currentQuery.data?.find(
-    (item) =>
-      item.target_type === targetType &&
-      (item.document_id ?? null) === documentId &&
-      (item.chunk_id ?? null) === chunkId
-  );
-  const answer = targetType === "answer";
-  const reasons = answer ? FEEDBACK_ANSWER_REASONS : FEEDBACK_CITATION_REASONS;
-
-  if (!traceId || !searchAnswerProfileId) return null;
-
-  if (currentQuery.isError && currentQuery.data === undefined) {
-    return <DataLoadFailure error={currentQuery.error} fallback={t("feedback.controls.loadError")} onRetry={() => void currentQuery.refetch()} retrying={currentQuery.isFetching} testId="feedback-current-load-failed" />;
+  if (!traceId) return null;
+  if (!readOnly && current.isError && current.data === undefined) {
+    return (
+      <DataLoadFailure
+        error={current.error}
+        fallback={t("feedback.controls.loadError")}
+        onRetry={() => void current.refetch()}
+        retrying={current.isFetching}
+        testId="feedback-current-load-failed"
+      />
+    );
   }
-
+  const path = "/api/search/answers/" + encodeURIComponent(traceId) + "/review";
+  const load = () => request<FileReviewState>(path);
   return (
     <>
-      {currentQuery.isError ? <DataLoadStaleNotice error={currentQuery.error} dataUpdatedAt={currentQuery.dataUpdatedAt} onRetry={() => void currentQuery.refetch()} retrying={currentQuery.isFetching} /> : null}
-    <SharedFeedbackControls<CitationFeedbackReason>
-      className={compact ? undefined : "mt-4"}
-      compact={compact}
-      disabled={currentQuery.isLoading || currentQuery.isError}
-      value={
-        current
-          ? {
-              rating: current.rating,
-              reason: current.reason ?? null,
-              comment: current.comment ?? null,
-              correctedAnswer: current.corrected_answer ?? null,
-            }
-          : null
-      }
-      reasons={reasons.map((reason) => ({ value: reason, label: t(FEEDBACK_REASON_LABEL_KEYS[reason]) }))}
-      correctedAnswer={answer}
-      commentId={`feedback-comment-${targetType}-${chunkId ?? "answer"}`}
-      correctedAnswerId={`feedback-corrected-${chunkId ?? "answer"}`}
-      labels={{
-        question: answer ? t("feedback.controls.answerQuestion") : t("feedback.controls.citationQuestion"),
-        helpful: answer ? t("feedback.controls.answerHelpful") : t("search.citation.feedback.helpful"),
-        notHelpful: answer
-          ? t("feedback.controls.answerNotHelpful")
-          : t("search.citation.feedback.notHelpful"),
-        savedInline: t("feedback.controls.savedInline"),
-        reasonLegend: t("feedback.controls.reasonLegend"),
-        commentLabel: t("feedback.controls.commentLabel"),
-        commentPlaceholder: t("feedback.controls.commentPlaceholder"),
-        commentCount: (count) => t("feedback.controls.commentCount", { count }),
-        correctedAnswerLabel: t("feedback.controls.correctedAnswerLabel"),
-        correctedAnswerPlaceholder: t("feedback.controls.correctedAnswerPlaceholder"),
-        correctedAnswerHelp: t("feedback.controls.correctedAnswerHelp"),
-        save: t("feedback.controls.save"),
-        cancel: t("common.cancel"),
-        retry: t("common.retry"),
-        saveError: t("feedback.controls.saveError"),
-      }}
-      getErrorMessage={(error) => (error instanceof ApiError ? error.message : null)}
-      onSubmit={async (submission) => {
-        await mutation.mutateAsync(
-          buildFeedbackPayload({
-            trace_id: traceId,
-            search_answer_profile_id: searchAnswerProfileId,
-            target_type: targetType,
+      {!readOnly && current.isError ? (
+        <DataLoadStaleNotice
+          error={current.error}
+          dataUpdatedAt={current.dataUpdatedAt}
+          onRetry={() => void current.refetch()}
+          retrying={current.isFetching}
+        />
+      ) : null}
+      <AnswerFileReview
+        key={traceId}
+        rootId={traceId}
+        onHistory={onHistory}
+        t={t}
+        readOnly={readOnly}
+        disabled={current.isLoading || current.isError}
+        load={load}
+        initialRating={current.data?.find((item) => item.target_type === "answer")?.rating}
+        change={(action) =>
+          request<FileReviewState>(
+            path,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action) },
+            { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
+          )
+        }
+        vote={async (id, rating) => {
+          await mutation.mutateAsync({
+            trace_id: id,
+            search_answer_profile_id: searchAnswerProfileId ?? null,
             source_surface: sourceSurface,
-            document_id: answer ? null : documentId,
-            chunk_id: answer ? null : chunkId,
-            message_id: messageId,
-            content_snapshot: feedbackSnapshotFor(targetType, messageId, contentSnapshot),
-            rating: submission.rating,
-            reason: submission.reason,
-            comment: submission.rating === "not_helpful" ? submission.comment : null,
-            corrected_answer:
-              submission.rating === "not_helpful" && answer ? submission.correctedAnswer : null,
-          })
-        );
-        toast.success(t("feedback.controls.savedToast"));
-      }}
-    />
+            target_type: "answer",
+            rating,
+            message_id: id === traceId ? messageId : undefined,
+            content_snapshot: id === traceId && sourceSurface === "search" ? contentSnapshot : undefined,
+          });
+        }}
+        renderVersion={(v) => {
+          const hits = (v.sources.question?.citations ?? []) as RetrievedChunk[];
+          return (
+            <>
+              <AnswerText text={v.answer} citations={hits} />
+              <AnswerFooter
+                notice={v.notice}
+                noticeLabel={t("answer.notice.label")}
+                evidence={<AnswerCitations citations={hits} idPrefix={"review-" + v.id} />}
+              />
+            </>
+          );
+        }}
+      />
     </>
   );
 }
 
-/**
- * 利用者が見た質問・回答・根拠の snapshot。回答を生成しない検索（検索結果だけ）でも、引用の評価が
- * どの質問への評価か分かるよう、質問があれば作る（回答は null。#978）。質問が無ければ null。
- */
 export function buildFeedbackContentSnapshot(
   question: string,
   answer: string,
-  citations: RetrievedChunk[]
+  citations: RetrievedChunk[],
 ): FeedbackContentSnapshot | null {
   const normalizedQuestion = question.trim();
-  if (!normalizedQuestion) return null;
+  if (!normalizedQuestion || !answer.trim()) return null;
   return {
     question: normalizedQuestion,
     answer: answer.trim() || null,
@@ -152,31 +121,6 @@ export function buildFeedbackContentSnapshot(
       content_preview: chunk.text.slice(0, 2000),
       rerank_score: chunk.rerank_score,
     })),
-  };
-}
-
-/**
- * 送る snapshot。チャット（message id）はサーバーの記録を使うので送らない。回答の評価は回答の本文が
- * 必須（backend が 422 にする）なので、回答の無い snapshot は送らない。
- */
-export function feedbackSnapshotFor(
-  targetType: FeedbackTargetType,
-  messageId: string | null,
-  snapshot: FeedbackContentSnapshot | null
-): FeedbackContentSnapshot | null {
-  if (messageId || !snapshot) return null;
-  if (targetType === "answer" && !snapshot.answer) return null;
-  return snapshot;
-}
-
-export function buildFeedbackPayload(payload: FeedbackRequestBody): FeedbackRequestBody {
-  if (payload.rating === "helpful") {
-    return { ...payload, reason: null, comment: null, corrected_answer: null };
-  }
-  return {
-    ...payload,
-    comment: payload.comment?.trim() || null,
-    corrected_answer: payload.corrected_answer?.trim() || null,
   };
 }
 
