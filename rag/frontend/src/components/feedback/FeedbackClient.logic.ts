@@ -25,7 +25,7 @@ export interface FeedbackUrlState {
   feedbackId: string;
 }
 
-const TARGETS = new Set<FeedbackTargetType>(["answer", "citation"]);
+const TARGETS = new Set<FeedbackTargetType>(["answer"]);
 const RATINGS = new Set<CitationFeedbackRating>(["helpful", "not_helpful"]);
 /** 理由の表示順（絞り込み・入力・表示で共通）。回答だけの理由は rag_poc の分類を含む。 */
 export const FEEDBACK_ANSWER_REASONS: CitationFeedbackReason[] = [
@@ -37,14 +37,7 @@ export const FEEDBACK_ANSWER_REASONS: CitationFeedbackReason[] = [
   "not_relevant",
   "answer_untrusted",
 ];
-export const FEEDBACK_CITATION_REASONS: CitationFeedbackReason[] = [
-  "missing_evidence",
-  "not_relevant",
-  "answer_untrusted",
-];
-export const FEEDBACK_REASONS: CitationFeedbackReason[] = [
-  ...new Set([...FEEDBACK_ANSWER_REASONS, ...FEEDBACK_CITATION_REASONS]),
-];
+export const FEEDBACK_REASONS = FEEDBACK_ANSWER_REASONS;
 export const FEEDBACK_REASON_LABEL_KEYS: Record<CitationFeedbackReason, I18nKey> = {
   incorrect: "feedback.reason.incorrect",
   incomplete: "feedback.reason.incomplete",
@@ -89,7 +82,7 @@ export function parseFeedbackUrl(params: URLSearchParams): FeedbackUrlState {
 export function feedbackListParams(state: FeedbackUrlState): FeedbackListParams {
   return {
     search_answer_profile_id: state.searchAnswerProfileId || undefined,
-    target_type: state.targetType || undefined,
+    target_type: "answer",
     rating: state.rating || undefined,
     reason: state.reason || undefined,
     period_days: state.periodDays,

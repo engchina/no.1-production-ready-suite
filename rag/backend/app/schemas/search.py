@@ -74,6 +74,8 @@ SUPPORTED_SEARCH_FILTER_KEYS = {
     PAGE_RANGES_FILTER_KEY,
     INCLUDE_SUPERSEDED_FILTER_KEY,
     "document_id",
+    "include_document_ids",
+    "exclude_document_ids",
     "knowledge_base_id",
     "chunk_set_id",
     "file_name",
@@ -482,6 +484,13 @@ def normalize_search_filters(filters: dict[str, str]) -> dict[str, str]:
             normalized[key] = cleaned.upper()
         elif key == "content_kind":
             normalized[key] = cleaned.casefold()
+        elif key in {"include_document_ids", "exclude_document_ids"}:
+            ids = json.loads(cleaned)
+            if not isinstance(ids, list) or not all(
+                isinstance(i, str) and 0 < len(i) <= 128 for i in ids
+            ):
+                raise ValueError("文書 ID の配列を指定してください。")
+            normalized[key] = json.dumps(list(dict.fromkeys(ids)), ensure_ascii=False)
         elif key == "knowledge_base_id":
             formatted_ids = format_search_id_filter(parse_search_id_filter(cleaned))
             if formatted_ids:

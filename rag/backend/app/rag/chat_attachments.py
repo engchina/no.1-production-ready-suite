@@ -310,6 +310,8 @@ async def attachment_evidence(
     *,
     rerank: RerankFunction | None,
     report_degraded: ReportDegraded = not_recorded,
+    include: set[str] | None = None,
+    exclude: set[str] | None = None,
 ) -> list[RetrievedChunk]:
     """会話の添付から、質問の根拠にする箇所（添付が無ければ空）。
 
@@ -322,7 +324,14 @@ async def attachment_evidence(
     try:
         units = await to_thread.run_sync(
             lambda: attachment_units(
-                toolset.records, toolset.parsed, report_degraded=report_degraded
+                [
+                    r
+                    for r in toolset.records
+                    if (include is None or ATTACHMENT_DOCUMENT_PREFIX + r.attachment_id in include)
+                    and (not exclude or ATTACHMENT_DOCUMENT_PREFIX + r.attachment_id not in exclude)
+                ],
+                toolset.parsed,
+                report_degraded=report_degraded,
             )
         )
     except Exception as exc:  # noqa: BLE001 - 期限で消えた添付などは根拠に入れずに続ける

@@ -16,6 +16,8 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   }, theme);
 }
 
+import { firstAnswer, nextAnswer, originalHits, reviewQuestion, reviewSnapshots } from "../../../platform/packages/ui/e2e/file-review-scenario";
+
 const THREAD_ID = `thread_${"a".repeat(32)}`;
 
 for (const viewport of [...VIEWPORTS, { name: "desktop-wide", width: 1920, height: 1080 }, { name: "desktop-short", width: 1280, height: 480 }, { name: "desktop-zoomed", width: 1280, height: 400 }]) {
@@ -914,5 +916,49 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByTestId("chat-turn-run-chat-seed")).toBeVisible();
     await expect(page.getByTestId("chat-turn-run-chat-seed")).toContainText("契約の更新条件は？");
     await expectNoPageHorizontalOverflow(page);
+  });
+}
+
+for (const tool of ["rag_chat","rag_search"]) {
+  test(`Agent の ${tool} の回答で資料を選び直す`, {tag:"@responsive"}, async ({page,mockApi},testInfo) => {
+    const name="rag__"+tool, id="run-chat-seed", task="task-a";
+    seedThread(mockApi,{steps:[{id:task,run_id:id,kind:"tool",status:"completed",
+      tool_call:{name,arguments:{query:reviewQuestion}},
+      tool_result:{name,success:true,output:{trace_id:"first",answer:firstAnswer,evidence:originalHits}}}],
+      artifacts:[{id:"first",kind:"answer",name:"回答",content:{text:firstAnswer}}]});
+    const states=reviewSnapshots(id,task);
+    let state=states.initial;
+    await page.route("**/api/runs/"+id+"/feedback**",route=>{
+      const body=route.request().postDataJSON();
+      expect(body.rating).toBe("not_helpful");
+      state=states.unresolved;
+      const run=mockApi.state.runs.find(r=>r.id===id);
+      return route.fulfill({json:{data:{...run,feedback:{...body,user_uuid:"local"}},error_messages:[],warning_messages:[]}});
+    });
+    await page.route("**/api/runs/"+id+"/review",route=>{
+      if(route.request().method()==="POST"){
+        const command=route.request().postDataJSON();
+        expect(command.task).toBe(task);
+        if(command.action==="discover"){
+          expect(command.selected).toEqual(["doc-a"]);state=states.pending;
+        }else{
+          expect(command.selected).toEqual(["doc-a","doc-c"]); state=states.next;
+        }
+      }
+      return route.fulfill({json:{data:state,error_messages:[],warning_messages:[]}});
+    });
+    await page.goto("/chat");
+    await openSeedThread(page);
+    await page.getByRole("button",{name:"未解決",exact:true}).click();
+    const sheet=page.getByRole("dialog");
+    await sheet.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
+    await sheet.getByRole("checkbox",{name:"操作ガイド A.pdf"}).check();
+    if(process.env.AGENT_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.AGENT_E2E_SCREENSHOT_DIR+"/"+tool+"-files-"+testInfo.project.name+".png"});
+    await sheet.getByRole("button",{name:/選択した1件を残して/}).click();
+    await expect(sheet.getByRole("checkbox",{name:"確認手順 C.pdf"})).not.toBeChecked();
+    await sheet.getByRole("checkbox",{name:"確認手順 C.pdf"}).check();
+    await sheet.getByRole("button",{name:"選んだ資料だけで再回答"}).click();
+    await expect(page.getByText(nextAnswer,{exact:true})).toBeVisible();
+    if(process.env.AGENT_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.AGENT_E2E_SCREENSHOT_DIR+"/"+tool+"-answer-"+testInfo.project.name+".png"});
   });
 }

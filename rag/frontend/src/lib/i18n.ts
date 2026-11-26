@@ -1,8 +1,9 @@
-import { TRACE_DETAILS_JA } from "@production-ready/ui";
+import { TRACE_DETAILS_JA, FILE_REVIEW_JA } from "@production-ready/ui";
 /**
  * 日本語文言。文言はハードコードせずここを経由する。
  */
 export const ja = {
+  ...FILE_REVIEW_JA,
   "evaluation.testsets.modelLoadError": "回答モデルの候補を読み込めませんでした。",
   "evaluation.testsets.loadError": "テストセットを読み込めませんでした。",
   "evaluation.testsets.modelDefault": "プロファイルの既定モデル",
@@ -4020,8 +4021,11 @@ export const ja = {
   "feedback.filters.oldest": "古い順",
   "feedback.target.answer": "回答",
   "feedback.target.citation": "引用",
-  "feedback.rating.helpful": "役に立った",
+  "feedback.rating.helpful": "解決した",
   "feedback.rating.notHelpful": "役に立たなかった",
+  "feedback.summary.questionRate": "質問の解決率",
+  "feedback.summary.unretried": "未解決・再回答なし",
+  "feedback.summary.retryRate": "再回答した質問の解決率",
   "feedback.summary.title": "フィードバック集計",
   "feedback.summary.total": "有効な評価",
   "feedback.summary.helpfulRate": "全体の有用率",

@@ -63,6 +63,7 @@ class RunFact(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     total_tokens: int | None = None
+    file_review_outcome: str | None = None
     feedback: RunFeedback | None = None
     admin_review: RunFeedback | None = None
     question: str = ""
@@ -176,6 +177,7 @@ def fact_from_run(run: RunState, *, agent_name: str = "") -> RunFact:
         input_tokens=usage.input_tokens if usage is not None else None,
         output_tokens=usage.output_tokens if usage is not None else None,
         total_tokens=usage.total_tokens if usage is not None else None,
+        file_review_outcome=run.file_review_outcome,
         feedback=run.feedback.model_copy() if run.feedback is not None else None,
         admin_review=run.admin_review.model_copy() if run.admin_review is not None else None,
         question=run.goal,

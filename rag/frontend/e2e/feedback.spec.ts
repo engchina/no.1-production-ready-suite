@@ -64,13 +64,11 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
 
   await expect(page.getByRole("heading", { name: "利用者フィードバック" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "質問" })).toBeVisible();
-  for (const name of ["評価対象", "評価", "低評価の理由", "利用者コメント", "日時"]) {
+  for (const name of ["評価", "低評価の理由", "利用者コメント", "日時"]) {
     await expect(page.getByRole("columnheader", { name, exact: true })).toBeVisible();
   }
   const toolbar = page.getByTestId("feedback-filters-toolbar");
-  const period = await toolbar.getByRole("combobox", {name: "期間", exact: true}).boundingBox();
-  const target = await toolbar.getByRole("combobox", {name: "評価対象", exact: true}).boundingBox();
-  expect(target!.y).toBeGreaterThanOrEqual(period!.y + period!.height);
+  await expect(toolbar.getByRole("combobox", {name:"評価対象", exact:true})).toHaveCount(0);
   await expect(page.getByRole("table").getByText("最新の経費申請期限を教えて", { exact: true })).toBeVisible();
   await expect(page.getByText("前期間比 +17pt", { exact: true }).first()).toBeVisible();
   // B 型：狭い一覧と広い詳細を ListDetailLayout で並べ、先頭を自動で選ばず、未選択の詳細は選び方を案内する（#2283）。
@@ -120,7 +118,7 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await expect(list).toBeHidden();
 
   await detail.getByRole("tab", { name: "根拠" }).click();
-  await expect(page.getByRole("tabpanel", { name: "根拠" }).getByText("評価対象", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: "根拠" }).getByText("評価対象", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /の根拠を表示$/ })).toBeVisible();
   await expect(page.getByRole("link", { name: "引用元を開く" })).toHaveCount(0);
 
@@ -473,7 +471,7 @@ for (const width of [1280, 1920]) {
 
     // 評価は状態なのでサムズアップ / ダウンのアイコンを持つ（色だけで表さない）。
     const notHelpful = table.locator("[data-status-variant='danger']:visible").first();
-    await expect(notHelpful).toHaveText("役に立たなかった");
+    await expect(notHelpful).toHaveText("未解決");
     await expect(notHelpful.locator("svg")).toHaveCount(1);
     await expectNoPageOverflow(page);
   });
@@ -536,6 +534,7 @@ function feedbackEnvelope(limit: number, offset: number) {
     data: {
       summary: {
         total: 120,
+        question_total: 120, resolved_questions:80, unretried_unresolved:20, regenerated_questions:40, resolved_after_retry:20,
         helpful_count: 80,
         not_helpful_count: 40,
         helpful_rate: 0.6667,
@@ -551,6 +550,7 @@ function feedbackEnvelope(limit: number, offset: number) {
       },
       previous_summary: {
         total: 100,
+        question_total: 100, resolved_questions:50, unretried_unresolved:40, regenerated_questions:20, resolved_after_retry:10,
         helpful_count: 50,
         not_helpful_count: 50,
         helpful_rate: 0.5,

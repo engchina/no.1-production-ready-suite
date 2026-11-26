@@ -17,8 +17,8 @@ client = AsgiTestClient(app)
 
 
 def test_feedback_request_validates_target_and_reason() -> None:
-    """対象ごとの ID と低評価理由を必須にする。"""
-    with pytest.raises(ValidationError, match="文書 ID とチャンク ID"):
+    """回答の未解決は即時に受け付け、引用単位での評価は受け付けない。"""
+    with pytest.raises(ValidationError, match="回答単位"):
         FeedbackRequest(
             trace_id="trace-1",
             search_answer_profile_id="bv-1",
@@ -27,14 +27,12 @@ def test_feedback_request_validates_target_and_reason() -> None:
             rating="not_helpful",
             reason="not_relevant",
         )
-    with pytest.raises(ValidationError, match="理由を選択"):
+    assert (
         FeedbackRequest(
-            trace_id="trace-1",
-            search_answer_profile_id="bv-1",
-            target_type="answer",
-            source_surface="chat",
-            rating="not_helpful",
-        )
+            trace_id="trace-1", target_type="answer", source_surface="chat", rating="not_helpful"
+        ).reason
+        is None
+    )
     with pytest.raises(ValidationError, match="対応していない理由"):
         FeedbackRequest(
             trace_id="trace-1",
@@ -199,10 +197,10 @@ def test_submit_feedback_saves_search_snapshot_and_optional_comment(
     ]
 
 
-def test_submit_citation_feedback_from_search_without_answer_keeps_the_question(
+def test_search_rejects_new_chunk_feedback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """回答を生成しない検索の引用の評価でも、質問と根拠を保存する（#978）。"""
+    """回答を生成しない検索からも新しい引用の評価を保存しない。"""
     fake = FakeFeedbackClient()
     monkeypatch.setattr(feedback_route, "OracleClient", lambda: fake)
 
@@ -224,12 +222,8 @@ def test_submit_citation_feedback_from_search_without_answer_keeps_the_question(
         },
     )
 
-    assert response.status_code == 200
-    details = fake.saved_details[0]
-    assert details is not None
-    assert details["question_text"] == "経費の上限は？"
-    assert details["answer_text"] is None
-    assert details["citations"][0]["chunk_id"] == "chunk-1"  # type: ignore[index]
+    assert response.status_code == 422
+    assert not fake.saved
 
 
 def test_answer_feedback_snapshot_still_requires_the_answer() -> None:
@@ -437,12 +431,20 @@ def test_feedback_dashboard_builds_latest_vote_summary(monkeypatch: pytest.Monke
         ],
         3,
         [
-            {"target_type": "answer", "rating": "helpful", "reason": None, "item_count": 1},
+            {
+                "target_type": "answer",
+                "rating": "helpful",
+                "reason": None,
+                "item_count": 1,
+                "question_count": 1,
+                "retried_count": 1,
+            },
             {
                 "target_type": "answer",
                 "rating": "not_helpful",
                 "reason": "incorrect",
                 "item_count": 1,
+                "question_count": 1,
             },
             {
                 "target_type": "citation",
@@ -460,14 +462,19 @@ def test_feedback_dashboard_builds_latest_vote_summary(monkeypatch: pytest.Monke
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["summary"] == {
-        "total": 3,
-        "helpful_count": 2,
+        "total": 2,
+        "helpful_count": 1,
+        "question_total": 2,
+        "resolved_questions": 1,
+        "unretried_unresolved": 1,
+        "regenerated_questions": 1,
+        "resolved_after_retry": 1,
         "not_helpful_count": 1,
-        "helpful_rate": 0.6667,
+        "helpful_rate": 0.5,
         "answer_total": 2,
         "answer_helpful_rate": 0.5,
-        "citation_total": 1,
-        "citation_helpful_rate": 1.0,
+        "citation_total": 0,
+        "citation_helpful_rate": 0.0,
         "reason_counts": [{"reason": "incorrect", "count": 1}],
     }
     assert data["previous_summary"]["total"] == 0
@@ -595,6 +602,9 @@ def test_feedback_permissions_split_view_and_approved_faq(
 
 
 class FakeFeedbackClient:
+    async def answer_owner_for_feedback(self, trace_id: str) -> dict[str, object] | None:
+        return None
+
     def __init__(self, *, view_exists: bool = True) -> None:
         self.view_exists = view_exists
         self.saved: list[dict[str, object]] = []

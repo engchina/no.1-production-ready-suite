@@ -398,6 +398,7 @@ RUN_FACTS_STATEMENTS: tuple[str, ...] = (
         APPROVALS_REJECTED NUMBER(10),
         DATA_TOOL_CALLS NUMBER(10),
         ANSWER_BASIS VARCHAR2(32),
+        FILE_REVIEW_OUTCOME VARCHAR2(32),
         CONSTRAINT PK_AGENT_RUN_FACTS PRIMARY KEY (RUN_ID)
     )
     """,
@@ -473,7 +474,16 @@ _RUN_FACTS_STATEMENTS_007: tuple[str, ...] = (
 )
 
 # 未初期化の DB と全再作成で作る、Agent の管理対象の DDL の全体。
+ANSWER_REVIEW_STATEMENTS: tuple[str, ...] = (
+    """CREATE TABLE AGENT_ANSWER_REVIEWS (
+            NAMESPACE VARCHAR2(128) NOT NULL, RUN_ID VARCHAR2(128) NOT NULL,
+            REVISION NUMBER NOT NULL, CONTENT CLOB NOT NULL,
+            CONSTRAINT AGENT_ANSWER_REVIEWS_PK PRIMARY KEY (NAMESPACE, RUN_ID)
+        )""",
+)
+
 DOMAIN_STATEMENTS: tuple[str, ...] = (
+    *ANSWER_REVIEW_STATEMENTS,
     *BASE_STATEMENTS,
     *RUNTIME_STATEMENTS,
     *RUNTIME_ARTIFACT_FILE_STATEMENTS,
@@ -747,6 +757,14 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         # メモリの Run に戻る。
         RUN_FACTS_ANSWER_BASIS_STATEMENTS,
     ),
+    MigrationArtifact(
+        "20261127_020_answer_file_review",
+        "store document selections and answer revisions",
+        (
+            *ANSWER_REVIEW_STATEMENTS,
+            "ALTER TABLE AGENT_RUN_FACTS ADD (FILE_REVIEW_OUTCOME VARCHAR2(32))",
+        ),
+    ),
 )
 
 # ---- manifest -----------------------------------------------------------------
@@ -765,6 +783,7 @@ MANAGED_TABLES: tuple[str, ...] = (
     "AGENT_RUNTIME_APPROVALS",
     "AGENT_RUNTIME_ARTIFACTS",
     "AGENT_RUNTIME_ARTIFACT_FILES",
+    "AGENT_ANSWER_REVIEWS",
     "AGENT_CONTROL_PLANE_ITEMS",
     "AGENT_RUN_FACTS",
 )

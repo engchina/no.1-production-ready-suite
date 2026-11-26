@@ -121,6 +121,7 @@ interface SearchRequestSnapshot {
  * 根拠の拡張は RAG チャットだけが行う（#5332）。
  */
 export function SearchClient() {
+  const [historyId,setHistoryId] = useState<string|null>(null);
   // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
   const canOpenSections = canOpenDocumentDetail(useAuth().hasPermission);
   // span の段の名前（段の名前・技術の span の名前）は root の文言で付ける（#3226）。
@@ -417,6 +418,7 @@ export function SearchClient() {
       }
     : null;
   const isStreaming = phase === "streaming";
+  const originalVisible = !historyId || historyId !== meta?.trace_id;
   const feedbackSnapshot = buildFeedbackContentSnapshot(submittedQuery, answer, citations);
   // 処理の経過の行（共通の span の表の snapshot を実行の trace の API で読む。チャットと同じ共通の組み立て。#3226）。
   // 実行中は読み直し、終わったら 1 回だけ読む。画面で止めた・失敗した実行は記録の終端が無いことがあるので、実行中の
@@ -769,7 +771,7 @@ export function SearchClient() {
                       </h3>
                     ) : null}
                     {conditionChips}
-                    {answer.trim() ? <ChatAnswerBody testId="search-answer-body">{answerBody}</ChatAnswerBody> : answerBody}
+                    {originalVisible && (answer.trim() ? <ChatAnswerBody testId="search-answer-body">{answerBody}</ChatAnswerBody> : answerBody)}
                     {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下（「詳細」に畳まない。#2096）。 */}
                     {meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} extra={[guardrailItem]} /> : null}
                     {/*
@@ -778,18 +780,12 @@ export function SearchClient() {
                       page-archetypes.md §6.1）。
                     */}
                     <AnswerFooter
-                      notice={meta && phase === "done" ? meta.notice : null}
+                      notice={originalVisible && meta && phase === "done" ? meta.notice : null}
                       noticeLabel={t("answer.notice.label")}
-                      evidence={
+                      evidence={originalVisible &&
                         <AnswerCitations
                           citations={citations}
                           idPrefix="search"
-                          cardProps={{
-                            traceId: meta?.trace_id,
-                            searchAnswerProfileId: answerSearchAnswerProfileId,
-                            sourceSurface: "search",
-                            contentSnapshot: feedbackSnapshot,
-                          }}
                           className="border-t border-border pt-1"
                         />
                       }
@@ -798,8 +794,8 @@ export function SearchClient() {
                           <FeedbackControls
                             traceId={meta.trace_id}
                             searchAnswerProfileId={answerSearchAnswerProfileId}
-                            targetType="answer"
                             sourceSurface="search"
+                            onHistory={setHistoryId}
                             contentSnapshot={feedbackSnapshot}
                           />
                         ) : null
@@ -846,12 +842,6 @@ export function SearchClient() {
                   <CitationList
                     citations={citations}
                     idPrefix="search-results"
-                    cardProps={{
-                      traceId: meta?.trace_id,
-                      searchAnswerProfileId: answerSearchAnswerProfileId,
-                      sourceSurface: "search",
-                      contentSnapshot: feedbackSnapshot,
-                    }}
                   />
                 </section>
               ) : null}

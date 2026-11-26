@@ -79,6 +79,7 @@ import {
 import { runAnswerEvidence } from "@/lib/answer-evidence";
 import { answerStructureTitles, structureAnswer, withoutFrameHeading } from "@/lib/answer-structure";
 import { chatSubmitProgressSteps } from "@/lib/chat-progress";
+import { RagAnswerReview, hasRagAnswer } from "@/components/chat/RagAnswerReview";
 import { AnswerFeedback } from "@/components/chat/AnswerFeedback";
 import { useAgentChatAttachments } from "@/components/chat/useAgentChatAttachments";
 import { AnswerEvidenceBlock, StructuredAnswer } from "@/components/chat/AnswerEvidenceView";
@@ -1037,6 +1038,8 @@ function RunChatTurn({
   /** 処理の段階の終端が届いた（回答・成果物を待たずに取り直す）。 */
   onProgressTerminal: () => void;
 }) {
+  const [historyId,setHistoryId] = useState<string|null>(null);
+  const originalVisible=historyId!==run.id;
   const answer = answerText(run.artifacts);
   // 回答の根拠（AI に渡した根拠・回答で引用した根拠。RAG のチャットと同じ塊。#2328）。
   const evidence = useMemo(() => runAnswerEvidence(run.artifacts), [run.artifacts]);
@@ -1094,6 +1097,21 @@ function RunChatTurn({
     [progressEvents, progressSteps, run]
   );
 
+  const originalBody = answer ? (
+<ChatAnswerBody testId={`chat-answer-body-${run.id}`}>
+            {answerBlocks ? (
+              <StructuredAnswer
+                runId={run.id}
+                blocks={answerBlocks}
+                evidence={evidence}
+                markdownHeadingLevel={4}
+                testId={`chat-answer-${run.id}`}
+              />
+            ) : (
+              <AnswerBody text={answer} headingLevel={4} testId={`chat-answer-${run.id}`} />
+            )}
+          </ChatAnswerBody>
+  ) : null;
   return (
     // 1 往復の入れ物（質問の吹き出し・回答の枠）は 3 製品共通の ChatTurn / ChatAnswer（#1161）。
     <ChatTurn
@@ -1162,26 +1180,7 @@ function RunChatTurn({
         {cancelledKinds.length > 0 ? (
           <ClarificationCancelNote kinds={cancelledKinds} testId={`chat-clarification-cancelled-${run.id}`} />
         ) : null}
-        {answer ? (
-          // 回答の本文の前に見出し「回答」を出す（本文の中の節の見出しと同じ書式。3 製品共通の ChatAnswerBody。#3433）。
-          // 回答が利用者への問い返しの文でも回答の本文なので同じ見出しにする（回答前の確認のカードは自分の見出しを持つ）。
-          // 回答の Markdown の表と、表の形のツールの結果（NL2SQL の SQL の実行の結果など）は、NL2SQL のチャットと
-          // 同じ共通の結果の表で出す（#1158）。表でない部分は見出し・太字・箇条書きなどを描く（#1808）。
-          // 見出し「回答」（h3。会話の名前 h2 の下）の下なので、回答の中の見出しは h4 から始める。
-          <ChatAnswerBody testId={`chat-answer-body-${run.id}`}>
-            {answerBlocks ? (
-              <StructuredAnswer
-                runId={run.id}
-                blocks={answerBlocks}
-                evidence={evidence}
-                markdownHeadingLevel={4}
-                testId={`chat-answer-${run.id}`}
-              />
-            ) : (
-              <AnswerBody text={answer} headingLevel={4} testId={`chat-answer-${run.id}`} />
-            )}
-          </ChatAnswerBody>
-        ) : null}
+        {originalVisible && originalBody}
         <RunFileArtifacts runId={run.id} files={files} testId={`chat-files-${run.id}`} />
         {outputTable ? (
           <OutputResultTable data={outputTable} testId={`chat-output-${run.id}`} />
@@ -1330,10 +1329,10 @@ function RunChatTurn({
           （「AI に渡した N 件 ／ 回答で引用 M 件」。#2328）→ 回答の評価。
         */}
         <AnswerFooter
-          notice={run.status === "completed" ? answerNoticeText(run.artifacts) : null}
+          notice={originalVisible && run.status === "completed" ? answerNoticeText(run.artifacts) : null}
           noticeLabel={t("answer.notice.label")}
           evidence={
-            evidence || (run.withheld_evidence_count ?? 0) > 0 ? (
+            originalVisible && (evidence || (run.withheld_evidence_count ?? 0) > 0) ? (
               <AnswerEvidenceBlock
                 runId={run.id}
                 evidence={evidence}
@@ -1344,7 +1343,9 @@ function RunChatTurn({
             ) : null
           }
           feedback={
-            canRate && run.status === "completed" && answer ? (
+            run.status === "completed" && answer && hasRagAnswer(run) ? (
+              <RagAnswerReview key={run.id} run={run} readOnly={!canRate} onSaved={onFeedbackSaved} onHistory={setHistoryId} originalBody={originalBody}/>
+            ) : canRate && run.status === "completed" && answer ? (
               <AnswerFeedback runId={run.id} current={run.feedback ?? null} onSaved={onFeedbackSaved} />
             ) : null
           }

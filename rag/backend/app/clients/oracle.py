@@ -26,7 +26,7 @@ from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Protocol, TypeVar, cast
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pr_backend_core.api import offset_fetch_binds, offset_fetch_clause
 from pr_backend_core.oracle_dsn import apply_cli_connect_mode, dsn_without_tns_retry
@@ -4304,6 +4304,18 @@ class OracleClient:
 
     async def save_answer_record(self, record: Mapping[str, object]) -> None:
         """回答を保存する(同じ trace_id は上書き)。"""
+        await self._run_transaction(
+            lambda connection: self._write_answer_record(connection, record)
+        )
+        diagnostics = record.get("diagnostics")
+        confirm_trace_body_saved(
+            diagnostics.get("trace") if isinstance(diagnostics, Mapping) else None
+        )
+
+    @staticmethod
+    def _write_answer_record(
+        connection: OracleConnectionProtocol, record: Mapping[str, object]
+    ) -> None:
         diagnostics = record.get("diagnostics")
         saved_trace = diagnostics.get("trace") if isinstance(diagnostics, Mapping) else None
         binds = {
@@ -4319,63 +4331,61 @@ class OracleClient:
             "evaluation_input_json": _json_bind(record.get("evaluation_input")),
             # 回答に付けた注意書き（#2405）。
             "answer_notice": record.get("answer_notice") or None,
+            "review_request": _json_bind(record.get("review_request")),
             # 持ち主（回答を生成した利用者）。一覧・詳細・評価・削除を持ち主へ絞る（#304）。
             "user_id_hash": current_audit_request_context().user_id_hash,
         }
 
-        def operation(connection: OracleConnectionProtocol) -> None:
-            _execute(
-                connection,
-                """
-                MERGE INTO rag_answer_records target
-                USING (SELECT :trace_id AS trace_id FROM dual) source
-                ON (target.trace_id = source.trace_id)
-                WHEN MATCHED THEN UPDATE SET
-                    target.search_answer_profile_id = :search_answer_profile_id,
-                    target.surface = :surface,
-                    target.answer_engine = :answer_engine,
-                    target.question = :question,
-                    target.rewritten_question = :rewritten_question,
-                    target.answer = :answer,
-                    target.citations_json = :citations_json,
-                    target.diagnostics_json = :diagnostics_json,
-                    target.evaluation_input_json = :evaluation_input_json,
-                    target.answer_notice = :answer_notice,
-                    target.evaluation_json = NULL
-                WHEN NOT MATCHED THEN INSERT (
-                    trace_id, search_answer_profile_id, surface, answer_engine, question,
-                    rewritten_question, answer, citations_json, diagnostics_json,
-                    evaluation_input_json, answer_notice, user_id_hash
-                ) VALUES (
-                    :trace_id, :search_answer_profile_id, :surface, :answer_engine, :question,
-                    :rewritten_question, :answer, :citations_json, :diagnostics_json,
-                    :evaluation_input_json, :answer_notice, :user_id_hash
+        _execute(
+            connection,
+            """
+            MERGE INTO rag_answer_records target
+            USING (SELECT :trace_id AS trace_id FROM dual) source
+            ON (target.trace_id = source.trace_id)
+            WHEN MATCHED THEN UPDATE SET
+                target.search_answer_profile_id = :search_answer_profile_id,
+                target.surface = :surface,
+                target.answer_engine = :answer_engine,
+                target.question = :question,
+                target.rewritten_question = :rewritten_question,
+                target.answer = :answer,
+                target.citations_json = :citations_json,
+                target.diagnostics_json = :diagnostics_json,
+                target.evaluation_input_json = :evaluation_input_json,
+                target.answer_notice = :answer_notice,
+                target.review_request = :review_request,
+                target.evaluation_json = NULL
+            WHEN NOT MATCHED THEN INSERT (
+                trace_id, search_answer_profile_id, surface, answer_engine, question,
+                rewritten_question, answer, citations_json, diagnostics_json,
+                evaluation_input_json, answer_notice, user_id_hash, review_request
+            ) VALUES (
+                :trace_id, :search_answer_profile_id, :surface, :answer_engine, :question,
+                :rewritten_question, :answer, :citations_json, :diagnostics_json,
+                :evaluation_input_json, :answer_notice, :user_id_hash, :review_request
+            )
+            """,
+            binds,
+            input_sizes=_json_input_sizes(
+                "citations_json", "diagnostics_json", "evaluation_input_json", "review_request"
+            ),
+        )
+        faults = register_trace_body_owner(
+            connection, "answer_record", str(record["trace_id"]), saved_trace
+        )
+        if faults:
+            updated = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
+            updated["trace"] = trace_with_body_failures(saved_trace, faults)
+            try:
+                _execute(
+                    connection,
+                    "UPDATE rag_answer_records SET diagnostics_json = :diagnostics "
+                    "WHERE trace_id = :trace_id",
+                    {"diagnostics": _json_bind(updated), "trace_id": record["trace_id"]},
+                    input_sizes=_json_input_sizes("diagnostics"),
                 )
-                """,
-                binds,
-                input_sizes=_json_input_sizes(
-                    "citations_json", "diagnostics_json", "evaluation_input_json"
-                ),
-            )
-            faults = register_trace_body_owner(
-                connection, "answer_record", str(record["trace_id"]), saved_trace
-            )
-            if faults:
-                updated = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
-                updated["trace"] = trace_with_body_failures(saved_trace, faults)
-                try:
-                    _execute(
-                        connection,
-                        "UPDATE rag_answer_records SET diagnostics_json = :diagnostics "
-                        "WHERE trace_id = :trace_id",
-                        {"diagnostics": _json_bind(updated), "trace_id": record["trace_id"]},
-                        input_sizes=_json_input_sizes("diagnostics"),
-                    )
-                except Exception:
-                    logger.warning("trace_body_failure_snapshot_save_failed")
-
-        await self._run_transaction(operation)
-        confirm_trace_body_saved(saved_trace)
+            except Exception:
+                logger.warning("trace_body_failure_snapshot_save_failed")
 
     async def list_answer_records(
         self,
@@ -4511,6 +4521,83 @@ class OracleClient:
             if isinstance(value, str):
                 row[key] = json.loads(value)
         return row
+
+    async def answer_owner_for_feedback(self, trace_id: str) -> dict[str, object] | None:
+        """回答の持ち主だけを照合する。本文や資料を呼び出し元に返さない。"""
+        return await self._fetch_one(
+            "SELECT user_id_hash, surface FROM rag_answer_records WHERE trace_id=:id",
+            {"id": trace_id},
+        )
+
+    async def file_review_ratings(self, ids: list[str], owner: str) -> dict[str, str]:
+        """閲覧を許可した質問の各版について、回答者本人の最新の判定を一度に読む。"""
+        rows = await self._fetch_all(
+            _render_sql(
+                """
+                SELECT trace_id, MAX(rating) KEEP
+                    (DENSE_RANK LAST ORDER BY created_at, feedback_id) rating
+                FROM rag_citation_feedback f
+                WHERE target_type='answer' AND user_id_hash=:owner AND {tenant_sql}
+                  AND trace_id IN (SELECT id FROM JSON_TABLE(
+                        :ids,'$[*]' COLUMNS(id VARCHAR2(64) PATH '$')))
+                GROUP BY trace_id
+            """,
+                tenant_sql=_oracle_tenant_predicate(alias="f"),
+            ),
+            _with_tenant_bind({"ids": json.dumps(ids), "owner": owner}),
+        )
+        return {str(row["trace_id"]): str(row["rating"]) for row in rows}
+
+    async def get_file_review(self, trace_id: str) -> dict[str, object] | None:
+        return await self._fetch_one(
+            f"""SELECT review_state, review_request, user_id_hash FROM rag_answer_records
+                WHERE trace_id = :trace_id AND {_answer_record_scope_sql()}""",
+            _with_answer_record_scope_bind({"trace_id": trace_id}),
+        )
+
+    async def save_file_review(
+        self, trace_id: str, revision: int, state: dict[str, Any], record: dict[str, object]
+    ) -> None:
+        from pr_backend_core.file_review import StaleReview
+
+        def operation(connection: OracleConnectionProtocol) -> None:
+            count = _execute_count_with_input_sizes(
+                connection,
+                """
+                UPDATE rag_answer_records SET review_state = :state
+                WHERE trace_id = :id AND user_id_hash = :owner
+                  AND NVL(JSON_VALUE(review_state, '$.revision' RETURNING NUMBER), 0) = :rev
+                """,
+                {
+                    "state": _json_bind(state),
+                    "id": trace_id,
+                    "rev": revision,
+                    "owner": current_audit_request_context().user_id_hash,
+                },
+                input_sizes=_json_input_sizes("state"),
+            )
+            if count != 1:
+                raise StaleReview("資料の選択が更新されました。開き直してください。")
+            versions = state["versions"]
+            if record:
+                self._write_answer_record(connection, record)
+                _execute(
+                    connection,
+                    """
+                    UPDATE rag_answer_records SET review_root_id=:root_id, review_version=:version
+                    WHERE trace_id=:id AND user_id_hash=:owner AND review_root_id IS NULL""",
+                    {
+                        "id": versions[-1]["id"],
+                        "root_id": trace_id,
+                        "version": len(versions),
+                        "owner": current_audit_request_context().user_id_hash,
+                    },
+                )
+
+        await self._run_transaction(operation)
+        diagnostics = record.get("diagnostics")
+        if isinstance(diagnostics, Mapping):
+            confirm_trace_body_saved(diagnostics.get("trace"))
 
     async def list_answer_prompts(self) -> dict[str, dict[str, object]]:
         """編集した回答生成のプロンプトを {key: {content, updated_at}} で返す(未編集は含めない)。"""
@@ -6846,74 +6933,49 @@ class OracleClient:
         *,
         details: Mapping[str, object] | None = None,
     ) -> str:
-        """feedback metadata と任意の調査用本文を同一 transaction で追記する。"""
-        feedback_id = _audit_str(feedback, "feedback_id", uuid4().hex)
+        """同じ利用者・回答版の判定を 1 票として保存する。古い票への参照は残す。"""
+        context = current_audit_request_context()
+        vote = [context.tenant_id_hash, context.user_id_hash, feedback["trace_id"]]
+        feedback_id = uuid5(NAMESPACE_URL, json.dumps(vote)).hex
         binds = _citation_feedback_binds(feedback, feedback_id=feedback_id)
 
         def operation(connection: OracleConnectionProtocol) -> None:
             _execute(
                 connection,
                 """
-                INSERT INTO rag_citation_feedback (
-                    feedback_id,
-                    trace_id,
-                    search_answer_profile_id,
-                    target_type,
-                    source_surface,
-                    document_id,
-                    chunk_id,
-                    tenant_id_hash,
-                    user_id_hash,
-                    rating,
-                    reason,
-                    comment_hash,
-                    comment_chars
-                ) VALUES (
-                    :feedback_id,
-                    :trace_id,
-                    :search_answer_profile_id,
-                    :target_type,
-                    :source_surface,
-                    :document_id,
-                    :chunk_id,
-                    :tenant_id_hash,
-                    :user_id_hash,
-                    :rating,
-                    :reason,
-                    :comment_hash,
-                    :comment_chars
-                )
-                """,
+                MERGE INTO rag_citation_feedback f USING (SELECT :feedback_id id FROM dual) s
+                ON (f.feedback_id=s.id)
+                WHEN MATCHED THEN UPDATE SET f.rating=:rating, f.reason=:reason,
+                    f.comment_hash=:comment_hash, f.comment_chars=:comment_chars,
+                    f.created_at=SYSTIMESTAMP
+                WHEN NOT MATCHED THEN INSERT (
+                    feedback_id,trace_id,search_answer_profile_id,target_type,source_surface,
+                    document_id,chunk_id,tenant_id_hash,user_id_hash,rating,reason,
+                    comment_hash,comment_chars
+                ) VALUES (:feedback_id,:trace_id,:search_answer_profile_id,
+                    :target_type,:source_surface,
+                    :document_id,:chunk_id,:tenant_id_hash,:user_id_hash,:rating,:reason,
+                    :comment_hash,:comment_chars)
+            """,
                 binds,
             )
             if details is not None:
                 _execute(
                     connection,
                     """
-                    INSERT INTO rag_feedback_details (
-                        feedback_id,
-                        tenant_id_hash,
-                        message_id,
-                        content_source,
-                        question_text,
-                        answer_text,
-                        comment_text,
-                        corrected_answer_text,
-                        citations_json,
-                        search_text
-                    ) VALUES (
-                        :feedback_id,
-                        :tenant_id_hash,
-                        :message_id,
-                        :content_source,
-                        :question_text,
-                        :answer_text,
-                        :comment_text,
-                        :corrected_answer_text,
-                        :citations_json,
-                        :search_text
-                    )
-                    """,
+                    MERGE INTO rag_feedback_details d USING (SELECT :feedback_id id FROM dual) s
+                    ON (d.feedback_id=s.id)
+                    WHEN MATCHED THEN UPDATE SET d.comment_text=:comment_text,
+                        d.corrected_answer_text=:corrected_answer_text, d.search_text=:search_text,
+                        d.question_text=:question_text, d.answer_text=:answer_text,
+                        d.citations_json=:citations_json
+                    WHEN NOT MATCHED THEN INSERT (
+                        feedback_id,tenant_id_hash,message_id,content_source,
+                        question_text,answer_text,comment_text,corrected_answer_text,
+                        citations_json,search_text)
+                    VALUES (:feedback_id,:tenant_id_hash,:message_id,:content_source,:question_text,
+                        :answer_text,:comment_text,:corrected_answer_text,:citations_json,:search_text)
+                """,
                     _feedback_detail_binds(
                         details,
                         feedback_id=feedback_id,
@@ -6921,7 +6983,13 @@ class OracleClient:
                     ),
                 )
 
-        await self._run_transaction(operation)
+        try:
+            await self._run_transaction(operation)
+        except Exception as exc:
+            if "ORA-00001" not in oracle_error_codes(exc):
+                raise
+            # 同時に届いた最初の票をもう一度 MERGE して既存の行を更新する。
+            await self._run_transaction(operation)
         return feedback_id
 
     async def list_current_feedback(self, trace_id: str) -> list[dict[str, object]]:
@@ -6940,7 +7008,7 @@ class OracleClient:
                         ORDER BY f.created_at DESC, f.feedback_id DESC
                     ) AS feedback_rank
                 FROM rag_citation_feedback f
-                WHERE f.trace_id = :trace_id
+                WHERE f.trace_id = :trace_id AND f.target_type = 'answer'
                   AND f.user_id_hash = :user_id_hash
                   AND {tenant_sql}
             )
@@ -7152,30 +7220,37 @@ class OracleClient:
             """,
             _with_tenant_bind(binds),
         )
-        groups = await self._fetch_all(
-            f"""
-            {cte}
-            SELECT f.target_type, f.rating, f.reason, COUNT(*) AS item_count
-            FROM latest_feedback f
-            LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
-            WHERE {where_sql}
-            GROUP BY f.target_type, f.rating, f.reason
-            """,
-            _with_tenant_bind(binds),
-        )
-        previous_groups: list[dict[str, object]] = []
-        if period_days is not None:
-            previous_groups = await self._fetch_all(
+
+        async def summary(where: str, params: dict[str, object]) -> list[dict[str, object]]:
+            return await self._fetch_all(
                 f"""
-                {cte}
-                SELECT f.target_type, f.rating, f.reason, COUNT(*) AS item_count
-                FROM latest_feedback f
-                LEFT JOIN rag_feedback_details fd ON fd.feedback_id = f.feedback_id
-                WHERE {previous_where_sql}
-                GROUP BY f.target_type, f.rating, f.reason
+                {cte}, resolution AS (
+                    SELECT f.target_type, f.rating, f.reason,
+                        ROW_NUMBER() OVER (PARTITION BY f.tenant_id_hash, f.user_id_hash,
+                            COALESCE(a.review_root_id, f.trace_id)
+                            ORDER BY NVL(a.review_version, 1) DESC, f.created_at DESC)
+                                AS question_rank,
+                        CASE WHEN JSON_EXISTS(root.review_state,'$.versions[1]')
+                             THEN 1 ELSE 0 END AS retried
+                    FROM latest_feedback f
+                    LEFT JOIN rag_feedback_details fd ON fd.feedback_id=f.feedback_id
+                    LEFT JOIN rag_answer_records a ON a.trace_id=f.trace_id
+                        AND a.user_id_hash=f.user_id_hash
+                    LEFT JOIN rag_answer_records root
+                        ON root.trace_id=COALESCE(a.review_root_id,f.trace_id)
+                        AND root.user_id_hash=f.user_id_hash
+                    WHERE {where}
+                )
+                SELECT target_type, rating, reason, COUNT(*) AS item_count,
+                    SUM(CASE WHEN question_rank=1 THEN 1 ELSE 0 END) AS question_count,
+                    SUM(CASE WHEN question_rank=1 AND retried=1 THEN 1 ELSE 0 END) AS retried_count
+                FROM resolution GROUP BY target_type, rating, reason
                 """,
-                _with_tenant_bind(previous_binds),
+                _with_tenant_bind(params),
             )
+
+        groups = await summary(where_sql, binds)
+        previous_groups = await summary(previous_where_sql, previous_binds) if period_days else []
         return rows, _int_value((count_row or {}).get("total")), groups, previous_groups
 
     async def feedback_exists(self, feedback_id: str) -> bool:
@@ -15208,6 +15283,13 @@ def _oracle_retrieval_clauses(
         if key == "document_id":
             clauses.append("d.document_id = :filter_document_id")
             binds["filter_document_id"] = cleaned
+        elif key in {"include_document_ids", "exclude_document_ids"}:
+            operator = "IN" if key == "include_document_ids" else "NOT IN"
+            clauses.append(
+                f"d.document_id {operator} (SELECT doc_id FROM JSON_TABLE(:{key}, '$[*]' "
+                "COLUMNS (doc_id VARCHAR2(128) PATH '$')))"
+            )
+            binds[key] = cleaned
         elif key == "chunk_set_id":
             clauses.append("c.chunk_set_id = :filter_chunk_set_id")
             binds["filter_chunk_set_id"] = cleaned
@@ -17449,6 +17531,10 @@ CREATE TABLE {table_name} (
     evaluation_input_json JSON,
     evaluation_json     JSON,
     answer_notice       CLOB,
+    review_state        JSON,
+    review_request      JSON,
+    review_root_id      VARCHAR2(64),
+    review_version      NUMBER,
     user_id_hash        CHAR(64),
     created_at          TIMESTAMP WITH TIME ZONE DEFAULT SYSTIMESTAMP NOT NULL,
     CONSTRAINT {table_name}_surface_ck CHECK (surface IN ('search', 'chat'))

@@ -459,7 +459,10 @@ def test_feedback_report_is_aggregated_and_paged_in_sql() -> None:
                 (1, "incomplete", 3),
                 (0, "incorrect", 1),
             ],
-            "GROUP BY IN_PERIOD": [(1, 10, 5, 5, 2, 1, 11), (0, 4, 3, 1, 0, 0, 4)],
+            "GROUP BY IN_PERIOD": [
+                (1, 10, 5, 5, 2, 1, 11, 2, 3, 1),
+                (0, 4, 3, 1, 0, 0, 4, 0, 0, 0),
+            ],
             "SELECT COUNT(*)": [(42,)],
             "OFFSET :page_offset": [
                 (
@@ -511,6 +514,11 @@ def test_feedback_report_is_aggregated_and_paged_in_sql() -> None:
     ]
     assert (report.summary.admin_reviewed, report.summary.admin_not_helpful) == (2, 1)
     assert (report.summary.rated_runs, report.previous.rated_runs) == (11, 4)
+    assert (
+        report.summary.unretried_unresolved,
+        report.summary.regenerated_questions,
+        report.summary.resolved_after_retry,
+    ) == (2, 3, 1)
     assert connection.input_sizes["until"] is oracledb.DB_TYPE_TIMESTAMP
     assert connection.input_sizes["since"] is oracledb.DB_TYPE_TIMESTAMP
     assert (report.total, report.offset, report.limit, report.has_next) == (42, 20, 10, True)

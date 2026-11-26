@@ -400,6 +400,7 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
         "AGENT_RUNTIME_ARTIFACTS",
         # Run の成果物のファイルの中身（#5837）。
         "AGENT_RUNTIME_ARTIFACT_FILES",
+        "AGENT_ANSWER_REVIEWS",
         "AGENT_CONTROL_PLANE_ITEMS",
         # 利用状況・フィードバックの集計に使う Run の事実（#794）。
         "AGENT_RUN_FACTS",
@@ -447,7 +448,7 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # ない）。006 の checksum を変えないよう RUNTIME_STATEMENTS とは別に持ち、未初期化の DB は
     # 正本の DDL の同じ CREATE TABLE で作る。
     migration_018 = next(item for item in MIGRATIONS if item.name.startswith("20261125_018"))
-    assert migration_018 is MIGRATIONS[-2]
+    assert migration_018 is MIGRATIONS[-3]
     assert migration_018.statements == RUNTIME_ARTIFACT_FILE_STATEMENTS
     assert not migration_018.destructive and not migration_018.rewrites
     [artifact_files] = migration_018.statements
@@ -494,7 +495,8 @@ def test_manifest_matches_ddl_and_excludes_shared_auth_tables() -> None:
     # 回答の対応の手がかり（#5859。「根拠を使わずに答えた」のシグナル）も列を足すだけで、最新の
     # 形の CREATE TABLE にもある。
     migration_019 = next(item for item in MIGRATIONS if item.name.startswith("20261126_019"))
-    assert migration_019 is MIGRATIONS[-1]
+    assert migration_019 is MIGRATIONS[-2]
+    assert MIGRATIONS[-1].name.endswith("answer_file_review")
     assert migration_019.statements == RUN_FACTS_ANSWER_BASIS_STATEMENTS
     assert not migration_019.destructive and not migration_019.rewrites
     assert "ADD (ANSWER_BASIS VARCHAR2(32))" in migration_019.statements[0]

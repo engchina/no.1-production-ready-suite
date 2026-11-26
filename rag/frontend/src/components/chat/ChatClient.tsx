@@ -374,6 +374,8 @@ function AssistantColumn({
   const progress = useColumnProgress(progressSource);
   const waitingForAnswer = streaming && !answer && !errorMessage && progress !== null;
   const finished = !streaming && !errorMessage && !stoppedMessage;
+  const [historyId, setHistoryId] = useState<string | null>(null);
+  const originalVisible = !historyId || historyId !== traceId;
   const storageNotice = storageFailureNotice(storageFailures, traceId);
   // 回答は列のモデルだけで作る（#3444）。そのモデルへ根拠の画像を添付した回答は、見出しにそのことを添える。
   const attachedImages = finished ? answerAttachedImages(answerDiagnostics, passageSource) : 0;
@@ -514,7 +516,7 @@ function AssistantColumn({
         </p>
       ) : null}
       {noticesBeforeAnswer ? notices : null}
-      {showsAnswerNotices ? (
+      {originalVisible && showsAnswerNotices ? (
         <>
           {/*
             回答の本文が届いたら、本文の前に見出し「回答」を出す（本文の中の節の見出しと同じ書式。3 製品共通の
@@ -532,25 +534,25 @@ function AssistantColumn({
         // そろえるため、回答の枠の下端にそろえる。
         <AnswerFooter
           className="mt-auto"
-          notice={finished && !faqDirect ? notice : null}
+          notice={originalVisible && finished && !faqDirect ? notice : null}
           noticeLabel={t("answer.notice.label")}
-          evidence={
+          evidence={originalVisible &&
             <AnswerCitations
               citations={citations}
               withheldCount={withheldCount}
               // まとまり（根拠の木）は回答が終わってから届く診断にある（#2097）。
               idPrefix={messageId ? `message-${messageId}` : listId}
               // 他の利用者の会話では根拠の評価を出さない（trace が無ければ評価を出さない。#3244）。
-              cardProps={{ traceId: readOnly ? null : traceId, searchAnswerProfileId, sourceSurface: "chat", messageId }}
               className="border-t border-border px-2 pt-1"
             />
           }
           feedback={
-            finished && !readOnly ? (
+            finished ? (
               <FeedbackControls
                 traceId={traceId}
                 searchAnswerProfileId={searchAnswerProfileId}
-                targetType="answer"
+                readOnly={readOnly}
+                onHistory={setHistoryId}
                 sourceSurface="chat"
                 messageId={messageId}
               />

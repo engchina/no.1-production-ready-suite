@@ -39,6 +39,9 @@ class FeedbackSummary(BaseModel):
     """利用者（会話の本人）の評価の集計と、管理者の評価の件数。"""
 
     # 本人か管理者の評価がある実行の数（両方あっても 1 件）。一覧の全件数。
+    unretried_unresolved: int = 0
+    regenerated_questions: int = 0
+    resolved_after_retry: int = 0
     rated_runs: int = 0
     total: int = 0
     helpful: int = 0
@@ -147,6 +150,10 @@ def summarize_feedback(facts: list[RunFact]) -> FeedbackSummary:
     reasons: dict[FeedbackReason, int] = {}
     summary = FeedbackSummary()
     for fact in facts:
+        outcome = fact.file_review_outcome or ""
+        summary.unretried_unresolved += int(outcome == "unresolved")
+        summary.regenerated_questions += int(outcome.startswith("retried_"))
+        summary.resolved_after_retry += int(outcome == "retried_resolved")
         summary.rated_runs += int(fact.feedback is not None or fact.admin_review is not None)
         review = fact.admin_review
         if review is not None:

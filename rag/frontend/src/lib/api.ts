@@ -1731,7 +1731,7 @@ export interface SearchResponse {
 
 export interface FeedbackRequestBody {
   trace_id: string;
-  search_answer_profile_id: string;
+  search_answer_profile_id: string | null;
   target_type: FeedbackTargetType;
   source_surface: FeedbackSourceSurface;
   document_id?: string | null;
@@ -1782,6 +1782,11 @@ export interface FeedbackReasonCount {
 }
 
 export interface FeedbackSummary {
+  question_total?: number;
+  resolved_questions?: number;
+  unretried_unresolved?: number;
+  regenerated_questions?: number;
+  resolved_after_retry?: number;
   total: number;
   helpful_count: number;
   not_helpful_count: number;

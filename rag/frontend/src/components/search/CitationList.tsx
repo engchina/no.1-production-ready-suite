@@ -8,7 +8,7 @@ import {
 
 import type { RetrievedChunk } from "@/lib/api";
 
-import { CitationActions, type CitationCardOptions } from "./CitationCard";
+import type { CitationCardOptions } from "./CitationCard";
 import { citationEvidenceItem, EVIDENCE_LABELS } from "./citation-evidence";
 import { CitationSourceSheet } from "./CitationSourceSheet";
 
@@ -50,7 +50,6 @@ export function AnswerCitations({
         listTestId={listTestId}
         withheldCount={withheldCount}
         onOpenSource={preview ? source.open : undefined}
-        renderActions={(_item, index) => <CitationActions chunk={citations[index]} {...cardProps} />}
       />
       {preview ? <Preview citations={citations} source={source} kind="answer" /> : null}
     </>
@@ -87,7 +86,6 @@ export function CitationList({
         labels={EVIDENCE_LABELS}
         testId={listTestId}
         onOpenSource={preview ? source.open : undefined}
-        renderActions={(_item, index) => <CitationActions chunk={citations[index]} {...cardProps} />}
       />
       {preview ? <Preview citations={citations} source={source} kind="search" /> : null}
     </>

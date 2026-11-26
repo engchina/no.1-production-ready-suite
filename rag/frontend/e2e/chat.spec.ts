@@ -811,7 +811,7 @@ test("2モデルは広い画面で空き列なく横並びになる", async ({ p
   await expectNoPageOverflow(page);
 });
 
-test("チャット回答の低評価理由を保存し、選択状態を維持する", async ({ page }) => {
+test("未解決を直ちに保存し、資料を選ばずに戻っても判定を残す", async ({ page }, testInfo) => {
   let feedbackPayload: Record<string, unknown> | null = null;
   page.on("request", (request) => {
     if (request.method() === "POST" && new URL(request.url()).pathname === "/api/feedback") {
@@ -820,28 +820,20 @@ test("チャット回答の低評価理由を保存し、選択状態を維持�
   });
   await openPersistedConversation(page, 1280, [userMessage, assistantMessage]);
 
-  const notHelpful = page.getByRole("button", { name: "この回答は役に立たなかった" });
+  await page.route("**/api/search/answers/t1/review", route => route.fulfill({json:{data:{
+    revision:0, kept:{}, pending:{}, excluded:{}, seen:[],
+    versions:[{id:"t1", answer:"回答", sources:{question:{title:"質問", citations:[]}}, rating:feedbackPayload ? "not_helpful":null}],
+  }}}));
+  const notHelpful = page.getByRole("button", { name: "未解決", exact:true });
   await notHelpful.click();
-  await page.getByRole("button", { name: /ナレッジ不足/ }).click();
-  await page.getByLabel("修正した回答", { exact: true }).fill("  窓口へ問い合わせてください。  ");
-  await page.getByRole("button", { name: "フィードバックを保存" }).click();
-
-  await expect.poll(() => feedbackPayload).toEqual({
-    trace_id: "t1",
-    search_answer_profile_id: "bv-1",
-    target_type: "answer",
-    source_surface: "chat",
-    document_id: null,
-    chunk_id: null,
-    message_id: "a1",
-    content_snapshot: null,
-    rating: "not_helpful",
-    reason: "missing_knowledge",
-    comment: null,
-    corrected_answer: "窓口へ問い合わせてください。",
+  await expect.poll(() => feedbackPayload).toMatchObject({
+    trace_id:"t1", search_answer_profile_id:"bv-1", source_surface:"chat",
+    message_id:"a1", target_type:"answer", rating:"not_helpful",
   });
+  await page.getByRole("button", {name:"戻る",exact:true}).click();
   await expect(notHelpful).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByText("保存済み・変更できます")).toBeVisible();
+  if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-vote-"+testInfo.project.name+".png"});
+
 });
 
 test("3モデルはカード幅を維持して次の行へ折り返す", async ({ page }) => {
@@ -3341,12 +3333,12 @@ test("評価の読み取り失敗を未評価と見せず、再試行で回復�
   await history.getByRole("button", { name: /^経費の上限は？ 2件/ }).click();
   const failure = page.locator('[data-testid="feedback-current-load-failed"]:visible').first();
   await expect(failure).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole("button", { name: "この回答は役に立った", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "解決した", exact: true })).toHaveCount(0);
   await failure.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("feedback-read-failure.png") });
   failing = false;
   await failure.getByRole("button", { name: "再試行", exact: true }).click();
   await expect(failure).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "この回答は役に立った", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "解決した", exact: true })).toBeEnabled();
   await expectNoPageOverflow(page);
 });

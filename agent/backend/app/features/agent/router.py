@@ -52,6 +52,7 @@ from pr_backend_core.chat_history_window import (
     within_chat_history,
 )
 from pr_backend_core.chat_progress import CHAT_PROGRESS_SSE_HEADERS
+from pr_backend_core.file_review import FileReview, ReviewAction
 from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.observability.trace_bodies import BodyPage
@@ -2276,11 +2277,57 @@ async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
     return ApiResponse(data=None)
 
 
+@router.get("/runs/{run_id}/review", response_model=ApiResponse[FileReview])
+async def get_file_review(
+    run_id: str, request: Request, _: None = Depends(require_viewer)
+) -> ApiResponse[FileReview]:
+    from app.features.agent.file_review import load_review
+
+    run = _readable_run(request, run_id)
+    state, visible = await load_review(run, _run_creator_user_uuid(request) or "")
+    return ApiResponse(data=state.visible(visible))
+
+
+@router.get("/runs/{run_id}/review/original", response_model=ApiResponse[dict[str, str]])
+async def get_file_review_original(
+    run_id: str,
+    request: Request,
+    task: str = Query(min_length=1, max_length=128),
+    document_id: str = Query(min_length=1, max_length=128),
+    _: None = Depends(require_viewer),
+) -> ApiResponse[dict[str, str]]:
+    from app.features.agent.file_review import original_passages
+
+    run = _readable_run(request, run_id)
+    viewer = _run_creator_user_uuid(request)
+    if not viewer:
+        raise HTTPException(401, "ログインしてください。")
+    return ApiResponse(data=await original_passages(run, viewer, task, document_id))
+
+
+@router.post("/runs/{run_id}/review", response_model=ApiResponse[FileReview])
+async def update_file_review(
+    run_id: str, request: Request, action: ReviewAction, _: None = Depends(require_operator)
+) -> ApiResponse[FileReview]:
+    from app.features.agent.file_review import change_review
+
+    run = _readable_run(request, run_id)
+    if not _run_content_addable_by(request, run):
+        _raise_others_content_forbidden()
+    if run.status != RunStatus.COMPLETED:
+        raise HTTPException(409, "回答の生成が完了していません。")
+    viewer = _run_creator_user_uuid(request)
+    if not viewer:
+        raise HTTPException(401, "ログインしてください。")
+    return ApiResponse(data=await change_review(run, viewer, action))
+
+
 @router.put("/runs/{run_id}/feedback", response_model=ApiResponse[RunState])
 async def put_run_feedback(
     run_id: str,
     feedback: RunFeedbackRequest,
     request: Request,
+    version_id: str | None = Query(default=None, max_length=128),
     _: None = Depends(require_operator),
 ) -> ApiResponse[RunState]:
     """チャットの回答への評価（#774）。
@@ -2295,6 +2342,20 @@ async def put_run_feedback(
     user_uuid = _run_creator_user_uuid(request)
     if user_uuid is None:
         raise HTTPException(status_code=401, detail="ログインしてください。")
+    from app.features.agent.file_review import rate_version, source_tasks
+
+    if source_tasks(run) and run.status == RunStatus.COMPLETED:
+        updated = await rate_version(
+            run,
+            user_uuid,
+            version_id or run.id,
+            RunFeedback(rating=feedback.rating, user_uuid=user_uuid),
+        )
+        return ApiResponse(data=updated)
+    elif version_id:
+        raise HTTPException(404, "回答の版が見つかりません。")
+    elif feedback.rating == "not_helpful" and feedback.reason is None:
+        raise HTTPException(422, "役に立たなかった理由を選んでください。")
     try:
         updated = await run_in_threadpool(
             runtime_repository.set_run_feedback,
@@ -2321,6 +2382,8 @@ async def put_run_admin_review(
     _: None = Depends(require_admin),
 ) -> ApiResponse[RunState]:
     """管理者の評価（#774）。Agent 管理の権限でだれの回答にも付けられ、本人の評価とは別に残す。"""
+    if review.rating == "not_helpful" and review.reason is None:
+        raise HTTPException(422, "役に立たなかった理由を選んでください。")
     try:
         run = await run_in_threadpool(runtime_repository.get_run, run_id)
     except KeyError as exc:

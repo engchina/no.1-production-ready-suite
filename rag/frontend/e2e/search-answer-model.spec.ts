@@ -26,9 +26,11 @@ const summary = {
   archived_at: null,
 };
 
+import { firstAnswer, nextAnswer, originalHits, reviewSnapshots } from "../../../platform/packages/ui/e2e/file-review-scenario";
+
 const ANSWER = "合成の画面 A の下に保存のボタンがあります。";
 
-async function mockApi(page: Page, attachedImages: number) {
+async function mockApi(page: Page, attachedImages: number, review=false) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
@@ -65,8 +67,8 @@ async function mockApi(page: Page, attachedImages: number) {
             },
           },
         })}\n\n`,
-        `event: delta\ndata: ${JSON.stringify({ text: ANSWER })}\n\n`,
-        `event: citations\ndata: ${JSON.stringify([])}\n\n`,
+        `event: delta\ndata: ${JSON.stringify({ text: review ? firstAnswer : ANSWER })}\n\n`,
+        `event: citations\ndata: ${JSON.stringify(review ? originalHits : [])}\n\n`,
         `event: done\ndata: ${JSON.stringify({ trace_id: "trace-model" })}\n\n`,
       ].join(""),
     })
@@ -107,4 +109,52 @@ test.describe("RAG 検索の回答の見出しと段落の印の節", { tag: "@r
 
     await expect(page.getByTestId("search-answer-model-heading")).toHaveText("回答モデル: 合成のモデル A");
   });
+});
+
+test("検索の回答で資料を選び、新候補を確認してから再回答する", {tag:"@responsive"}, async ({page}, testInfo) => {
+  await mockApi(page,0,true);
+  const states=reviewSnapshots("trace-model","question");
+  let state=states.initial;
+  const votes:string[]=[];
+  await page.route("**/api/feedback/current**", route=>route.fulfill({json:envelope([])}));
+  await page.route("**/api/feedback", route=>{
+    const vote=route.request().postDataJSON();
+    votes.push(vote.rating);
+    if(vote.trace_id==="trace-model") state=states.unresolved;
+    return route.fulfill({json:envelope(vote)});
+  });
+  await page.route("**/api/search/answers/trace-model/review", route=>{
+    if(route.request().method()==="POST"){
+      const command=route.request().postDataJSON();
+      if(command.action==="discover"){
+        expect(command.selected).toEqual(["doc-a"]); state=states.pending;
+      }else{
+        expect(command.action).toBe("answer");
+        expect(command.selected).toEqual(["doc-a","doc-c"]);state=states.next;
+      }
+    }
+    return route.fulfill({json:envelope(state)});
+  });
+  await ask(page);
+  await page.getByRole("button",{name:"未解決",exact:true}).click();
+  const dialog=page.getByRole("dialog");
+  await dialog.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
+  await dialog.getByRole("checkbox",{name:"操作ガイド A.pdf"}).check();
+  await dialog.getByRole("searchbox").fill("ガイド");
+  await expect(dialog.getByRole("checkbox")).toHaveCount(1);
+  await expect(dialog.getByText(/絞り込みで非表示/)).toBeVisible();
+  await dialog.getByRole("button",{name:"原文",exact:true}).click();
+  await expect(dialog.getByText("設定画面を開きます。",{exact:true})).toBeVisible();
+  if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-source-"+testInfo.project.name+".png"});
+  await dialog.getByRole("button",{name:"戻る",exact:true}).click();
+  await dialog.getByRole("button",{name:/選択した1件を残して/}).click();
+  await expect(dialog.getByRole("checkbox",{name:"確認手順 C.pdf"})).not.toBeChecked();
+  await expect(page.getByText(nextAnswer,{exact:true})).toHaveCount(0);
+  await dialog.getByRole("checkbox",{name:"確認手順 C.pdf"}).check();
+  if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-search-candidates-"+testInfo.project.name+".png"});
+  await dialog.getByRole("button",{name:"選んだ資料だけで再回答"}).click();
+  await expect(page.getByText(nextAnswer,{exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"解決した",exact:true}).click();
+  expect(votes).toEqual(["not_helpful","helpful"]);
+  if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-search-answer-"+testInfo.project.name+".png"});
 });
