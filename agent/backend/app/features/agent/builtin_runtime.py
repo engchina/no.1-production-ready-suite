@@ -256,6 +256,7 @@ from app.features.agent.output_fields import (
     record_output_tool,
     without_output_record_sections,
 )
+from app.features.agent.pptx_tool import pptx_create_tool
 from app.features.agent.rag_retrieval_state import retrieval_notice
 from app.features.agent.report_contract import AnswerPlan, FinalSelection, ReportOutputContract
 from app.features.agent.report_preview import (
@@ -376,6 +377,7 @@ CONTROL_PLANE_SERVER_ID = "control-plane"
 # Run にだけ渡る）。Run の成果物を読み書きするので、ツールの層（`tools.py`）ではなくここで登録する。
 tool_registry.register(*xlsx_create_tool())
 tool_registry.register(*docx_create_tool())
+tool_registry.register(*pptx_create_tool())
 # 業務データを含む trace を外部（OpenAI）へ送らない。
 set_tracing_disabled(True)
 # モデルの入力の上限に収まらない失敗の code（#2383）。

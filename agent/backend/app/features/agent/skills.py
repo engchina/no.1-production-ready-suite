@@ -256,7 +256,8 @@ class AgentSkillListOutput(BaseModel):
 # この tuple の順が、スキルの一覧・業務 Agent の編集で組み込みのスキルを先頭に並べる順（#1866）。
 # ID の文字の順ではなく、RAG チャット → RAG 検索 → RAG チャット＋データ → RAG 検索＋データ → 構造化
 # データ照会（#5342。業務 RAG 調査・資料とデータの横断調査・条の目録から根拠を探すは消した）→
-# Excel 作成 → Word 作成（#5837。Control Plane のツール `xlsx_create`・`docx_create` を宣言する）。
+# Excel 作成 → Word 作成 → PowerPoint 作成（#5837。Control Plane のツール `xlsx_create`・
+# `docx_create`・`pptx_create` を宣言する）。
 RAG_CHAT_SKILL_ID = "rag-chat"
 RAG_SEARCH_SKILL_ID = "rag-search"
 RAG_CHAT_AND_DATA_SKILL_ID = "rag-chat-and-data"
@@ -264,6 +265,7 @@ RAG_SEARCH_AND_DATA_SKILL_ID = "rag-search-and-data"
 STRUCTURED_DATA_QUERY_SKILL_ID = "structured-data-query"
 XLSX_CREATE_SKILL_ID = "xlsx-create"
 DOCX_CREATE_SKILL_ID = "docx-create"
+PPTX_CREATE_SKILL_ID = "pptx-create"
 BUILTIN_SKILL_IDS: tuple[str, ...] = (
     RAG_CHAT_SKILL_ID,
     RAG_SEARCH_SKILL_ID,
@@ -272,6 +274,7 @@ BUILTIN_SKILL_IDS: tuple[str, ...] = (
     STRUCTURED_DATA_QUERY_SKILL_ID,
     XLSX_CREATE_SKILL_ID,
     DOCX_CREATE_SKILL_ID,
+    PPTX_CREATE_SKILL_ID,
 )
 
 

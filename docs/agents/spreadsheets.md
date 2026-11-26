@@ -21,7 +21,7 @@ python3 <skill-installer のディレクトリ>/scripts/install-skill-from-githu
 
 主な依存は openpyxl。集計の分析には pandas を使える。数式の再計算と表示の確認には LibreOffice、PDF の画像化には Poppler を使う。依存は作業対象の Python 環境で確認する。
 
-Anthropic の Office のスキル（[anthropics/skills](https://github.com/anthropics/skills) の `skills/xlsx`・`skills/docx`・`skills/pptx`）は、commit `e4bb5d960d87126ff3b3a8af1a104b7db67560ba` で各ディレクトリの `LICENSE.txt` が Apache License 2.0（#5837 で確かめた。版によって許諾が違うことがあるので、使う commit の `LICENSE.txt` を確かめる）。複製・改変して配るときは、許諾の全文・出典・変更したことを残す。製品の組み込みのスキル `skills/xlsx-create`・`skills/docx-create` は、この `skills/xlsx`・`skills/docx` の指針を元に、Agent の生成ツール向けに書き直したもの（許諾と出典はそれぞれのフォルダの `LICENSE.txt`・`NOTICE`）。
+Anthropic の Office のスキル（[anthropics/skills](https://github.com/anthropics/skills) の `skills/xlsx`・`skills/docx`・`skills/pptx`）は、commit `e4bb5d960d87126ff3b3a8af1a104b7db67560ba` で各ディレクトリの `LICENSE.txt` が Apache License 2.0（#5837 で確かめた。版によって許諾が違うことがあるので、使う commit の `LICENSE.txt` を確かめる）。複製・改変して配るときは、許諾の全文・出典・変更したことを残す。製品の組み込みのスキル `skills/xlsx-create`・`skills/docx-create`・`skills/pptx-create` は、この `skills/xlsx`・`skills/docx`・`skills/pptx` の指針を元に、Agent の生成ツール向けに書き直したもの（許諾と出典はそれぞれのフォルダの `LICENSE.txt`・`NOTICE`）。
 
 ## 成果物の検証
 

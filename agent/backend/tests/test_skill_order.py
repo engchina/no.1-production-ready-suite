@@ -50,6 +50,7 @@ def test_builtin_skill_ids_are_in_display_order() -> None:
         "structured-data-query",
         "xlsx-create",
         "docx-create",
+        "pptx-create",
     )
 
 

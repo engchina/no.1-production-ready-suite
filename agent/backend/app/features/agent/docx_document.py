@@ -12,7 +12,8 @@ Run・DB・ツールの層に依らない純粋な関数（`build_document`）�
   し、題・見出し・項目の改行は空白にする。表の cell の改行は cell の中の改行のまま。
 - 表の値は列の型で読み、書式を当てた文字にして入れる（数値・日付の列は右寄せ）。数値・日付として
   読めない値は、文字にしたり丸めたりせずに誤りにする（呼ぶ側が列の型を文字に直す）。列の型と
-  書式の名前は Excel の生成（`xlsx_workbook`）と同じ（`table_columns`）。
+  書式の名前は Excel の生成（`xlsx_workbook`）と同じ（`table_columns`）。値の読み方と表示の文字の
+  作り方は PowerPoint の生成（`pptx_presentation`）と共通（`table_text`）。
 - 上限（ブロック・表・行・列・cell の合計・文字数）を超える内容は、切り捨てずに誤りにする。Word の
   表は大きい表に向かないので、表の上限は Excel より小さい。
 - 誤りは値を含まない場所・種類・直し方（`DocxSpecError.issues`）で返す。場所は `docx_tool` の引数の
@@ -24,12 +25,9 @@ Run・DB・ツールの層に依らない純粋な関数（`build_document`）�
 from __future__ import annotations
 
 import io
-import math
-import re
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
-from decimal import ROUND_HALF_UP, Context, Decimal
+from datetime import UTC, datetime
 from typing import Any
 
 from docx import Document
@@ -43,15 +41,8 @@ from docx.shared import Emu, Mm, Pt, RGBColor, Twips
 from docx.table import _Cell
 from docx.text.paragraph import Paragraph
 
-from app.features.agent.table_columns import (
-    JSON_NUMBER,
-    ColumnType,
-    SpecIssue,
-    ValueProblem,
-    display_width,
-    format_issue,
-    iso_date_value,
-)
+from app.features.agent.table_columns import SpecIssue, display_width, format_issue
+from app.features.agent.table_text import Column, clean_text, column_texts, column_values
 
 DOCX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
@@ -67,8 +58,6 @@ MAX_TABLE_CELLS = 5_000
 # 文字数の上限（表の 1 つの cell と、文書の全体）。
 MAX_CELL_CHARS = 2_000
 MAX_DOCUMENT_CHARS = 200_000
-# 数値として表示する桁の上限（指数の大きい値を展開しない）。
-_MAX_NUMBER_DIGITS = 40
 
 # 固定の体裁（1 つ）。用紙は A4 縦、字体は日本語の文書で一般的な 1 つ（埋め込まない。無い環境では
 # 表示する側の代わりの字体になる）。
@@ -92,25 +81,6 @@ _CHAR_WIDTH = 110
 _CELL_PADDING = 300
 # リストの字下げ（1 段あたり。twip）。
 _LIST_INDENT = 420
-
-# 書式の名前 → 小数の桁数と、百分率か（名前は `NUMBER_FORMATS` と同じ）。
-_NUMBER_DISPLAY: dict[str, tuple[int, bool]] = {
-    "integer": (0, False),
-    "decimal1": (1, False),
-    "decimal2": (2, False),
-    "percent": (0, True),
-    "percent1": (1, True),
-}
-# 書式の名前 → 年月日の区切りと、時刻を出すか（名前は `DATE_FORMATS` と同じ）。
-_DATE_DISPLAY: dict[str, tuple[str, bool]] = {
-    "date": ("-", False),
-    "date_slash": ("/", False),
-    "datetime": ("-", True),
-}
-# Excel の表示と同じ四捨五入（桁の多い値も丸めずに扱える精度）。
-_DECIMAL = Context(prec=_MAX_NUMBER_DIGITS * 3, rounding=ROUND_HALF_UP)
-# XML に入れられない文字（制御文字・対にならない surrogate・非文字）。
-_XML_ILLEGAL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
 
 _TOO_LARGE_FIX = (
     "大きい表は Word の文書に向きません。行・列を絞るか、Excel のファイルにしてください。"
@@ -141,14 +111,6 @@ class ListBlock:
     # True は番号付き、False は箇条書き。
     ordered: bool
     items: Sequence[ListItem]
-
-
-@dataclass(frozen=True, slots=True)
-class Column:
-    header: str
-    type: ColumnType
-    # 書式の名前（数値は `NUMBER_FORMATS`、日付は `DATE_FORMATS` の key）。None は既定。
-    format: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,11 +155,6 @@ class BuiltDocument:
     tables: tuple[dict[str, int], ...]
 
 
-def clean_text(value: str) -> str:
-    """XML に入れられない文字を除き、改行を `\\n` にそろえる。"""
-    return _XML_ILLEGAL.sub("", value.replace("\r\n", "\n").replace("\r", "\n"))
-
-
 def _line(value: str) -> str:
     """1 行の文（改行は 1 つの空白にする。文の中の空白は変えない）。"""
     return " ".join(_paragraph_lines(value))
@@ -220,102 +177,17 @@ def _block_type(block: Block) -> str:
     return "page_break"
 
 
-# ---- 表の値（列の型で読み、書式を当てた文字にする） -------------------------------------------
-
-
-def _text_value(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return clean_text(value if isinstance(value, str) else str(value)).strip() or None
-
-
-def _number_value(value: Any) -> Decimal | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        text = value.strip()
-        if JSON_NUMBER.fullmatch(text) is None:
-            raise ValueProblem("not_number", "数値として読めません。")
-        number = Decimal(text)
-    elif isinstance(value, bool) or not isinstance(value, int | float):
-        raise ValueProblem("not_number", "数値として読めません。")
-    elif isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueProblem("not_number", "数値として読めません。")
-        number = Decimal(repr(value))
-    else:
-        number = Decimal(value)
-    if number.is_zero():
-        return Decimal(0)
-    if (
-        len(number.as_tuple().digits) > _MAX_NUMBER_DIGITS
-        or abs(number.adjusted()) > _MAX_NUMBER_DIGITS
-    ):
-        raise ValueProblem("precision", "桁が多すぎて、数値として表示できません。")
-    return number
-
-
-_CONVERTERS: dict[str, Callable[[Any], Any]] = {
-    "text": _text_value,
-    "number": _number_value,
-    "date": iso_date_value,
-}
-
-
-def _number_text(number: Decimal, format_name: str | None) -> str:
-    if format_name is None:
-        # 書式なしは、値のまま（桁区切りなし。指数は展開する）。
-        return format(number, "f")
-    decimals, percent = _NUMBER_DISPLAY[format_name]
-    scaled = number.scaleb(2, context=_DECIMAL) if percent else number
-    rounded = scaled.quantize(Decimal(1).scaleb(-decimals), context=_DECIMAL)
-    if rounded.is_zero():
-        rounded = abs(rounded)
-    return f"{rounded:,.{decimals}f}" + ("%" if percent else "")
-
-
-def _date_text(value: date | datetime, format_name: str) -> str:
-    separator, with_time = _DATE_DISPLAY[format_name]
-    text = f"{value.year:04d}{separator}{value.month:02d}{separator}{value.day:02d}"
-    if not with_time:
-        return text
-    moment = value if isinstance(value, datetime) else datetime(value.year, value.month, value.day)
-    return f"{text} {moment.hour:02d}:{moment.minute:02d}"
-
-
-def _column_texts(column: Column, values: Sequence[Any]) -> list[str]:
-    """1 つの列の、型で読んだ値を表示の文字にする（None は空）。"""
-    if column.type == "number":
-        return ["" if value is None else _number_text(value, column.format) for value in values]
-    if column.type == "date":
-        # 既定は内容から決める（時刻のある値が 1 つでもあれば日時）。
-        has_time = any(isinstance(value, datetime) for value in values)
-        name = column.format or ("datetime" if has_time else "date")
-        return ["" if value is None else _date_text(value, name) for value in values]
-    return ["" if value is None else str(value) for value in values]
+# ---- 表の値（列の型で読み、書式を当てた文字にする。読み方は `table_text`） -----------------------
 
 
 def _column_cells(
     at: str, column: Column, cells: Sequence[Any], issues: list[SpecIssue]
 ) -> list[str]:
     """1 つの列の値を、表示の文字にする（読めない値・長すぎる値は、最初の 1 件を誤りにする）。"""
-    convert = _CONVERTERS[column.type]
-    values: list[Any] = []
-    for row_index, cell in enumerate(cells):
-        try:
-            values.append(convert(cell))
-        except ValueProblem as problem:
-            issues.append(
-                SpecIssue(
-                    f"{at}.type",
-                    problem.code,
-                    f"この列の {row_index + 1} 行目の値は、{problem.message}{problem.fix}",
-                )
-            )
-            return [""] * len(cells)
-    texts = _column_texts(column, values)
+    values = column_values(at, column, cells, issues)
+    if values is None:
+        return [""] * len(cells)
+    texts = column_texts(column, values)
     long_row = next((row for row, text in enumerate(texts) if len(text) > MAX_CELL_CHARS), None)
     if long_row is not None:
         issues.append(
