@@ -38,6 +38,11 @@ export function RagAnswerReview({
       readOnly={readOnly}
       initialRating={run.feedback?.rating}
       load={() => request<FileReviewState>(path)}
+      taskLabel={(task, question, number) => {
+        const call = run.steps.find((step) => step.id === task)?.tool_call;
+        const tool = t(call?.name === "rag__rag_chat" ? "chat.fileReview.chatTool" : "chat.fileReview.searchTool");
+        return t("chat.fileReview.task", { number, tool, question });
+      }}
       original={(task, documentId) =>
         request<Record<string, string>>(path + "/original?" + new URLSearchParams({ task, document_id: documentId }))
       }

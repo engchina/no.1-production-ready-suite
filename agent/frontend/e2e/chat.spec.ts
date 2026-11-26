@@ -962,3 +962,33 @@ for (const tool of ["rag_chat","rag_search"]) {
     if(process.env.AGENT_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.AGENT_E2E_SCREENSHOT_DIR+"/"+tool+"-answer-"+testInfo.project.name+".png"});
   });
 }
+
+test("同じ質問を使った二つの RAG タスクを選び分ける", async ({ page, mockApi }) => {
+  const id = "run-chat-seed";
+  const tools = ["rag__rag_chat", "rag__rag_search"];
+  seedThread(mockApi, {
+    steps: tools.map((name, i) => ({
+      id: "task-" + i, run_id: id, kind: "tool", status: "completed",
+      tool_call: { name, arguments: { query: reviewQuestion } },
+      tool_result: { name, success: true, output: { trace_id: "trace-" + i, answer: firstAnswer, evidence: originalHits } },
+    })),
+    artifacts: [{ id: "first", kind: "answer", name: "回答", content: { text: firstAnswer } }],
+  });
+  const { unresolved, pending } = reviewSnapshots(id, "task-1");
+  const second = unresolved.versions[0].sources["task-1"];
+  unresolved.versions[0].sources = { "task-0": { ...second, trace_id: "trace-0" }, "task-1": second };
+  await page.route("**/api/runs/" + id + "/review", (route) => {
+    const submitted = route.request().method() === "POST";
+    if (submitted) expect(route.request().postDataJSON()).toMatchObject({ task: "task-1", action: "discover" });
+    return route.fulfill({ json: { data: submitted ? pending : unresolved, error_messages: [], warning_messages: [] } });
+  });
+  await page.goto("/chat");
+  await openSeedThread(page);
+  await page.getByRole("button", { name: "未解決", exact: true }).click();
+  const sheet = page.getByRole("dialog");
+  await expect(sheet.getByRole("button", { name: "検索 1（RAG チャット）· " + reviewQuestion })).toBeVisible();
+  await sheet.getByRole("button", { name: "検索 2（RAG 検索）· " + reviewQuestion }).click();
+  await sheet.getByRole("radio", { name: "今回の資料を外して探し直す" }).check();
+  await sheet.getByRole("button", { name: "今回の資料を除外して、ほかの候補を探す" }).click();
+  await expect(sheet.getByRole("checkbox", { name: "確認手順 C.pdf" })).toBeVisible();
+});

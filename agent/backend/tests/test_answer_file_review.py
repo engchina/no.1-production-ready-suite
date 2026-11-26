@@ -54,6 +54,8 @@ async def test_rag_run_keeps_versions_and_does_not_rerun_other_actions(
     repo.record_review_outcome.return_value = run
     monkeypatch.setattr(file_review, "runtime_repository", repo)
     monkeypatch.setattr(file_review, "run_answer_text", lambda _: "初回の回答")
+    monkeypatch.setattr(file_review, "run_answer_notice", lambda _: "初回の注意書き")
+    monkeypatch.setattr(file_review, "current_answer_notice", lambda: "新版の注意書き")
     monkeypatch.setattr(file_review, "unreadable_documents", lambda *args: set())
     monkeypatch.setattr(builtin_runtime, "_guarded_answer", lambda _, body: body)
     config = Mock()
@@ -84,6 +86,7 @@ async def test_rag_run_keeps_versions_and_does_not_rerun_other_actions(
     state = await file_review.change_review(
         run, "owner", ReviewAction(revision=2, task="task", action="answer", selected=["C"])
     )
+    assert [version.notice for version in state.versions] == ["初回の注意書き", "新版の注意書き"]
     assert state.versions[-1].sources["task"].documents() == {"C": "C.txt"}
     assert calls[1]["include"] == ["C"] and set(calls[1]["exclude"]) == {"A", "B"}
     await file_review.rate_version(

@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app.features.agent import builtin_runtime, data_scope
 from app.features.agent.answer_evidence import answer_evidence
+from app.features.agent.answer_notice import current_answer_notice
 from app.features.agent.answer_references import evidence_items
 from app.features.agent.config import runtime_config_store
 from app.features.agent.evidence_access import document_ids_in_content, unreadable_documents
@@ -247,6 +248,7 @@ async def change_review(run: RunState, viewer: str, command: ReviewAction) -> Fi
         updated = await advance_review(state, command, permitted, retrieve, compose)
         if command.action == "answer":
             latest = updated.versions[-1]
+            latest.notice = await run_in_threadpool(current_answer_notice)
             revised_steps = []
             for key, source in latest.sources.items():
                 step = tasks[key]

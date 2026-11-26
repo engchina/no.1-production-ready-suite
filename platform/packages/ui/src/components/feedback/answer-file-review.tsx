@@ -30,6 +30,7 @@ interface Props {
   vote: (id: string, value: AnswerRating) => Promise<void>;
   initialRating?: AnswerRating | null;
   onHistory: (rootId: string) => void;
+  taskLabel?: (task: string, question: string, number: number) => string;
   renderVersion: (version: ReviewVersion) => ReactNode;
 }
 
@@ -44,6 +45,7 @@ export function AnswerFileReview({
   vote,
   initialRating,
   onHistory,
+  taskLabel,
   renderVersion,
 }: Props) {
   const [state, setState] = useState<FileReviewState | null>(null);
@@ -321,9 +323,9 @@ export function AnswerFileReview({
         >
           {!task &&
             latest &&
-            Object.entries(latest.sources).map(([id, s]) => (
+            Object.entries(latest.sources).map(([id, s], index) => (
               <Button key={id} variant="secondary" onClick={() => choose(state, id)}>
-                {s.title}
+                {taskLabel?.(id, s.title, index + 1) ?? s.title}
               </Button>
             ))}
           {task && (
