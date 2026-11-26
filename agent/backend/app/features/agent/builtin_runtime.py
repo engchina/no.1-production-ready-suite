@@ -165,6 +165,7 @@ from app.features.agent.answer_references import (
     evidence_refs,
     without_lookup_notes,
 )
+from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND
 from app.features.agent.chat_progress import (
     APPROVAL_WAIT_SPAN,
     CONFIRMATION_WAIT_SPAN,
@@ -4893,6 +4894,11 @@ async def _require_tool_grounding(
         if declined_kinds(current.metadata):
             # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
             # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
+            return result, False
+        if any(artifact.kind == FILE_ARTIFACT_KIND for artifact in current.artifacts):
+            # この Run がファイルを作った（#5853）。利用者が渡した内容をファイルにした Run で、
+            # ファイルは成果物に残っている。回答だけを拒答に置き換えると、作れたファイルと
+            # 「お答えできません」が食い違うので、モデルが返した回答をそのまま出す（差し戻さない）。
             return result, False
         steps = list(current.steps)
         if not tool_grounding.needs_grounding(
