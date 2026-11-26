@@ -470,7 +470,7 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     ではない）ときは今どおり。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 1500 秒。RAG の回答のツール〔`rag_chat`・`rag_search`〕は処理の全体を RAG の回答の上限
-  （`RAG_ANSWER_TIMEOUT_SECONDS`、既定 600 秒・画面で選べる最大 1200 秒。#5280）の 1 つの期限で終える〔#5339〕ので、その外側の
+  （`RAG_ANSWER_TIMEOUT_SECONDS`、既定 1200 秒・画面で選べる最大も 1200 秒。#5280・#5862）の 1 つの期限で終える〔#5339〕ので、その外側の
   タイムアウト秒の上限と同じ値にする。#1425・#5352）/ `AGENT_EXTERNAL_NL2SQL_TIMEOUT_SECONDS`（既定 600 秒。NL2SQL の
   `nl2sql_query` / `nl2sql_get_job` は SQL の生成・実行をジョブにし、1 回の呼び出しでは結果を最大 45 秒（`wait_seconds`）だけ待って
   job_id を返す。`nl2sql_query` は SQL の生成前の確認〔LLM。下書きと回答の後の再検査で最大 2 回。#1441〕を呼び、その分だけ

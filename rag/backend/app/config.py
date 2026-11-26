@@ -287,7 +287,7 @@ RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS_DEFAULT = 16384
 RAG_ANSWER_GENERATION_MAX_OUTPUT_TOKENS_RANGE = (1024, 131072)
 RAG_ANSWER_TIMEOUT_MAX_SECONDS = 1200.0
 RAG_ANSWER_TIMEOUT_CHOICES = (150, 300, 600, 1200)
-RAG_ANSWER_TIMEOUT_DEFAULT_SECONDS = 600.0
+RAG_ANSWER_TIMEOUT_DEFAULT_SECONDS = 1200.0
 # 品質評価の job の全体の時間の上限の最大（秒。1 日）。job の上限は、回答の回数 × 回答の上限を
 # この値で抑える（#1430。`app.rag.evaluation_jobs.evaluation_job_time_limit_seconds`）。
 RAG_EVALUATION_JOB_TIMEOUT_MAX_SECONDS = 86400
@@ -1820,7 +1820,7 @@ class Settings(
         description=(
             "LLM を呼ぶ回答生成（チャット・RAG 検索の回答。ストリーム・非ストリーム・MCP。"
             "品質評価の 1 ケース）の通しの上限（秒。#375 / #383）。検索の計画・追加の検索の再分解・"
-            "参照の補充・分割読取・回答の生成で LLM を複数回呼ぶ。既定 600 秒、150〜1200 秒"
+            "参照の補充・分割読取・回答の生成で LLM を複数回呼ぶ。既定 1200 秒、150〜1200 秒"
             "（画面では 150 / 300 / 600 / 1200 秒から選ぶ。#5280）。LLM 1 回の timeout"
             "（oci_enterprise_ai_timeout_seconds。上限 600 秒）とは別に持つ。画面（1230 秒）と"
             " Nginx（1260 秒）の待ち時間は最大の 1200 秒より長くする。最小の 150 秒は生成の予約"
