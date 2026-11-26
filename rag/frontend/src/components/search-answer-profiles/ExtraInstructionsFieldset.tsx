@@ -1,4 +1,4 @@
-import { TextareaField, defaultTextareaCount } from "@production-ready/ui";
+import { FormGrid, TextareaField, defaultTextareaCount } from "@production-ready/ui";
 
 import { formatNumber } from "@/lib/format";
 import { t } from "@/lib/i18n";
@@ -51,33 +51,36 @@ export function ExtraInstructionsFieldset({
         {t("searchAnswerProfiles.extraInstructions.title")}
       </legend>
       <p className="text-xs text-fg-muted">{t("searchAnswerProfiles.extraInstructions.helper")}</p>
-      <div className="space-y-4 rounded-lg border border-border bg-surface-sunken p-3">
-        <TextareaField
-          id={QUESTION_SUFFIX_FIELD_ID}
-          rows={3}
-          width="full"
-          label={t("searchAnswerProfiles.extraInstructions.questionSuffix")}
-          value={questionSuffix}
-          onValueChange={(value) => onChange({ question_suffix: value })}
-          placeholder={disabled ? undefined : t("searchAnswerProfiles.extraInstructions.questionSuffixPlaceholder")}
-          helper={t("searchAnswerProfiles.extraInstructions.questionSuffixHelper")}
-          error={questionSuffixError || undefined}
-          showCount={(count) => defaultTextareaCount(count, QUESTION_SUFFIX_MAX_CHARS)}
-          disabled={disabled}
-        />
-        <TextareaField
-          id={ANSWER_INSTRUCTION_FIELD_ID}
-          rows={6}
-          width="full"
-          label={t("searchAnswerProfiles.extraInstructions.answerInstruction")}
-          value={answerInstruction}
-          onValueChange={(value) => onChange({ answer_instruction: value })}
-          placeholder={disabled ? undefined : t("searchAnswerProfiles.extraInstructions.answerInstructionPlaceholder")}
-          helper={t("searchAnswerProfiles.extraInstructions.answerInstructionHelper")}
-          error={answerInstructionError || undefined}
-          showCount={(count) => defaultTextareaCount(count, ANSWER_INSTRUCTION_MAX_CHARS)}
-          disabled={disabled}
-        />
+      <div className="rounded-lg border border-border bg-surface-sunken p-3">
+        {/* 回答の生成に渡す指示の文なので、プロンプトの編集と同じく区画の全幅を使う（#4847）。 */}
+        <FormGrid columns={1} width="full">
+          <TextareaField
+            id={QUESTION_SUFFIX_FIELD_ID}
+            rows={3}
+            width="full"
+            label={t("searchAnswerProfiles.extraInstructions.questionSuffix")}
+            value={questionSuffix}
+            onValueChange={(value) => onChange({ question_suffix: value })}
+            placeholder={disabled ? undefined : t("searchAnswerProfiles.extraInstructions.questionSuffixPlaceholder")}
+            helper={t("searchAnswerProfiles.extraInstructions.questionSuffixHelper")}
+            error={questionSuffixError || undefined}
+            showCount={(count) => defaultTextareaCount(count, QUESTION_SUFFIX_MAX_CHARS)}
+            disabled={disabled}
+          />
+          <TextareaField
+            id={ANSWER_INSTRUCTION_FIELD_ID}
+            rows={6}
+            width="full"
+            label={t("searchAnswerProfiles.extraInstructions.answerInstruction")}
+            value={answerInstruction}
+            onValueChange={(value) => onChange({ answer_instruction: value })}
+            placeholder={disabled ? undefined : t("searchAnswerProfiles.extraInstructions.answerInstructionPlaceholder")}
+            helper={t("searchAnswerProfiles.extraInstructions.answerInstructionHelper")}
+            error={answerInstructionError || undefined}
+            showCount={(count) => defaultTextareaCount(count, ANSWER_INSTRUCTION_MAX_CHARS)}
+            disabled={disabled}
+          />
+        </FormGrid>
       </div>
     </fieldset>
   );
