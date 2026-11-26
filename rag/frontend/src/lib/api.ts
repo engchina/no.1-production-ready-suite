@@ -2785,7 +2785,7 @@ export interface AnsweringSettingsData {
   outline_selection_max_documents: number;
   section_expansion_enabled: boolean;
   section_expansion_max_levels: number;
-  /** 回答生成の通しの上限（秒。#5280）。画面は 100 / 300 / 600 / 1200 から選ぶ（既定 600）。 */
+  /** 回答生成の通しの上限（秒。#5280）。画面は 150 / 300 / 600 / 1200 から選ぶ（既定 1200）。 */
   answer_timeout_seconds: number;
   /** 質問の対象の名前の役割の判定の段のモデル（#4351。空は回答のモデル）。 */
   /** 段ごとのモデルで選べる登録モデル（接続情報を含まない）。 */

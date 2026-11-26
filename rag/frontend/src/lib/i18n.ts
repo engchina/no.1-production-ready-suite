@@ -3893,7 +3893,7 @@ export const ja = {
   "settings.answering.reference_outline_selection_max_documents": "目次を渡す文書の数",
   "settings.answering.answerTimeout": "回答の上限時間",
   "settings.answering.answerTimeoutHint":
-    "質問から回答を確定するまでの上限です（既定 600 秒）。超えると、時間切れの工程を示して止めます。最小の 150 秒は生成の 1 回の見積もりと確定の分（既定 150 秒）と同じなので、章節の拡張・参照先の読み足し・根拠の分割読取をせず、入る根拠だけで 1 回生成します。",
+    "質問から回答を確定するまでの上限です（既定 1200 秒）。超えると、時間切れの工程を示して止めます。最小の 150 秒は生成の 1 回の見積もりと確定の分（既定 150 秒）と同じなので、章節の拡張・参照先の読み足し・根拠の分割読取をせず、入る根拠だけで 1 回生成します。",
   "settings.answering.answerTimeoutOption": "{seconds} 秒",
   "settings.answering.entityExpansion": "実体・別名による検索拡張",
   "settings.answering.entityExpansionHint": "質問と、Rerank で選んだ起点に含まれる実体の名称・ID・別名を手がかりに、同じ対象の定義と、その属性で結び付く対象の根拠を 1 段だけ集めます。Rerank と起点の選択の後に集め、Rerank にはかけずに回答の根拠へ加えます（起点数や根拠の件数には数えません）。実体・別名索引を作った文書だけに効きます。AI の呼び出しは増えません。RAG チャットと品質評価（と MCP）だけに適用し、RAG 検索では使いません。",
