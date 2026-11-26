@@ -8,6 +8,7 @@ import {
   Button,
   Card,
   CardContent,
+  FormGrid,
   Section,
   TextareaField,
   apiErrorMessage,
@@ -126,20 +127,23 @@ export function AgentSharingSection({
                 {t("agent.share.approve")}
               </Button>
             </div>
-            <TextareaField
-              id={`${agent.id}-share-reject-reason`}
-              label={t("agent.share.reason")}
-              helper={t("agent.share.reasonHelper")}
-              width="full"
-              rows={2}
-              maxLength={MAX_NOTE_CHARS}
-              value={reason}
-              error={reasonError ?? undefined}
-              onValueChange={(value) => {
-                setReason(value);
-                setReasonError(null);
-              }}
-            />
+            {/* 却下の理由は普通の欄なので、フォームの最大幅（60rem）で止める（#1891・#5851）。 */}
+            <FormGrid columns={1}>
+              <TextareaField
+                id={`${agent.id}-share-reject-reason`}
+                label={t("agent.share.reason")}
+                helper={t("agent.share.reasonHelper")}
+                width="full"
+                rows={2}
+                maxLength={MAX_NOTE_CHARS}
+                value={reason}
+                error={reasonError ?? undefined}
+                onValueChange={(value) => {
+                  setReason(value);
+                  setReasonError(null);
+                }}
+              />
+            </FormGrid>
             <div>
               <Button
                 variant="secondary"
@@ -173,17 +177,20 @@ export function AgentSharingSection({
                   </Banner>
                 </div>
               ) : null}
-              <TextareaField
-                id={`${agent.id}-share-note`}
-                label={t("agent.share.note")}
-                helper={unpublished ? t("agent.share.publishFirst") : t("agent.share.noteHelper")}
-                width="full"
-                rows={2}
-                maxLength={MAX_NOTE_CHARS}
-                value={note}
-                disabled={unpublished}
-                onValueChange={setNote}
-              />
+              {/* 申請の一言は普通の欄なので、フォームの最大幅（60rem）で止める（#1891・#5851）。 */}
+              <FormGrid columns={1}>
+                <TextareaField
+                  id={`${agent.id}-share-note`}
+                  label={t("agent.share.note")}
+                  helper={unpublished ? t("agent.share.publishFirst") : t("agent.share.noteHelper")}
+                  width="full"
+                  rows={2}
+                  maxLength={MAX_NOTE_CHARS}
+                  value={note}
+                  disabled={unpublished}
+                  onValueChange={setNote}
+                />
+              </FormGrid>
               <div>
                 <Button
                   icon={Send}

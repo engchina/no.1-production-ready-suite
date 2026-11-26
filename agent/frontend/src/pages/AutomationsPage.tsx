@@ -716,18 +716,21 @@ function AutomationEditor({
                     ) : null}
                   </FormGrid>
                   <ApprovalToolsNotice data={approvalTools.data} canOpenToolPolicy={canOpenToolPolicy} />
-                  <TextareaField
-                    id="automation-goal"
-                    label={t("automation.goal")}
-                    helper={t("automation.goalHelper")}
-                    width="full"
-                    required
-                    rows={4}
-                    maxLength={4000}
-                    value={draft.goal}
-                    error={goalError}
-                    onValueChange={(value) => setField("goal", value)}
-                  />
+                  {/* 業務 Agent への指示の文なので、普通の欄とは別の区画で全幅を使う（#4847・#5851）。 */}
+                  <FormGrid columns={1} width="full">
+                    <TextareaField
+                      id="automation-goal"
+                      label={t("automation.goal")}
+                      helper={t("automation.goalHelper")}
+                      width="full"
+                      required
+                      rows={4}
+                      maxLength={4000}
+                      value={draft.goal}
+                      error={goalError}
+                      onValueChange={(value) => setField("goal", value)}
+                    />
+                  </FormGrid>
                   <label className="inline-flex items-center gap-2 text-sm text-fg">
                     <Switch
                       checked={draft.enabled}

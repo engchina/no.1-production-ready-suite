@@ -165,3 +165,34 @@ test("共有の承認後は申請した本人に割り当て待ちを案内す�
   await expect(page.getByTestId("agent-share-approved-notice")).toHaveCount(0);
   await expect(page.getByRole("row", { name: /Agent P/ })).toBeVisible();
 });
+
+test("共有の申請の一言・却下の理由は普通の欄なので、広い画面でもフォームの最大幅（60rem）で止める（#5851）", async ({ page, mockApi }) => {
+  const fieldMetrics = (selector: string) =>
+    page.locator(selector).evaluate((node) => ({
+      width: node.getBoundingClientRect().width,
+      formMax: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 60,
+      grid: node.closest("[data-form-grid]")?.getAttribute("data-form-grid-width") ?? null,
+    }));
+  seedPersonalAgent(mockApi, { share_request: { status: "requested", note: "", requested_at: MOCK_NOW, reason: "", decided_at: null } });
+  for (const width of [1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    // Agent 管理（既定の利用者）の却下の理由。
+    await page.goto("/agents?id=personal-2523");
+    await expect(page.getByTestId("agent-share-review").getByLabel("却下の理由")).toBeVisible();
+    const reason = await fieldMetrics("[id$='-share-reject-reason']");
+    expect(reason.grid, `${width}px`).toBe("form");
+    expect(reason.width, `${width}px`).toBeLessThanOrEqual(reason.formMax + 1);
+  }
+  const agent = mockApi.state.agents.find((item) => item.id === "personal-2523")!;
+  agent.share_request = null;
+  mockApi.setCurrentUser(BUILDER);
+  for (const width of [1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    // 持ち主の申請の一言。
+    await page.goto("/agents?id=personal-2523");
+    await expect(page.getByTestId("agent-share").getByLabel("Agent 管理への一言")).toBeVisible();
+    const note = await fieldMetrics("[id$='-share-note']");
+    expect(note.grid, `${width}px`).toBe("form");
+    expect(note.width, `${width}px`).toBeLessThanOrEqual(note.formMax + 1);
+  }
+});
