@@ -1,4 +1,5 @@
-"""ファイルを作るツール（`xlsx_create`・`docx_create`・`pptx_create`）の共通の部品（#5837）。
+"""ファイルを作るツール（`xlsx_create`・`docx_create`・`pptx_create`・`markdown_create`）の共通の部品
+（#5837・#5867）。
 
 形式に依らない所だけを置く。生成の本体（`xlsx_workbook`・`docx_document`・`pptx_presentation`）は
 Run に依らず、ここは Run を読む（ツールの層 `tools.py` からは import しない）。

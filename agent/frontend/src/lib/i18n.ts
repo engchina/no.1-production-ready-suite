@@ -765,6 +765,7 @@ const agentJa = {
   "chat.files.type.xlsx": "Excel（.xlsx）",
   "chat.files.type.docx": "Word（.docx）",
   "chat.files.type.pptx": "PowerPoint（.pptx）",
+  "chat.files.type.md": "Markdown（.md）",
   "chat.files.type.other": "ファイル",
   "chat.output.noValue": "記録なし",
   "chat.output.title": "出力の項目",

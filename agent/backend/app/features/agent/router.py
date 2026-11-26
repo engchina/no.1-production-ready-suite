@@ -3249,7 +3249,7 @@ async def download_run_artifact(
     request: Request,
     _: None = Depends(require_viewer),
 ) -> Response:
-    """成果物のファイル（ツールが作った .xlsx / .docx / .pptx。#5837）のダウンロード。
+    """成果物のファイル（ツールが作った .xlsx / .docx / .pptx / .md。#5837・#5867）のダウンロード。
 
     Run の詳細・成果物と同じ判定（`_readable_run`）を通った利用者だけに返す。ファイルの成果物で
     ない ID・無い ID・中身が無い（保存しない構成での再起動の後など）は 404。

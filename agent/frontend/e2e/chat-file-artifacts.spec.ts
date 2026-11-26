@@ -5,11 +5,13 @@ import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
 // #5837: 業務 Agent のツールが作ったファイル（成果物 `file`）を、チャットの回答の下と実行の詳細の「成果物」から
 // ダウンロードする。成果物はファイル名・形式・大きさだけを持ち、中身はダウンロードの API から取る。
+// Markdown（.md。#5867）も同じ行で、プレビューはしない。
 
 const THREAD_ID = `thread_${"c".repeat(32)}`;
 const RUN_ID = "run-file-artifacts";
 const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+const MARKDOWN = "text/markdown; charset=utf-8";
 // 合成の中身（zip の署名で始まる）。
 const FILE_BODY = Buffer.from("PK\u0003\u0004synthetic-file", "binary");
 const LONG_NAME = `合成の長い名前のファイル_${"synthetic_name_".repeat(12)}.pptx`;
@@ -41,6 +43,7 @@ function seedRun(mockApi: MockApi) {
     artifacts: [
       fileArtifact("artifact-xlsx", "合成の集計.xlsx", XLSX, 2048),
       fileArtifact("artifact-pptx", LONG_NAME, PPTX, 3 * 1024 * 1024),
+      fileArtifact("artifact-md", "合成の手順.md", MARKDOWN, 512),
       { id: "answer", name: "回答", kind: "answer", content: { text: "合成のファイルを作りました。" }, created_at: MOCK_NOW },
     ],
     pending_tool_calls: [],
@@ -103,9 +106,12 @@ for (const viewport of VIEWPORTS) {
         const pptx = files.getByTestId(`chat-files-${RUN_ID}-artifact-pptx`);
         await expect(pptx).toContainText(LONG_NAME);
         await expect(pptx).toContainText("PowerPoint（.pptx）・3 MB");
+        const md = files.getByTestId(`chat-files-${RUN_ID}-artifact-md`);
+        await expect(md).toContainText("合成の手順.md");
+        await expect(md).toContainText("Markdown（.md）・512 B");
         // 長い名前は折り返し、行と画面を横にあふれさせない。
         await expectNoPageHorizontalOverflow(page);
-        for (const row of [xlsx, pptx]) {
+        for (const row of [xlsx, pptx, md]) {
           const [rowBox, buttonBox] = await Promise.all([
             row.boundingBox(),
             row.getByRole("button", { name: /をダウンロード$/ }).boundingBox(),

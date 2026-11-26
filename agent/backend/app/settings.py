@@ -348,7 +348,7 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     agent_opentelemetry_endpoint: str | None = None
     agent_artifact_storage_backend: str = "inline"
     agent_artifact_storage_path: str = ".agent-artifacts"
-    # 成果物のファイル（ツールが作った .xlsx / .docx / .pptx。#5837）の 1 つの上限（バイト）。
+    # 成果物のファイル（ツールが作った .xlsx / .docx / .pptx / .md。#5837）の 1 つの上限（バイト）。
     # 超えるファイルは保存せず、ツールのエラーにする。会話の添付の上限（共通の
     # PLATFORM_CHAT_ATTACHMENT_MAX_BYTES）とは別に決める。
     agent_artifact_file_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)

@@ -1,0 +1,74 @@
+This skill (skills/markdown-create) is based on guidance from the following sources.
+
+1. The "markdown-mermaid-writing" skill of K-Dense-AI/claude-scientific-skills:
+
+  Repository: https://github.com/K-Dense-AI/claude-scientific-skills
+  Path:       skills/markdown-mermaid-writing/SKILL.md
+              skills/markdown-mermaid-writing/references/markdown_style_guide.md
+  Revision:   a92663a0214b3b9fa1ba6b958284ffd919c00a0c
+  License:    Apache License 2.0 (a copy is in LICENSE.txt here)
+
+  The guidance of that skill is ported from SuperiorByteWorks-LLC/agent-project
+  (https://github.com/SuperiorByteWorks-LLC/agent-project, Apache License 2.0).
+  Its NOTICE reads:
+
+    OpenCode Template
+    Copyright 2026 Superior Byte Works, LLC
+
+    Maintainer and original template author: Clayton Young (Boreal Bytes)
+
+  "Superior Byte Works" and related marks are used here only for factual attribution.
+
+2. The Markdown instructions of github/awesome-copilot:
+
+  Repository: https://github.com/github/awesome-copilot
+  Path:       instructions/markdown.instructions.md
+              instructions/markdown-gfm.instructions.md
+  Revision:   b1537c6d96f660d54bcb5a9c6a40ab0a4518448e
+  License:    MIT License (the full text is at the end of this file)
+
+Changes made for this project:
+
+- SKILL.md is rewritten in Japanese for business documents and for the markdown_create tool
+  of Production Ready Agent. Only the guidance that applies to a single Markdown file made
+  by that tool is kept: one title heading, heading levels without skips and with
+  descriptive text, blank lines around blocks, list markers and the indentation of nested
+  items, sparing emphasis, tables with a header row and a delimiter row and right-aligned
+  number columns, fenced code blocks with a language name, descriptive link text,
+  footnotes for sources, task lists, Mermaid diagrams for structure (choosing the diagram
+  type by content, a sentence that describes each diagram, splitting large diagrams) and
+  tables instead of Mermaid for quantitative values.
+- Added for this project: emphasis delimiters are kept away from Japanese brackets and
+  punctuation (CommonMark flanking rules), no front matter unless asked for, no raw HTML,
+  no diagram types whose names end in "-beta", and the size of a table and the use of the
+  other file tools (Excel, Word, PowerPoint) for large tables and charts.
+- Removed: emoji in headings and in diagram nodes, the approved emoji set, horizontal
+  rules after collapsible sections, collapsible HTML sections, the document templates,
+  the per-diagram reference files, colors and classDef styling, accessibility directives
+  of Mermaid, images and figure files, rendering and validating diagrams with the Mermaid
+  CLI or a browser, version control of the sources, and the integration with other
+  scientific skills.
+
+------------------------------------------------------------------------------------------
+
+MIT License (github/awesome-copilot)
+
+Copyright GitHub, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

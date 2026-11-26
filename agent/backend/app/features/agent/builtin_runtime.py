@@ -248,6 +248,7 @@ from app.features.agent.job_cancel import (
     RUN_CANCEL_TRACE_PREFIX,
     in_flight_nl2sql_jobs,
 )
+from app.features.agent.markdown_tool import markdown_create_tool
 from app.features.agent.model_call_observation import model_call_attributes
 from app.features.agent.output_fields import (
     OUTPUT_RETRY_MESSAGE,
@@ -374,11 +375,13 @@ BUILTIN_RUNTIME_ID = "builtin"
 SDK_PACKAGE = "openai-agents"
 # Skill の requirement のうち、Control Plane のツール（`tool_registry`）を指す server_id。
 CONTROL_PLANE_SERVER_ID = "control-plane"
-# スキルが `control-plane:<名前>` で宣言できるツール（#5837。宣言したスキルを選んだ業務 Agent の
-# Run にだけ渡る）。Run の成果物を読み書きするので、ツールの層（`tools.py`）ではなくここで登録する。
+# スキルが `control-plane:<名前>` で宣言できるツール（#5837・#5867。宣言したスキルを選んだ
+# 業務 Agent の Run にだけ渡る）。Run の成果物を読み書きするので、ツールの層（`tools.py`）ではなく
+# ここで登録する。
 tool_registry.register(*xlsx_create_tool())
 tool_registry.register(*docx_create_tool())
 tool_registry.register(*pptx_create_tool())
+tool_registry.register(*markdown_create_tool())
 # 業務データを含む trace を外部（OpenAI）へ送らない。
 set_tracing_disabled(True)
 # モデルの入力の上限に収まらない失敗の code（#2383）。
@@ -3010,9 +3013,10 @@ def final_answer_tool_names(
 ) -> frozenset[str]:
     """回答をそのまま Run の最終の回答にするツール（モデルに渡した名前。#5342）。
 
-    スキルの `final_answer_tools` で宣言したツールのうち、この Run でモデルに渡したもの。同じ
-    ツールを宣言なしで使うスキル（データつきのスキル）も選んでいれば、そのツールの回答はモデルが
-    他の結果と合わせるので外す。
+    スキルの `final_answer_tools` で宣言したツールのうち、この Run でモデルに渡したもの。回答の
+    ツールを宣言せずにツールを使うスキル（データつきのスキル・ファイルを作るスキルなど）も選んで
+    いれば、回答のツールの回答はモデルがほかのツールの結果と合わせる（資料で調べた内容をファイルに
+    するなど。#5867）ので、どれも外す。同じツールを宣言なしで使うスキルを選んだときも外す。
     """
     declared: set[tuple[str, str]] = set()
     plain: set[tuple[str, str]] = set()
@@ -3021,6 +3025,8 @@ def final_answer_tool_names(
         if skill is None or not skill.enabled:
             continue
         finals = {(item.server_id, item.tool_name) for item in skill.final_answer_tools}
+        if not finals and skill.mcp_requirements:
+            return frozenset()
         declared |= finals
         for requirement in skill.mcp_requirements:
             for server_id, tool_name in origins:

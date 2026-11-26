@@ -1,14 +1,16 @@
 """Run の成果物のファイル（ツールが作ったバイナリ。#5837）。
 
-業務 Agent のツールが作ったファイル（.xlsx / .docx / .pptx）を、その実行（Run）の成果物として残す。
+業務 Agent のツールが作ったファイル（.xlsx / .docx / .pptx / .md）を、その実行（Run）の成果物として
+残す。
 
 - **持ち方**: Run の成果物（`Artifact`。kind は `FILE_ARTIFACT_KIND`）には、ファイル名・MIME・
   大きさ・sha256 だけを持つ（`ArtifactFile.metadata`）。中身（バイト列）は Run の JSON と分けて、
   保存先（`AGENT_RUNTIME_REPOSITORY_BACKEND`）に Run・成果物の ID で持つ（memory は repository の
   メモリ、Oracle は `AGENT_RUNTIME_ARTIFACT_FILES` の BLOB）。一覧・Run の snapshot・イベント・
   ログ・API の JSON・MCP の結果に中身（バイト列・base64）を載せない。
-- **検査**: 形式は `FILE_ARTIFACT_EXTENSIONS` の 3 つだけ。大きさは設定
-  `AGENT_ARTIFACT_FILE_MAX_BYTES` まで。ファイル名は安全な形に直し（`safe_file_name`）、拡張子は
+- **検査**: 形式は `FILE_ARTIFACT_EXTENSIONS` の 4 つだけ。大きさは設定
+  `AGENT_ARTIFACT_FILE_MAX_BYTES` まで。中身は形式ごとに確かめる（OOXML の 3 つは zip の署名、
+  Markdown は UTF-8 の文字。#5867）。ファイル名は安全な形に直し（`safe_file_name`）、拡張子は
   MIME から決める。合わないファイルは保存せず `ArtifactFileError`（成功にしない）。
 - **読み出し**: ダウンロードの API だけが読む（Run の詳細と同じ認可）。保存した sha256 と合わない
   中身は返さない。
@@ -32,15 +34,18 @@ from urllib.parse import quote
 ARTIFACT_FILE_TABLE = "AGENT_RUNTIME_ARTIFACT_FILES"
 # ファイルの成果物の種類（`Artifact.kind`）。
 FILE_ARTIFACT_KIND = "file"
+# Markdown のファイル（#5867。文字コードは UTF-8 だけ。ダウンロードの Content-Type にもなる）。
+MARKDOWN_MIME_TYPE = "text/markdown; charset=utf-8"
+# OOXML の形式（zip の入れ物。先頭の署名が違う中身は保存しない）。
+_OOXML_EXTENSIONS: Mapping[str, str] = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+}
 # 保存できる形式（MIME → 拡張子）。足すときは画面の `FILE_ARTIFACT_KIND` の表示も確かめる。
 FILE_ARTIFACT_EXTENSIONS: Mapping[str, str] = MappingProxyType(
-    {
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
-    }
+    {**_OOXML_EXTENSIONS, MARKDOWN_MIME_TYPE: ".md"}
 )
-# 3 つの形式はどれも zip の入れ物（OOXML）。先頭の署名が違う中身は保存しない。
 _ZIP_SIGNATURE = b"PK\x03\x04"
 # ファイル名の長さの上限（拡張子を含む文字数）と、名前が空になったときの名前。
 FILE_NAME_MAX_CHARS = 120
@@ -105,6 +110,14 @@ def safe_file_name(name: str, mime_type: str) -> str:
     return f"{stem or DEFAULT_FILE_STEM}{extension}"
 
 
+def _is_utf8(data: bytes) -> bool:
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
 def checked_file(file_name: str, mime_type: str, data: bytes, *, max_bytes: int) -> ArtifactFile:
     """保存してよいファイルにする（形式・大きさ・名前。合わなければ `ArtifactFileError`）。"""
     mime = mime_type.strip().lower()
@@ -120,8 +133,10 @@ def checked_file(file_name: str, mime_type: str, data: bytes, *, max_bytes: int)
             f"ファイルが大きすぎます（{len(data)} バイト。上限は {max_bytes} バイト）。"
             "内容を減らして作り直してください。",
         )
-    if not data.startswith(_ZIP_SIGNATURE):
+    if mime in _OOXML_EXTENSIONS and not data.startswith(_ZIP_SIGNATURE):
         raise ArtifactFileError(FILE_INVALID, "ファイルの中身が形式と合いません。")
+    if mime == MARKDOWN_MIME_TYPE and not _is_utf8(data):
+        raise ArtifactFileError(FILE_INVALID, "ファイルの中身が UTF-8 の文字ではありません。")
     return ArtifactFile(
         file_name=safe_file_name(file_name, mime),
         mime_type=mime,
@@ -133,7 +148,7 @@ def checked_file(file_name: str, mime_type: str, data: bytes, *, max_bytes: int)
 def stored_file(content: Mapping[str, Any], data: bytes | None) -> ArtifactFile | None:
     """保存した成果物の `content` と中身から、返してよいファイル（合わなければ None）。
 
-    形式が対象の 3 つでない・保存した sha256 と中身が合わないものは返さない。
+    形式が対象の 4 つでない・保存した sha256 と中身が合わないものは返さない。
     """
     mime, digest, name = content.get("mime_type"), content.get("sha256"), content.get("file_name")
     if data is None or not isinstance(mime, str) or mime not in FILE_ARTIFACT_EXTENSIONS:
@@ -255,6 +270,7 @@ __all__ = [
     "FILE_ARTIFACT_EXTENSIONS",
     "FILE_ARTIFACT_KIND",
     "FILE_NAME_MAX_CHARS",
+    "MARKDOWN_MIME_TYPE",
     "ArtifactFile",
     "ArtifactFileError",
     "attachment_disposition",

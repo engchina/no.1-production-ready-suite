@@ -32,10 +32,10 @@
   利用者への確認の質問だけの回答（`is_clarification_only`。あいさつ・用件を聞くだけの回答を
   含む）と、NL2SQL の SQL の生成前の確認で止まった Run（`nl2sql_clarification_pending`）。
 - ファイルを作った Run（#5853）: この Run の成果物にファイル（`xlsx_create`・`docx_create`・
-  `pptx_create` が作ったもの）があれば、差し戻しも拒答も注意もしない（`builtin_runtime` が
-  成果物で確かめる）。利用者が会話に書いた内容をファイルにした Run で、作れたファイルと拒答の
-  文・注意が食い違わないようにする。回答の中身は見ない（ファイルを作るツールが成功したかだけで
-  分ける）。
+  `pptx_create`・`markdown_create` が作ったもの）があれば、差し戻しも拒答も注意もしない
+  （`builtin_runtime` が成果物で確かめる）。利用者が会話に書いた内容をファイルにした Run で、
+  作れたファイルと拒答の文・注意が食い違わないようにする。回答の中身は見ない（ファイルを作る
+  ツールが成功したかだけで分ける）。
 - 実行補助を外した Run（`AGENT_TOOL_GROUNDING_REQUIRED=false` と、品質評価の除去実験の
   `disabled_aids` の `tool_grounding`）は、どちらの設定でも何もしない（差し戻し・拒答・注意の
   どれも無い）。
