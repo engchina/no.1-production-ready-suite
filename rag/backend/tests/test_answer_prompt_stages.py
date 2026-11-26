@@ -208,6 +208,8 @@ def test_all_default_stage_instructions_follow_ordered_steps() -> None:
         ("picture_description", "table"): 6,
         ("picture_description", "contract"): 7,
         # 生成の system は役割の文（Step 4 まで）に固定の部分と未確定の前提を続けて足す（#4782）。
+        # 検索・回答プロファイルの回答の指示に足す文があるときは、役割の文の後に 1 つ足す（#5848）。
+        ("generation", "answerInstruction"): 5,
         ("generation", "fixed"): 5,
         ("generation", "assumptionSystem"): 9,
         # 回答生成の user の入力（既定は Step 6 まで）の後ろに足す作り直しの部品（#4586）。

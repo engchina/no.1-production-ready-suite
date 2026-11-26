@@ -34,6 +34,7 @@ from pr_backend_core.observability.tracing import (
 )
 from pr_system_settings.guardrails import GuardrailPolicy, GuardrailResult
 from pydantic import ValidationError
+from rag_engine.generation.answer_models import with_question_suffix
 from rag_engine.resources.deadline import current_deadline
 from rag_engine.resources.runtime import resolve_prompt
 from rag_engine.resources.tracing import CallObservation, bind_trace_observer
@@ -776,19 +777,24 @@ class RagPipeline:
             from app.rag.chat_attachments import attachment_evidence, chat_attachment_service
 
             attachment_status = chat_attachment_service().reading_status()
+            # 会話の添付の根拠も検索の側なので、検索・回答プロファイルの「質問に足す文」を足した
+            # 質問で選ぶ（#5848。回答エンジンが文書の検索に使う質問と同じ文）。
+            attachment_question = with_question_suffix(
+                request.query, self._settings.rag_question_suffix
+            )
             # 添付の読み込みと rerank を 1 つの工程の span にする(処理の経過の段。#3475)。
             attachment_chunks = await _observe_stage(
                 trace_id,
                 "attachment_evidence",
                 attachment_evidence(
-                    request.query,
+                    attachment_question,
                     self._attachment_conversation_id,
                     rerank=self._genai.rerank if self._settings.rag_rerank_enabled else None,
                     report_degraded=degraded.record_degraded,
                 ),
                 progress_callback=stage_callback,
                 request_snapshot=lambda: {
-                    "質問": request.query,
+                    "質問": attachment_question,
                     "会話 ID": self._attachment_conversation_id,
                     "Rerank 有効": self._settings.rag_rerank_enabled,
                     "読取状態": attachment_status,

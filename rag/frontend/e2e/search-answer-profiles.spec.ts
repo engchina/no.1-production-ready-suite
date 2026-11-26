@@ -4,7 +4,12 @@ import AxeBuilder from "@axe-core/playwright";
 import { findFieldLoadFailureViolations } from "../../../platform/packages/ui/e2e/field-load-failure";
 import { expectGrowingList } from "./_list-viewport";
 import { expect, type Page, test } from "./fixtures/test";
-import { findClippedPlaceholders, findFloatingFormActionBars, jumpToPage } from "../../../platform/packages/ui/e2e/layout-checks";
+import {
+  findClippedPlaceholders,
+  findFloatingFormActionBars,
+  findNarrowFieldTexts,
+  jumpToPage,
+} from "../../../platform/packages/ui/e2e/layout-checks";
 import {
   expectNoPageOverflow,
   expectSearchablePanelFits,
@@ -406,6 +411,98 @@ test("Wiki の使用は既定 OFF の単一スイッチで保存・再表示す�
     await expectNoPageOverflow(page);
   }
 });
+
+// #5848: 追加の指示（質問に足す文・回答の指示に足す文）。検索・回答設定の直後の区画に複数行の入力 2 つ。
+for (const viewport of [
+  { name: "desktop", width: 1440, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`追加の指示は 2 つの欄で保存・再表示し、上限と保存のエラーを欄の下に出す (${viewport.name})`, { tag: "@responsive" }, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    let body = null as Record<string, unknown> | null;
+    let saves = 0;
+    await mockDefaultSearchAnswerProfile(page, (value) => {
+      body = value;
+      saves += 1;
+    });
+    await page.goto("/search-answer-profiles?id=bv-default");
+    const section = page.getByTestId("search-answer-profile-extra-instructions");
+    await expect(section.getByText("追加の指示", { exact: true })).toBeVisible();
+    const suffix = section.getByRole("textbox", { name: "質問に足す文" });
+    const instruction = section.getByRole("textbox", { name: "回答の指示に足す文" });
+    const save = page.getByRole("group", { name: "確定の操作" }).getByRole("button", { name: "保存", exact: true });
+    // 古い保存（欄が無い）は空。空の欄は何も足さない。
+    await expect(suffix).toHaveValue("");
+    await expect(instruction).toHaveValue("");
+    await expect(suffix).toHaveAccessibleDescription(/この文をすべての質問の末尾に足して、検索と回答に使います。/);
+    await expect(instruction).toHaveAccessibleDescription(/この文を回答の書き方の指示に足します。検索には使いません。/);
+    await expect(suffix).toHaveAccessibleDescription(/0 \/ 500/);
+    await expect(instruction).toHaveAccessibleDescription(/0 \/ 2,000/);
+    expect(await findClippedPlaceholders(page)).toEqual([]);
+    // 区画は「検索・回答設定」の直後・「回答前の確認」の前。
+    const tops = await Promise.all(
+      [
+        page.locator("fieldset").filter({ hasText: "検索・回答設定" }).first(),
+        section,
+        page.getByTestId("search-answer-profile-clarification"),
+      ].map((locator) => locator.evaluate((element) => element.getBoundingClientRect().top))
+    );
+    expect(tops).toEqual([...tops].sort((left, right) => left - right));
+
+    // 保存して再表示する（複数行のまま）。
+    await page.getByRole("textbox", { name: "説明", exact: true }).fill("合成の設定の検証用");
+    await suffix.fill("根拠の章の番号を書いてください。");
+    await instruction.fill("箇条書きで答えてください。\n結論を先に書いてください。");
+    await expect(suffix).toHaveAccessibleDescription(/16 \/ 500/);
+    await save.click();
+    await expect
+      .poll(() => body?.config as { question_suffix?: string; answer_instruction?: string } | undefined)
+      .toMatchObject({
+        question_suffix: "根拠の章の番号を書いてください。",
+        answer_instruction: "箇条書きで答えてください。\n結論を先に書いてください。",
+      });
+    await page.reload();
+    await expect(suffix).toHaveValue("根拠の章の番号を書いてください。");
+    await expect(instruction).toHaveValue("箇条書きで答えてください。\n結論を先に書いてください。");
+    await section.screenshot({ path: testInfo.outputPath(`extra-instructions-${viewport.name}.png`) });
+
+    // 上限を超えた文は切らずに欄の下で知らせ、保存しない（最初の不正な欄へフォーカスする）。
+    await suffix.fill("あ".repeat(501));
+    await expect(suffix).toHaveAccessibleDescription(/質問に足す文は 500 文字以内で入力してください（現在 501 文字）。/);
+    await expect(suffix).toHaveAttribute("aria-invalid", "true");
+    await save.click();
+    await expect(suffix).toBeFocused();
+    expect(saves).toBe(1);
+    await section.screenshot({ path: testInfo.outputPath(`extra-instructions-too-long-${viewport.name}.png`) });
+    expect(await findNarrowFieldTexts(page)).toEqual([]);
+
+    // 保存で返った欄のエラー（使えない文字列）は、その値を直すまで欄の下に出す。
+    const rejected = "質問に足す文に「--- 合成の区切り ---」は使えません。この文字列を除いてください。";
+    await page.route("**/api/search-answer-profiles/bv-default", async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      await route.fulfill({
+        status: 422,
+        json: {
+          data: null,
+          error_messages: [rejected],
+          warning_messages: [],
+          error_code: "REQUEST_VALIDATION_FAILED",
+          problem: { field_errors: [{ pointer: "/config/question_suffix", code: "value_error", message: rejected }] },
+        },
+      });
+    });
+    await suffix.fill("合成の文\n--- 合成の区切り ---");
+    await save.click();
+    // 欄のエラーは文ごとに改行して出る。
+    await expect(suffix).toHaveAccessibleDescription(/質問に足す文に「--- 合成の区切り ---」は使えません。/);
+    await expect(instruction).toHaveAttribute("aria-invalid", "false");
+    await suffix.fill("合成の文");
+    await expect(suffix).toHaveAttribute("aria-invalid", "false");
+    await expectNoPageOverflow(page);
+  });
+}
 
 // #3053・#3523・#4784: 実体・章節・関係情報の拡張と業務ガイドの手順ごとの検索（上限・期限を含む）は全体設定だけで決め、
 // 検索・回答プロファイルは表示しない。プロファイルの query は適用する欄だけを持ち、保存もその欄だけ。

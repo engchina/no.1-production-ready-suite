@@ -1729,6 +1729,20 @@ class Settings(
             "空ならシステム設定の窓口。"
         ),
     )
+    rag_question_suffix: str = Field(
+        default="",
+        description=(
+            "リクエスト単位で検索・回答プロファイルから解決する「質問に足す文」（#5848）。用語・"
+            "同義語の照合の後に質問の末尾へ足し、その後の検索と回答の生成に使う。空なら足さない。"
+        ),
+    )
+    rag_answer_instruction: str = Field(
+        default="",
+        description=(
+            "リクエスト単位で検索・回答プロファイルから解決する「回答の指示に足す文」（#5848）。回答の"
+            "生成の system の役割の文の後・固定の部分の前に足す。空なら足さない。"
+        ),
+    )
     rag_language_pack_overrides: dict[str, dict[str, object]] = Field(
         default_factory=dict,
         description=(

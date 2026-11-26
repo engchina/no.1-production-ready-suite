@@ -249,6 +249,67 @@ def test_profile_api_rejects_retired_query_fields(
     assert fake_oracle.views == {}
 
 
+def test_extra_instructions_are_saved_trimmed_and_returned(
+    fake_oracle: FakeSearchAnswerProfileOracle,
+) -> None:
+    """追加の指示（質問に足す文・回答の指示に足す文。#5848）は config の直下に保存する。"""
+    created = client.post(
+        "/api/search-answer-profiles",
+        json={
+            "name": "プロファイル A",
+            "description": "合成の設定の検証用",
+            "config": {
+                "knowledge_base_ids": ["kb-1"],
+                "question_suffix": " 根拠の章の番号を書いてください。\n",
+                "answer_instruction": "箇条書きで答えてください。",
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    profile_id = created.json()["data"]["id"]
+    config = client.get(f"/api/search-answer-profiles/{profile_id}").json()["data"]["config"]
+    assert config["question_suffix"] == "根拠の章の番号を書いてください。"
+    assert config["answer_instruction"] == "箇条書きで答えてください。"
+    # 空に戻せる（空なら何も足さない）。
+    cleared = client.patch(
+        f"/api/search-answer-profiles/{profile_id}",
+        json={"config": {**config, "question_suffix": "", "answer_instruction": ""}},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["data"]["config"]["question_suffix"] == ""
+    assert cleared.json()["data"]["config"]["answer_instruction"] == ""
+
+
+def test_invalid_extra_instructions_are_field_errors_and_not_saved(
+    fake_oracle: FakeSearchAnswerProfileOracle,
+) -> None:
+    """使えない文字列・上限を超えた文は、欄に結び付く検証エラー（422）にして保存しない（#5848）。"""
+    from rag_engine.generation.answer_models import QUESTION_METADATA_SEPARATORS
+
+    separator = QUESTION_METADATA_SEPARATORS[0]
+    resp = client.post(
+        "/api/search-answer-profiles",
+        json={
+            "name": "プロファイル A",
+            "description": "合成の設定の検証用",
+            "config": {
+                "knowledge_base_ids": ["kb-1"],
+                "question_suffix": f"合成の文\n{separator}",
+                "answer_instruction": "あ" * 2001,
+            },
+        },
+    )
+    assert resp.status_code == 422, resp.text
+    errors = {item["pointer"]: item["message"] for item in resp.json()["problem"]["field_errors"]}
+    assert errors == {
+        "/config/question_suffix": (
+            f"質問に足す文に「{separator}」は使えません。この文字列を除いてください。"
+        ),
+        "/config/answer_instruction": "回答の指示に足す文は 2,000 文字以内で入力してください。",
+    }
+    assert fake_oracle.views == {}
+
+
 def test_list_search_answer_profiles(fake_oracle: FakeSearchAnswerProfileOracle) -> None:
     """作成した検索・回答プロファイルを一覧・検索できる。"""
     client.post(

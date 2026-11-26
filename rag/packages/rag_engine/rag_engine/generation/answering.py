@@ -84,6 +84,7 @@ from rag_engine.generation.answer_models import (
     _normalize_text,
     extract_original_question,
     merge_answer_use,
+    with_question_suffix,
 )
 from rag_engine.generation.answer_payload import (
     _answer_record_identity_keys,
@@ -1983,7 +1984,8 @@ def synthesize_grounded_answer(
         failed_batches: list[dict[str, Any]] = []
         try:
             generation_system = grounded.generation_system_prompt(
-                assume_unconfirmed=runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed
+                assume_unconfirmed=runtime_knowledge is not None and runtime_knowledge.assume_unconfirmed,
+                answer_instruction=settings.answer_instruction,
             )
             selecting_evidence = True
 
@@ -2054,6 +2056,7 @@ def synthesize_grounded_answer(
                     confirmed_premises=settings.confirmed_premises,
                     confirmed_premise_sources=settings.confirmed_premise_sources,
                     guide_task_scope=runtime_knowledge.guide_task_scope if runtime_knowledge else (),
+                    answer_instruction=settings.answer_instruction,
                 )
             if batch_calls := (input_diagnostic.get("batch_count", 0) + input_diagnostic.get("summary_calls", 0)):
                 current.timing["batch_reading_calls"] = batch_calls
@@ -2866,6 +2869,8 @@ def _format_classification_filter(classification_filter: ClassificationFilter) -
 
 
 TERM_SEARCH_STEP = "用語・同義語による検索文の追加"
+# 検索・回答プロファイルの「質問に足す文」を質問に足す工程（#5848）。足す文があるときだけ、用語・同義語の照合の後に出す。
+QUESTION_SUFFIX_STEP = "質問に足す文の追加"
 TERM_ANSWER_STEP = "回答生成での用語・同義語の使用"
 
 
@@ -3362,6 +3367,21 @@ def answer_question_result(
     runtime_knowledge = _prepare_term_context(runtime_knowledge, settings)
     expansion = base_expansion
 
+    # 検索・回答プロファイルの「質問に足す文」（#5848）。用語・同義語の照合は利用者の質問で済ませ、ここから後の検索と
+    # 回答の生成・引用の確認は足した後の文を質問にする。記録に残す質問（``expansion.original_question``）は変えない。
+    question_suffix = settings.question_suffix
+    if question_suffix:
+        with _execution_step(
+            QUESTION_SUFFIX_STEP,
+            "検索・回答プロファイルの「質問に足す文」を質問の末尾に足し、この後の検索と回答に使います。",
+        ) as step:
+            step.input({"検索対象の質問": normalized_question, "回答対象の質問": request_text, "足す文": question_suffix})
+            normalized_question = with_question_suffix(normalized_question, question_suffix)
+            request_text = with_question_suffix(request_text, question_suffix)
+            step.field("足した文", question_suffix)
+            step.result("質問の末尾に足しました")
+            step.output({"検索対象の質問": normalized_question, "回答対象の質問": request_text})
+
     with _execution_step(
         "検索文をまとめ、検索語を作る",
         "意味の近さ（ベクトル）は原質問で、語の一致（全文）は原質問に用語・同義語などの語を足した文で 1 回検索します。"
@@ -3376,7 +3396,10 @@ def answer_question_result(
         text_query = vector_query
         if expanded and not original_query_only:
             # 原質問と同じ形（NFKC・制御文字の除去・空白の正規化）にする。
-            text_query = (_merge_retrieval_queries(runtime_knowledge.expanded_question) or (vector_query,))[0]
+            # 用語・同義語を足した文（利用者の質問で照合した）の後ろにも、質問に足す文を足す（#5848）。
+            text_query = (
+                _merge_retrieval_queries(with_question_suffix(runtime_knowledge.expanded_question, question_suffix)) or (vector_query,)
+            )[0]
         elif original_query_only:
             # 比較実験用。検索直前にも同じ絞り込みがあるが、ここで適用しないと記録が実際の検索と食い違う。
             step.add("      設定 RETRIEVAL_ORIGINAL_QUERY_ONLY=true のため、全文検索にも原質問だけを使います。")

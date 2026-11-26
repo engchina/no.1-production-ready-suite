@@ -46,7 +46,13 @@ def _claims_profile_override(text: str) -> list[str]:
 _MIN_CHECKED = 7
 
 # プロファイルが要求ごとに解決して入れる内部の項目(.env で決める設定ではない)。
-_PROFILE_RESOLVED_FIELDS = {"rag_language_pack_overrides", "rag_answer_contact_override"}
+_PROFILE_RESOLVED_FIELDS = {
+    "rag_language_pack_overrides",
+    "rag_answer_contact_override",
+    # 追加の指示（#5848。質問に足す文・回答の指示に足す文）。
+    "rag_question_suffix",
+    "rag_answer_instruction",
+}
 
 
 def _global_settings_fields() -> list[str]:

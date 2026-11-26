@@ -122,6 +122,15 @@ GENERATION_ROLE_PROMPT = """## Step 1: 役割を確認する
 - 答えを終える前に、事実の主張が根拠で支えられているか、完了したことと残っていることを分けているかを確かめる。
 """
 
+# 検索・回答プロファイルの「回答の指示に足す文」（#5848）があるときだけ、役割の文の後・固定の部分の前に足す Step。
+# ``{instruction}`` にその文を差し込む。固定の部分はこの後に続き、この文では変えられない。
+ANSWER_INSTRUCTION_PROMPT = """
+## Step 5: 追加の指示に従う
+次の指示は、後に続く Step の規則に反しない範囲で従う。
+
+{instruction}
+"""
+
 # 役割の文の後に必ず足す固定の部分（信頼の境界・引用の決まり・応答の欄）。入力の印・応答 schema・引用の検査と対なので
 # 編集させない。Step の番号は役割の文の続きに振り直す（``continue_prompt_steps``）。
 GENERATION_FIXED_PROMPT = """
@@ -189,14 +198,22 @@ def _reading_block(template: str, keys: set[str]) -> str:
     return "\n".join(kept) if any(_READING_LINE.match(line) for line in kept) else ""
 
 
-def generation_system_prompt(*, assume_unconfirmed: bool = False) -> str:
+def generation_system_prompt(*, assume_unconfirmed: bool = False, answer_instruction: str = "") -> str:
     """生成のシステムの文。編集できる役割の文（保存済みまたは既定）に、固定の部分を必ず足す。
 
     ``assume_unconfirmed`` は、未回答の確認事項を前提として示して答える生成か（その扱いの Step も足す）。
+    ``answer_instruction`` は検索・回答プロファイルの「回答の指示に足す文」（#5848）。空でなければ、役割の文の後・
+    固定の部分の前に 1 つの Step として足す（固定の部分の文と並びは変えない）。
     """
     system = resolve_prompt("generation.role", GENERATION_ROLE_PROMPT).rstrip() + "\n"
-    for fixed in (GENERATION_FIXED_PROMPT, *([ASSUMPTION_SYSTEM_PROMPT] if assume_unconfirmed else ())):
-        system += continue_prompt_steps(system, fixed)
+    instruction = answer_instruction.strip()
+    parts = (
+        *([ANSWER_INSTRUCTION_PROMPT.replace("{instruction}", instruction)] if instruction else ()),
+        GENERATION_FIXED_PROMPT,
+        *([ASSUMPTION_SYSTEM_PROMPT] if assume_unconfirmed else ()),
+    )
+    for part in parts:
+        system += continue_prompt_steps(system, part)
     return render_language_placeholder(system)
 
 
@@ -2578,6 +2595,7 @@ def run_round(
     assume_unconfirmed: bool = False,
     confirmed_premises: Sequence[tuple[str, str]] = (),
     confirmed_premise_sources: Sequence[tuple[str, str, str]] = (),
+    answer_instruction: str = "",
 ) -> Round:
     """生成を 1 回行い、引用の実在と形式だけを確かめる。
 
@@ -2600,7 +2618,7 @@ def run_round(
         return raw_parse_text(system, user, call_settings, schema, **options)
 
     parse_text = bounded_parse_text
-    generation_system = generation_system_prompt(assume_unconfirmed=assume_unconfirmed)
+    generation_system = generation_system_prompt(assume_unconfirmed=assume_unconfirmed, answer_instruction=answer_instruction)
     generation_outputs: list[dict[str, Any]] = []
     cached_views = _CITATION_VIEWS.get() or {}
     input_views = tuple(cached[1] for span in spans if (cached := cached_views.get(id(span))) is not None and cached[0] is span)
