@@ -41,10 +41,17 @@ def _code_prompts() -> tuple[tuple[str, str], ...]:
     return tuple(prompts)
 
 
-def answer_prompt_version(overrides: Mapping[str, str]) -> str:
-    """回答フローが使うプロンプトの版（``prompt-`` + 内容の sha256 の先頭 16 文字）。"""
+def answer_prompt_version(overrides: Mapping[str, str], *, answer_instruction: str = "") -> str:
+    """回答フローが使うプロンプトの版（``prompt-`` + 内容の sha256 の先頭 16 文字）。
+
+    ``answer_instruction`` は検索・回答プロファイルの「回答の指示に足す文」（#5848）。回答の生成の
+    system に足す文なので、空でなければ版に入れる（空なら足さない回答と同じ版）。
+    """
     editable = {key: overrides.get(key) or default_prompt(key) for key in EDITABLE_PROMPT_KEYS}
-    digest = _sha256({"editable": editable, "code": dict(_code_prompts())})
+    payload: dict[str, object] = {"editable": editable, "code": dict(_code_prompts())}
+    if answer_instruction:
+        payload["answer_instruction"] = answer_instruction
+    digest = _sha256(payload)
     return PROMPT_VERSION_PREFIX + digest[:_PROMPT_VERSION_CHARS]
 
 

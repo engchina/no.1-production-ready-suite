@@ -45,6 +45,7 @@ const ANSWER_STEP_NAME: Readonly<Record<string, I18nKey>> = {
   "用語・同義語の確認": "answer.step.terms",
   "検索文をまとめ、検索語を作る": "answer.step.decideQueries",
   "用語・同義語による検索文の追加": "settings.answering.runtimeTermsSearch",
+  "質問に足す文の追加": "answer.step.questionSuffix",
   "回答生成での用語・同義語の使用": "settings.answering.runtimeTermsAnswer",
   "検索文と検索語の確定": "answer.step.decideQueries",
   "回答生成フロー": "answer.step.answerFlow",

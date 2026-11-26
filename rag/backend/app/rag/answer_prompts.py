@@ -199,6 +199,9 @@ PROMPT_STAGES: tuple[PromptStage, ...] = (
             ("instruction", "rag_engine.generation.batched_evidence:SELECTION_PROMPT"),
             # system = 編集できる役割の文 + 必ず足す固定の部分（+ 未確定の前提）（#4782）。
             ("role", "rag_engine.generation.grounded:GENERATION_ROLE_PROMPT"),
+            # 検索・回答プロファイルの「回答の指示に足す文」があるときだけ、役割の文の後に足す
+            # （#5848）。
+            ("answerInstruction", "rag_engine.generation.grounded:ANSWER_INSTRUCTION_PROMPT"),
             ("fixed", "rag_engine.generation.grounded:GENERATION_FIXED_PROMPT"),
             ("assumptionSystem", "rag_engine.generation.grounded:ASSUMPTION_SYSTEM_PROMPT"),
             # user message の固定のテンプレート。

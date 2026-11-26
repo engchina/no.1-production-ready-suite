@@ -48,6 +48,14 @@ import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react
 
 import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { ContactGuidanceFieldset } from "@/components/search-answer-profiles/ContactGuidanceFieldset";
+import {
+  ANSWER_INSTRUCTION_FIELD_ID,
+  ANSWER_INSTRUCTION_MAX_CHARS,
+  ExtraInstructionsFieldset,
+  QUESTION_SUFFIX_FIELD_ID,
+  QUESTION_SUFFIX_MAX_CHARS,
+  extraInstructionLengthError,
+} from "@/components/search-answer-profiles/ExtraInstructionsFieldset";
 import { EmptyState } from "@/components/StateViews";
 import {
   KnowledgeBaseScopePicker,
@@ -181,6 +189,8 @@ function normalizeSearchAnswerProfileConfig(config: SearchAnswerProfileConfig): 
     clarification_policy: config.clarification_policy ?? "confirm",
     language_pack: config.language_pack ?? {},
     contact_override: config.contact_override ?? "",
+    question_suffix: config.question_suffix ?? "",
+    answer_instruction: config.answer_instruction ?? "",
   };
 }
 
@@ -198,6 +208,8 @@ function emptyConfig(): SearchAnswerProfileConfig {
     clarification_policy: "confirm",
     language_pack: {},
     contact_override: "",
+    question_suffix: "",
+    answer_instruction: "",
   };
 }
 
@@ -744,6 +756,27 @@ function SearchAnswerProfileEditor({
       ? t("searchAnswerProfiles.knowledgeBasesRequired")
       : null;
 
+  // 追加の指示（#5848）。上限を超えた欄は入力のたびに欄の下で知らせる。保存で返った欄のエラー（使えない
+  // 文字列など）は、その値を直すまで欄の下に出す。
+  const questionSuffix = config.question_suffix ?? "";
+  const answerInstruction = config.answer_instruction ?? "";
+  const submittedConfig = mode === "edit" ? update.variables?.payload.config : create.variables?.config;
+  const savedFieldError = (field: "question_suffix" | "answer_instruction") => {
+    const error = saveMutation.error;
+    if (!(error instanceof ApiError) || (submittedConfig?.[field] ?? "") !== (config[field] ?? "")) return null;
+    return error.fieldErrors.find((item) => item.pointer.endsWith(`/${field}`))?.message ?? null;
+  };
+  const questionSuffixLengthError = extraInstructionLengthError(
+    t("searchAnswerProfiles.extraInstructions.questionSuffix"),
+    questionSuffix,
+    QUESTION_SUFFIX_MAX_CHARS
+  );
+  const answerInstructionLengthError = extraInstructionLengthError(
+    t("searchAnswerProfiles.extraInstructions.answerInstruction"),
+    answerInstruction,
+    ANSWER_INSTRUCTION_MAX_CHARS
+  );
+
   const updateQuery = (patch: Partial<KnowledgeBaseQueryConfig>) =>
     setConfig((current) => ({ ...current, query: { ...current.query, ...patch } }));
 
@@ -755,6 +788,8 @@ function SearchAnswerProfileEditor({
     const fieldErrors = [
       ["search-answer-profile-name", validateSearchAnswerProfileName(name, isDefault)],
       ["search-answer-profile-description", validateSearchAnswerProfileDescription(description)],
+      [QUESTION_SUFFIX_FIELD_ID, questionSuffixLengthError],
+      [ANSWER_INSTRUCTION_FIELD_ID, answerInstructionLengthError],
     ] as const;
     if (firstInvalidFieldId(fieldErrors)) {
       focusFirstInvalidField(fieldErrors);
@@ -998,6 +1033,15 @@ function SearchAnswerProfileEditor({
                   </div>
                 </div>
               </fieldset>
+              {/* 追加の指示（#5848。すべての質問に足す文と、回答の書き方の指示に足す文）。 */}
+              <ExtraInstructionsFieldset
+                questionSuffix={questionSuffix}
+                answerInstruction={answerInstruction}
+                questionSuffixError={questionSuffixLengthError ?? savedFieldError("question_suffix")}
+                answerInstructionError={answerInstructionLengthError ?? savedFieldError("answer_instruction")}
+                disabled={locked}
+                onChange={(patch) => setConfig((current) => ({ ...current, ...patch }))}
+              />
               {/* 回答前の確認（#1839。3 製品で業務の単位に置く設定）。ルールごとの確認は下の「プロファイルの知識」。 */}
               <fieldset
                 className="space-y-3 rounded-lg border border-border p-4"

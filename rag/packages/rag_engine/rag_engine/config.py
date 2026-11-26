@@ -353,6 +353,13 @@ class Settings:
     # backendが利用者の確定した回答・質問から選別した前提。設定保存や環境変数からは読み込まない。
     confirmed_premises: tuple[tuple[str, str], ...] = ()
     confirmed_premise_sources: tuple[tuple[str, str, str], ...] = ()
+    # 検索・回答プロファイルの「質問に足す文」（#5848）。backend が要求ごとに渡す。用語・同義語の照合の後に質問の末尾へ
+    # 足し、以後の検索（ベクトル・全文・rerank・補いの検索・章節の拡張）と回答の生成・引用の確認の質問にする
+    # （``answer_question_result``）。設定保存や環境変数からは読み込まない。
+    question_suffix: str = ""
+    # 検索・回答プロファイルの「回答の指示に足す文」（#5848）。backend が要求ごとに渡し、回答の生成の system の
+    # 役割の文の後・固定の部分の前に足す（``grounded.generation_system_prompt``）。設定保存や環境変数からは読み込まない。
+    answer_instruction: str = ""
     # 業務ガイドの照合で分からなかった選択の条件（#2404）。(条件の id, 名前, ((選択肢, (言い換え, ...)), ...))。
     # 選択肢が項目の種類に対応する条件だけを、根拠の画面の図の項目の種類で決める（generation.form_field_kinds）。
     evidence_conditions: tuple[tuple[str, str, tuple[tuple[str, tuple[str, ...]], ...]], ...] = ()

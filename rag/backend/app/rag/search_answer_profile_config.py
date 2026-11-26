@@ -28,6 +28,7 @@ from pr_system_settings.answer_notice import (
     normalize_notice_contact,
 )
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from rag_engine.generation.answer_models import QUESTION_METADATA_SEPARATORS
 from rag_parser_core.language import FIELD_SPECS, LanguagePackError, builtin_pack, resolve
 
 from app.config import Settings, enterprise_ai_model_catalog
@@ -42,6 +43,9 @@ SEARCH_ANSWER_PROFILE_CONFIG_VERSION = 1
 MAX_SEARCH_ANSWER_PROFILE_KNOWLEDGE_BASES = 200
 # 窓口の上書きの長さの上限（システム設定の窓口と同じ。#2400）。
 CONTACT_OVERRIDE_MAX_CHARS = ANSWER_NOTICE_CONTACT_MAX_CHARS
+# 追加の指示の長さの上限（#5848）。画面の入力の上限（frontend の同名の定数）と同じ値にする。
+QUESTION_SUFFIX_MAX_CHARS = 500
+ANSWER_INSTRUCTION_MAX_CHARS = 2000
 
 
 # プロファイルで上書きできる言語資源の節(#4784)。検索と回答の要求(検索・チャット・MCP)の間に
@@ -113,6 +117,42 @@ class SearchAnswerProfileConfig(BaseModel):
         normalized = normalize_notice_contact(value or "")
         if len(normalized) > CONTACT_OVERRIDE_MAX_CHARS:
             raise ValueError(f"窓口は {CONTACT_OVERRIDE_MAX_CHARS} 字以内で入力してください。")
+        return normalized
+
+    # 追加の指示（#5848）。どちらも空なら何も足さない。
+    # 質問に足す文: 用語・同義語の照合の後に、質問の末尾へ改行 1 つを挟んで足す（その後の検索と
+    # 回答の生成に使う。入力の安全チェック・履歴による補完・雑談の判定・業務ガイドと登録済みQ&Aの
+    # 照合・用語と同義語の照合は利用者の質問のまま）。
+    question_suffix: str = Field(default="", max_length=QUESTION_SUFFIX_MAX_CHARS * 2)
+    # 回答の指示に足す文: 回答の生成の system の役割の文の後・固定の部分の前に足す（検索には
+    # 使わない）。
+    answer_instruction: str = Field(default="", max_length=ANSWER_INSTRUCTION_MAX_CHARS * 2)
+
+    @field_validator("question_suffix")
+    @classmethod
+    def _validate_question_suffix(cls, value: str) -> str:
+        normalized = _normalized_instruction(value)
+        if len(normalized) > QUESTION_SUFFIX_MAX_CHARS:
+            raise ValueError(
+                f"質問に足す文は {QUESTION_SUFFIX_MAX_CHARS} 文字以内で入力してください。"
+            )
+        # 回答の処理が質問の文から元の質問を切り出す区切り（``extract_original_question``）と同じ
+        # 文字列は、質問として渡す文に書かせない（切り出しを通る経路で、区切りから後ろが質問から
+        # 落ちる）。一覧は rag_engine の定義を使う。
+        for separator in QUESTION_METADATA_SEPARATORS:
+            if separator in normalized:
+                raise ValueError(
+                    f"質問に足す文に「{separator}」は使えません。この文字列を除いてください。"
+                )
+        return normalized
+
+    @field_validator("answer_instruction")
+    @classmethod
+    def _validate_answer_instruction(cls, value: str) -> str:
+        normalized = _normalized_instruction(value)
+        if len(normalized) > ANSWER_INSTRUCTION_MAX_CHARS:
+            limit = f"{ANSWER_INSTRUCTION_MAX_CHARS:,}"
+            raise ValueError(f"回答の指示に足す文は {limit} 文字以内で入力してください。")
         return normalized
 
     @field_validator("language_pack")
@@ -216,7 +256,22 @@ def resolve_search_answer_profile_settings(
                 "rag_answer_contact_override": config.contact_override,
             }
         )
+    if config.question_suffix or config.answer_instruction:
+        # 追加の指示（#5848）。回答エンジンが用語・同義語の照合の後に質問へ足し、回答の生成の
+        # system に足す。
+        settings = settings.model_copy(
+            update={
+                "rag_question_suffix": config.question_suffix,
+                "rag_answer_instruction": config.answer_instruction,
+            }
+        )
+        applied = True
     return settings, applied
+
+
+def _normalized_instruction(value: str) -> str:
+    """追加の指示の保存の形（改行を ``\n`` にそろえ、前後の空白を落とす）。"""
+    return (value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def _unique_clean_ids(values: Sequence[str]) -> list[str]:

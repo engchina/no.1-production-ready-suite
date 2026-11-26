@@ -53,6 +53,18 @@ LEGACY_QUESTION_METADATA_SEPARATORS = (
     "--- 問い合わせ条件 ---",
 )
 
+# ``extract_original_question`` が質問の表示から元の質問を切り出す区切りの一覧（この文字列から後ろを捨てる）。
+# 質問に足す文の保存の検証（backend）もこの一覧を使う。
+QUESTION_METADATA_SEPARATORS = (
+    QUESTION_DISPLAY_METADATA_SEPARATOR,
+    QUERY_EXPANSION_SEPARATOR,
+    QUESTION_TEXT_SEARCH_SEPARATOR,
+    QUESTION_PLAN_SEPARATOR,
+    RUNTIME_KNOWLEDGE_SEPARATOR,
+    INQUIRY_CONDITIONS_SEPARATOR,
+    *LEGACY_QUESTION_METADATA_SEPARATORS,
+)
+
 # 回答の流れは 1 本（検索して根拠で回答する）。回答の記録の answer_flow の値（FAQ・業務ガイドの経路と区別する）。
 STANDARD_ANSWER_FLOW = "standard_rag"
 
@@ -271,18 +283,19 @@ class GroundedAnswer:
 def extract_original_question(question: Any) -> str:
     """再実行時に表示文字列から元の質問だけを取り出します。"""
     text = str(question or "").replace("\r\n", "\n").strip()
-    for separator in (
-        QUESTION_DISPLAY_METADATA_SEPARATOR,
-        QUERY_EXPANSION_SEPARATOR,
-        QUESTION_TEXT_SEARCH_SEPARATOR,
-        QUESTION_PLAN_SEPARATOR,
-        RUNTIME_KNOWLEDGE_SEPARATOR,
-        INQUIRY_CONDITIONS_SEPARATOR,
-        *LEGACY_QUESTION_METADATA_SEPARATORS,
-    ):
+    for separator in QUESTION_METADATA_SEPARATORS:
         if separator in text:
             text = text.split(separator, 1)[0].rstrip()
     return text.strip()
+
+
+def with_question_suffix(question: str, suffix: str) -> str:
+    """質問の末尾に、改行 1 つを挟んで検索・回答プロファイルの「質問に足す文」を足す（#5848）。空なら質問のまま。
+
+    足し方はここだけに置く。回答の流れ（``answer_question_result``）が用語・同義語の照合の後に足し、backend は同じ文を
+    自分の側の検索（Wiki・検索拡張・会話の添付の根拠の選択）に渡すときに使う。
+    """
+    return f"{question}\n{suffix}" if suffix else question
 
 
 def retrieval_scope_label(scope_id: str) -> str:

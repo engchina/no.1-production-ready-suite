@@ -102,8 +102,10 @@ def test_only_retired_fields_are_removed_and_kept_values_do_not_change() -> None
     config = SearchAnswerProfileConfig.model_validate(_profiles(db)[0])
     assert config.model_dump(mode="json") == {
         **_KEPT_PROFILE,
-        # 後で足した欄（#4941）は既定のまま読める。
+        # 後で足した欄（#4941・#5848）は既定のまま読める。
         "query": {**_KEPT_PROFILE["query"], "wiki_search_enabled": None},
+        "question_suffix": "",
+        "answer_instruction": "",
     }
     restored = parse_adapter_config(db.tables["RAG_KNOWLEDGE_BASES"][0]["retrieval_config"])
     assert restored.ingestion.chunk_size == 1200

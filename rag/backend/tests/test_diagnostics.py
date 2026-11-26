@@ -183,6 +183,9 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         "rag_answer_as_of",
         # 要求ごとにプロファイルから解決する値。内容の版は manifest の profiles に残る。
         "rag_answer_contact_override",
+        # 追加の指示（#5848）。値は回答の診断（question_suffix・answer_instruction）にも残る。
+        "rag_question_suffix",
+        "rag_answer_instruction",
         "rag_domain_keywords",
         "rag_guide_preview",
         "rag_language_pack_overrides",
