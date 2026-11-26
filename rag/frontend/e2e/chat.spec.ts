@@ -2875,10 +2875,13 @@ for (const compare of [false, true]) {
     await expect(evidence).toBeInViewport({ ratio: 1 });
     await expect(feedback).toBeInViewport({ ratio: 1 });
     await evidence.click();
-    const cards = last.getByTestId("answer-citations").getByTestId("evidence-card");
-    await expect(cards).toHaveCount(118);
-    await cards.last().scrollIntoViewIfNeeded();
-    await expect(cards.last()).toBeInViewport();
+    const list = last.getByTestId("answer-citations").getByRole("list");
+    await expect(list.locator('[aria-posinset="1"]')).toHaveAttribute("aria-setsize", "118");
+    await list.hover();
+    await page.mouse.wheel(0, 50_000);
+    const lastCard = list.locator('[aria-posinset="118"]').getByTestId("evidence-card");
+    await lastCard.scrollIntoViewIfNeeded();
+    await expect(lastCard).toBeInViewport();
     await log.hover();
     // ポインタの下が根拠の一覧（一定の高さの中のスクロール）なら、一覧の末尾の後で会話の欄へ続けて動く（スクロールの連鎖）。
     await page.mouse.wheel(0, 20_000);

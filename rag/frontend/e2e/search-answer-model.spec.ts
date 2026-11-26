@@ -30,7 +30,7 @@ import { firstAnswer, nextAnswer, originalHits, reviewSnapshots } from "../../..
 
 const ANSWER = "合成の画面 A の下に保存のボタンがあります。";
 
-async function mockApi(page: Page, attachedImages: number, review=false) {
+async function mockApi(page: Page, attachedImages: number, review = false, citations = review ? originalHits : []) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (route) => {
@@ -68,7 +68,7 @@ async function mockApi(page: Page, attachedImages: number, review=false) {
           },
         })}\n\n`,
         `event: delta\ndata: ${JSON.stringify({ text: review ? firstAnswer : ANSWER })}\n\n`,
-        `event: citations\ndata: ${JSON.stringify(review ? originalHits : [])}\n\n`,
+        `event: citations\ndata: ${JSON.stringify(citations)}\n\n`,
         `event: done\ndata: ${JSON.stringify({ trace_id: "trace-model" })}\n\n`,
       ].join(""),
     })
@@ -111,6 +111,35 @@ test.describe("RAG 検索の回答の見出しと段落の印の節", { tag: "@r
   });
 });
 
+test("多数の根拠は画面の近くのカードだけを描き、最後の原文から操作元へ戻れる", { tag: "@responsive" }, async ({ page }) => {
+  const citations = Array.from({ length: 4400 }, (_, index) => ({
+    ...originalHits[0],
+    chunk_id: `doc-a:${index}`,
+    text: `合成の根拠 ${index + 1}`,
+  }));
+  await mockApi(page, 0, false, citations);
+  await ask(page);
+  const evidence = page.getByTestId("answer-citations");
+  await evidence.locator("summary").click();
+  const list = evidence.getByRole("list");
+  const cards = list.getByTestId("evidence-card");
+  await expect(cards.first()).toBeVisible();
+  expect(await cards.count()).toBeLessThan(20);
+  await expect(list.locator('[aria-posinset="1"]')).toHaveAttribute("aria-setsize", "4400");
+  await list.focus();
+  await page.keyboard.press("End");
+  const last = list.locator('[aria-posinset="4400"]');
+  await expect(last.getByTestId("citation-text")).toHaveText("合成の根拠 4400");
+  const source = last.getByRole("button", { name: /根拠を表示/ });
+  await source.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(source).toBeFocused();
+  await list.focus();
+  await page.keyboard.press("Home");
+  await expect(list.locator('[aria-posinset="1"]')).toBeInViewport();
+});
+
 test("検索の回答で資料を選び、新候補を確認してから再回答する", {tag:"@responsive"}, async ({page}, testInfo) => {
   await mockApi(page,0,true);
   const states=reviewSnapshots("trace-model","question");
@@ -144,9 +173,13 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   const list = dialog.getByRole("region", { name: "回答に使う資料を選ぶ" });
   const listHeight = await list.evaluate(element => element.clientHeight);
   const search = dialog.getByRole("searchbox");
+  await expect(search).toHaveAccessibleName("ファイル名で絞り込み");
+  await expect(dialog.getByRole("heading", { name: "AI に渡した資料", exact: true })).toBeVisible();
+  await expect(dialog.getByRole("status")).toHaveText("全 2 件 · 選択 1 件 今回除外 1 件 · 累計除外 1 件");
   await search.fill("ガイド");
   await expect(dialog.getByRole("checkbox")).toHaveCount(1);
-  const showAll = dialog.getByRole("button", { name: "全件表示（除外予定 1 件が非表示）" });
+  await expect(dialog.getByRole("status")).toHaveText("表示 1/2 件 · 選択 1 件 今回除外 1 件（うち非表示 1 件） · 累計除外 1 件");
+  const showAll = dialog.getByRole("button", { name: "全件表示", exact: true });
   await expect(showAll).toBeVisible();
   expect(await list.evaluate(element => element.clientHeight)).toBe(listHeight);
   await showAll.click();
@@ -157,7 +190,7 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   await expect(dialog.getByText("設定画面を開きます。",{exact:true})).toBeVisible();
   if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-source-"+testInfo.project.name+".png"});
   await dialog.getByRole("button",{name:"戻る",exact:true}).click();
-  await dialog.getByRole("button",{name:/選択した1件を残して/}).click();
+  await dialog.getByRole("button",{name:"選んだ資料を残して、ほかの候補を探す"}).click();
   await expect(dialog.getByRole("checkbox",{name:"確認手順 C.pdf"})).not.toBeChecked();
   await expect(page.getByText(nextAnswer,{exact:true})).toHaveCount(0);
   await dialog.getByRole("checkbox",{name:"確認手順 C.pdf"}).check();
