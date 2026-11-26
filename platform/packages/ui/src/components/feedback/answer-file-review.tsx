@@ -284,19 +284,9 @@ export function AnswerFileReview({
             <div className="space-y-2">
               {errorView}
               {task && !selectedFile && !manage && !reset && (
-                <>
-                  <p className="text-sm" aria-live="polite">
-                    {t("fileReview.counts", { keep: checked.length, remove: dropping.length, total })}
-                  </p>
-                  {hidden > 0 && (
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      {t("fileReview.hidden", { count: hidden })}
-                      <Button variant="ghost" size="sm" onClick={() => setQuery("")}>
-                        {t("fileReview.all")}
-                      </Button>
-                    </div>
-                  )}
-                </>
+                <p className="text-sm" aria-live="polite">
+                  {t("fileReview.counts", { keep: checked.length, remove: dropping.length, total })}
+                </p>
               )}
               <div className="flex flex-wrap items-center gap-2">
                 {task && !selectedFile && !manage && !reset && (
@@ -373,9 +363,16 @@ export function AnswerFileReview({
                 aria-controls={selectionId}
                 debounceMs={0}
               />
-              <p aria-live="polite" className="text-xs text-fg-muted">
-                {t("fileReview.showing", { shown: matching.length, total: groups.length })}
-              </p>
+              <div className="flex h-[var(--button-height-sm)] shrink-0 items-center justify-between gap-1">
+                <p aria-live="polite" className="shrink-0 text-xs text-fg-muted">
+                  {t("fileReview.showing", { shown: matching.length, total: groups.length })}
+                </p>
+                {hidden > 0 && (
+                  <Button variant="ghost" size="sm" onClick={() => setQuery("")}>
+                    {t("fileReview.showHidden", { count: hidden })}
+                  </Button>
+                )}
+              </div>
               <div
                 id={selectionId}
                 ref={list}

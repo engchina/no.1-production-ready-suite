@@ -69,7 +69,7 @@ export function FeedbackControls({
         change={(action) =>
           request<FileReviewState>(
             path,
-            { method: "POST", body: JSON.stringify(action) },
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action) },
             { timeoutMs: ANSWER_GENERATION_TIMEOUT_MS },
           )
         }

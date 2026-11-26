@@ -125,6 +125,7 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   });
   await page.route("**/api/search/answers/trace-model/review", route=>{
     if(route.request().method()==="POST"){
+      expect(route.request().headers()["content-type"]).toContain("application/json");
       const command=route.request().postDataJSON();
       if(command.action==="discover"){
         expect(command.selected).toEqual(["doc-a"]); state=states.pending;
@@ -140,9 +141,18 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   const dialog=page.getByRole("dialog");
   await dialog.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
   await dialog.getByRole("checkbox",{name:"操作ガイド A.pdf"}).check();
-  await dialog.getByRole("searchbox").fill("ガイド");
+  const list = dialog.getByRole("region", { name: "回答に使う資料を選ぶ" });
+  const listHeight = await list.evaluate(element => element.clientHeight);
+  const search = dialog.getByRole("searchbox");
+  await search.fill("ガイド");
   await expect(dialog.getByRole("checkbox")).toHaveCount(1);
-  await expect(dialog.getByText(/絞り込みで非表示/)).toBeVisible();
+  const showAll = dialog.getByRole("button", { name: "全件表示（除外予定 1 件が非表示）" });
+  await expect(showAll).toBeVisible();
+  expect(await list.evaluate(element => element.clientHeight)).toBe(listHeight);
+  await showAll.click();
+  await expect(dialog.getByRole("checkbox")).toHaveCount(2);
+  expect(await list.evaluate(element => element.clientHeight)).toBe(listHeight);
+  await search.fill("ガイド");
   await dialog.getByRole("button",{name:"原文",exact:true}).click();
   await expect(dialog.getByText("設定画面を開きます。",{exact:true})).toBeVisible();
   if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-source-"+testInfo.project.name+".png"});
