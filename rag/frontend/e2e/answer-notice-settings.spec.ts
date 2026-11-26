@@ -95,6 +95,24 @@ for (const viewport of [
   });
 }
 
+test("本文と窓口は普通の欄なので、広い画面でもフォームの最大幅（60rem）で止める（#5851）", async ({ page }) => {
+  await mockAnswerNotice(page);
+  for (const width of [1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/settings/answer-notice");
+    for (const field of [page.getByLabel("本文"), page.getByRole("textbox", { name: "窓口", exact: true })]) {
+      await expect(field).toBeVisible();
+      const metrics = await field.evaluate((node) => ({
+        width: node.getBoundingClientRect().width,
+        formMax: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 60,
+        grid: node.closest("[data-form-grid]")?.getAttribute("data-form-grid-width") ?? null,
+      }));
+      expect(metrics.grid, `${width}px`).toBe("form");
+      expect(metrics.width, `${width}px`).toBeLessThanOrEqual(metrics.formMax + 1);
+    }
+  }
+});
+
 test("無効にすると表示の確認に注意書きを出さず、無効を保存する", async ({ page }) => {
   const saved = await mockAnswerNotice(page);
   await page.goto("/settings/answer-notice");

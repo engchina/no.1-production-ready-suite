@@ -8556,6 +8556,10 @@ test("Select AI の今回だけの生成条件を job に渡し、reset で消�
   await roleDisclosure.click();
   await expect(roleDisclosure).toHaveAttribute("aria-expanded", "true");
   await page.getByLabel("アシスタントロール").fill("CFO 向け財務 SQL アシスタント");
+  // Select AI への指示の文は、プロンプトの編集と同じ全幅の FormGrid に置く（#4847・#5851）。
+  for (const label of ["今回の追加条件", "アシスタントロール"]) {
+    expect(await page.getByLabel(label).evaluate((node) => node.closest("[data-form-grid]")?.getAttribute("data-form-grid-width")), label).toBe("full");
+  }
   await expect(disclosure.getByText("条件あり")).toBeVisible();
   await nl2sqlQuestionInput(page).fill("前四半期の売上を確認したい");
   await page.getByRole("button", { name: "SQL を生成して実行" }).click();

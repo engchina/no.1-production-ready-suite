@@ -1,4 +1,4 @@
-import { Card, CardHeader, CardTitle, CardDescription, CardContent, Disclosure, TextareaField } from "@production-ready/ui";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, Disclosure, FormGrid, TextareaField } from "@production-ready/ui";
 import { FileText } from "lucide-react";
 
 import type { AnswerPromptStage } from "@/lib/api";
@@ -56,15 +56,19 @@ export function AnswerPromptStages({
                     key={part.id}
                     promptKey={part.prompt_key}
                     fieldLabel={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
-                  /> : <TextareaField
-                    key={part.id}
-                    id={`answer-prompt-${stage.id}-${part.id}`}
-                    label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
-                    value={part.content}
-                    readOnly
-                    monospace
-                    rows={12}
-                  />
+                  /> : (
+                    // 読み取り専用の指示の文も、編集の欄と同じく区画の全幅を使う（#4847・#5851）。
+                    <FormGrid key={part.id} columns={1} width="full">
+                      <TextareaField
+                        id={`answer-prompt-${stage.id}-${part.id}`}
+                        label={t(`settings.answerPrompts.part.${part.id}` as I18nKey)}
+                        value={part.content}
+                        readOnly
+                        monospace
+                        rows={12}
+                      />
+                    </FormGrid>
+                  )
                 ))}
               </Disclosure>
             ))}

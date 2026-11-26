@@ -13,6 +13,7 @@ import {
   FormSkeleton,
   FormStatus,
   PageBody,
+  FormGrid,
   TextareaField,
   TimedLoadingState,
   useConfirm,
@@ -239,14 +240,17 @@ function PreviewCard({ data, texts }: { data: LanguagePackData; texts: LanguageP
         <CardDescription>{t("settings.language.preview.description")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <TextareaField
-          id="language-preview-text"
-          label={t("settings.language.preview.text")}
-          value={text}
-          rows={4}
-          width="full"
-          onValueChange={setText}
-        />
+        {/* 例の文は普通の欄なので、フォームの最大幅（60rem）で止める（#1891・#5851）。 */}
+        <FormGrid columns={1}>
+          <TextareaField
+            id="language-preview-text"
+            label={t("settings.language.preview.text")}
+            value={text}
+            rows={4}
+            width="full"
+            onValueChange={setText}
+          />
+        </FormGrid>
         <div>
           <Button
             icon={FlaskConical}
