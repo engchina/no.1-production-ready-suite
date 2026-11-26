@@ -1,3 +1,4 @@
+import { mockUploadPolicy } from "./_upload-policy";
 import { expect, test, type Page, type Route } from "./fixtures/test";
 
 import {
@@ -74,16 +75,19 @@ async function mockUploadPage(
   {
     maxUploadBytes = 200 * 1024 * 1024,
     knowledgeBaseCount = 1,
+    allowedContentTypes,
     knowledgeBases,
     ingestionJobs,
   }: {
     maxUploadBytes?: number;
     knowledgeBaseCount?: number;
+    allowedContentTypes?: string[];
     knowledgeBases?: (route: Route) => Promise<void>;
     ingestionJobs?: (route: Route) => Promise<void>;
   } = {}
 ) {
   await mockDatabaseReady(page);
+  await mockUploadPolicy(page, allowedContentTypes);
   await page.route("**/api/settings/upload-storage", (route) =>
     route.fulfill({
       json: apiEnvelope({
@@ -749,3 +753,20 @@ test(
     await expect.poll(() => requests).toEqual(["memo.docx"]);
   }
 );
+
+test("MIME 設定で制限したファイルは送信前に理由を示す @responsive", async ({ page }) => {
+  await mockLocalAuth(page);
+  await mockUploadPage(page, { allowedContentTypes: ["text/plain"] });
+  await page.goto("/upload");
+  await expect(page.getByText("この環境で許可されている MIME タイプ: text/plain")).toBeVisible();
+  const chooser = page.locator('input[type="file"]').first();
+  await expect(chooser).toHaveAttribute("accept", "text/plain");
+  await chooser.setInputFiles([
+    { name: "sample.json", mimeType: "application/json", buffer: Buffer.from("{}") },
+    { name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("sample") },
+  ]);
+  const selection = page.getByTestId("upload-selection");
+  await expect(selection.getByRole("listitem").filter({ hasText: "sample.json" })).toContainText("この環境のアップロード設定で許可されていません");
+  await expect(selection.getByRole("button", { name: /1 件/ })).toBeEnabled();
+  await expectNoPageOverflow(page);
+});

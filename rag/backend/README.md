@@ -182,6 +182,8 @@ uv run python -m app.rag.oracle_schema --migration \
 ## アップロード制限
 
 `RAG_MAX_UPLOAD_BYTES` で最大ファイルサイズを制御します。既定は 200 MiB です。
+設定例では `RAG_ALLOWED_UPLOAD_CONTENT_TYPES` を未設定にして、アプリの既定値を使います。以前の設定例をコピーした環境で既定に戻すには、この変数の設定を削除して RAG backend を再起動します。意図して絞り込んだ値はそのまま使えます。アップロード画面は `GET /api/documents/upload-policy` で現在の許可値を読み、ファイルを送る前に確認します。
+
 `RAG_ALLOWED_UPLOAD_CONTENT_TYPES` で MIME type を制限します（既定は `app/config.py` の `allowed_upload_content_types`。画面のファイル選択の `rag/frontend/src/lib/upload-selection.ts` と同じ一覧で、テストで照合します）。受け付ける拡張子は `app/rag/source_profile.py` の `ACCEPTED_UPLOAD_EXTENSIONS`（PDF・Word・PowerPoint・Excel・CSV・テキスト・Markdown・JSON・HTML・JPEG / PNG の 17 個。#4730）で、MIME type が許可されていても、この拡張子でなければ 415 で止めます。HEIC / HEIF の画像と EPUB は、MIME type に関係なく変換の方法を添えた 415 で止めます（解析の依存の pi-heif・pandoc を入れないため。#3351）。
 Object Storage client の key は保存時に安全な文字へ正規化します。local 取得時は `local://`、OCI 取得時は `oci://namespace/bucket/key` または plain key だけを受け付けます。相対パス要素、16 階層超、1 要素 255 文字超、全体 1024 文字超の key は拒否し、異常な object path を取込処理へ渡しません。
 

@@ -199,6 +199,7 @@ export const queryKeys = {
   adbInfo: ["settings", "database", "adb"] as const,
   huggingfaceSettings: ["settings", "huggingface"] as const,
   uploadStorageSettings: ["settings", "upload-storage"] as const,
+  uploadPolicy: ["documents", "upload-policy"] as const,
   parserAdapterSettings: ["settings", "parser-adapters"] as const,
   externalParserStatuses: ["settings", "parser-adapters", "status"] as const,
   externalParserStatus: (backend: ExternalParserBackendName) =>
@@ -2177,6 +2178,14 @@ export function useUpdateHuggingFaceSettings() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.huggingfaceSettings });
     },
+  });
+}
+
+/** 文書を送る前に、サーバーが現在許可している MIME type を確認する。 */
+export function useUploadPolicy() {
+  return useQuery({
+    queryKey: queryKeys.uploadPolicy,
+    queryFn: ({ signal }) => api.getUploadPolicy({ signal }),
   });
 }
 

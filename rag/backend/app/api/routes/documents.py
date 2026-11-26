@@ -67,6 +67,7 @@ from app.clients.section_revision_store import max_section_revisions
 from app.config import (
     CHUNK_SEPARATOR_STRATEGIES,
     CHUNKING_STRATEGIES_WITH_MIN_CHARS,
+    DEFAULT_UPLOAD_CONTENT_TYPES,
     FIXED_DELIMITER_STRATEGY,
     LEGACY_CHUNKING_STRATEGY_ALIASES,
     PREVIOUS_DEFAULT_CHUNK_DELIMITER,
@@ -158,6 +159,7 @@ from app.rag.section_rules import (
 )
 from app.rag.source_profile import (
     ACCEPTED_UPLOAD_EXTENSIONS,
+    SETTINGS_UPLOAD_FORMAT_MESSAGE,
     UNSUPPORTED_UPLOAD_FORMAT_MESSAGE,
     build_source_profile,
     rejected_upload_format_message,
@@ -237,6 +239,7 @@ from app.schemas.document import (
     IngestionSegment,
     ParserSourceNotice,
     SourceProfile,
+    UploadPolicy,
     UploadResult,
 )
 from app.schemas.extraction import (
@@ -343,6 +346,13 @@ DOCUMENT_PROCESSING_OUTPUT_GROUPS: dict[str, tuple[str, ...]] = {
     "field_extraction_enabled": ("field_extraction_enabled",),
     "navigation_summary_enabled": ("navigation_summary_enabled",),
 }
+
+
+@router.get("/upload-policy", response_model=ApiResponse[UploadPolicy])
+def get_upload_policy() -> ApiResponse[UploadPolicy]:
+    return ApiResponse(
+        data=UploadPolicy(allowed_content_types=sorted(_allowed_upload_types(get_settings())))
+    )
 
 
 @router.post("/upload", response_model=ApiResponse[UploadResult])
@@ -466,19 +476,22 @@ def _upload_file_size_hint(file: UploadFile) -> int | None:
     return max(size, 0)
 
 
+def _allowed_upload_types(settings: Settings) -> set[str]:
+    return {_normalized_content_type(item) for item in settings.allowed_upload_content_types}
+
+
 def _is_allowed_upload_content_type(
     content_type: str,
     *,
     sanitized_file_name: str,
-    allowed_content_types: list[str],
+    allowed_content_types: set[str],
 ) -> bool:
     """MIME whitelist と拡張子 whitelist の両方を満たすアップロードだけを受ける。
 
     application/octet-stream はどの拡張子でも送られるので、MIME type だけでは絞れない(#4730)。
     """
-    normalized_allowed = {_normalized_content_type(allowed) for allowed in allowed_content_types}
     return (
-        content_type in normalized_allowed
+        content_type in allowed_content_types
         and PurePath(sanitized_file_name).suffix.lower() in ACCEPTED_UPLOAD_EXTENSIONS
     )
 
@@ -524,17 +537,29 @@ async def _store_uploaded_document(
     content_type = _normalized_content_type(file.content_type)
     original_file_name = file.filename or "document.bin"
     file_name = _safe_display_filename(original_file_name)
+    allowed_types = _allowed_upload_types(settings)
+    default_formats = allowed_types.issuperset(DEFAULT_UPLOAD_CONTENT_TYPES)
     rejected_message = rejected_upload_format_message(file_name, content_type)
     if rejected_message is not None:
         # HEIC / HEIF・EPUB(解析の依存を入れない。#3351)と音声・動画(取り込まない。#3369)は、
         # 保存せずに変換の方法を返す。
-        raise HTTPException(status_code=415, detail=rejected_message)
+        raise HTTPException(
+            status_code=415,
+            detail=rejected_message if default_formats else SETTINGS_UPLOAD_FORMAT_MESSAGE,
+        )
     if not _is_allowed_upload_content_type(
         content_type,
         sanitized_file_name=file_name,
-        allowed_content_types=settings.allowed_upload_content_types,
+        allowed_content_types=allowed_types,
     ):
-        raise HTTPException(status_code=415, detail=UNSUPPORTED_UPLOAD_FORMAT_MESSAGE)
+        reason = (
+            UNSUPPORTED_UPLOAD_FORMAT_MESSAGE if default_formats else SETTINGS_UPLOAD_FORMAT_MESSAGE
+        )
+        if PurePath(file_name).suffix.lower() in ACCEPTED_UPLOAD_EXTENSIONS:
+            reason = (
+                "このファイルの MIME タイプは、この環境のアップロード設定で許可されていません。"
+            )
+        raise HTTPException(status_code=415, detail=reason)
 
     data = await _read_upload_file(file, settings.max_upload_bytes)
     if not data:

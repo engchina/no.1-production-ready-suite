@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "./fixtures/test";
 import { mockDatabaseReady, mockLocalAuth, openSearchableMultiSelect } from "./_helpers";
+import { mockUploadPolicy } from "./_upload-policy";
 
 interface UploadStorageSettingsData {
   backend: "local" | "oci";
@@ -26,6 +27,7 @@ const localStorageSettings: UploadStorageSettingsData = {
 test.beforeEach(async ({ page }) => {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+  await mockUploadPolicy(page);
 });
 
 // 画面は platform の共有パッケージ（NL2SQL と同じ画面。#97）。右側の状態パネル / .env プレビューは持たない。
