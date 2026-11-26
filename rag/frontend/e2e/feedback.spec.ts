@@ -63,6 +63,7 @@ test("全幅の一覧を検索・数値ページングし、全幅の詳細の�
   await expect(paging.getByRole("button", { name: "前へ", exact: true })).toBeDisabled();
 
   await expect(page.getByRole("heading", { name: "利用者フィードバック" })).toBeVisible();
+  await expect(page.getByText("質問の解決状況と、再回答で解決した割合を確認できます。")).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "質問" })).toBeVisible();
   for (const name of ["評価", "低評価の理由", "利用者コメント", "日時"]) {
     await expect(page.getByRole("columnheader", { name, exact: true })).toBeVisible();
