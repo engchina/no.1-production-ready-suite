@@ -290,13 +290,18 @@ export function AnswerFileReview({
             <div className="space-y-2">
               {errorView}
               {task && !selectedFile && !manage && !reset && (
-                <p className="text-xs text-fg-muted tnum" role="status" aria-atomic="true">
-                  {t("fileReview.counts", {
-                    scope: t(query ? "fileReview.showing" : "fileReview.all", { shown: matching.length, total: groups.length }),
-                    keep: checked.length,
-                    remove: dropping.length,
-                    total,
-                  })}
+                <p className="flex flex-col text-xs text-fg-muted tnum sm:flex-row sm:flex-wrap sm:gap-x-3" role="status" aria-atomic="true">
+                  <span>
+                    {t("fileReview.selectionCount", {
+                      scope: t(query ? "fileReview.showing" : "fileReview.all", { shown: matching.length, total: groups.length }),
+                      keep: checked.length,
+                    })}
+                  </span>{" "}
+                  <span>
+                    {t(hidden ? "fileReview.exclusionWithHidden" : "fileReview.exclusionCount", {
+                      remove: dropping.length, total, hidden,
+                    })}
+                  </span>
                 </p>
               )}
               <div className="flex flex-wrap items-center gap-2">
@@ -365,7 +370,7 @@ export function AnswerFileReview({
                 <h3 className="text-sm font-semibold">{t(pending ? "fileReview.found" : "fileReview.given")}</h3>
                 {hidden > 0 && (
                   <Button variant="ghost" size="sm" aria-controls={selectionId} onClick={() => setQuery("")}>
-                    {t("fileReview.showHidden", { count: hidden })}
+                    {t("fileReview.showHidden")}
                   </Button>
                 )}
               </div>

@@ -175,11 +175,11 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   const search = dialog.getByRole("searchbox");
   await expect(search).toHaveAccessibleName("ファイル名で絞り込み");
   await expect(dialog.getByRole("heading", { name: "AI に渡した資料", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("status")).toHaveText("全 2 件 · 選択 1 件 · 今回除外 1 件 · 累計除外 1 件");
+  await expect(dialog.getByRole("status")).toHaveText("全 2 件 · 選択 1 件 今回除外 1 件 · 累計除外 1 件");
   await search.fill("ガイド");
   await expect(dialog.getByRole("checkbox")).toHaveCount(1);
-  await expect(dialog.getByRole("status")).toHaveText("表示 1/2 件 · 選択 1 件 · 今回除外 1 件 · 累計除外 1 件");
-  const showAll = dialog.getByRole("button", { name: "全件表示（除外予定 1 件が非表示）" });
+  await expect(dialog.getByRole("status")).toHaveText("表示 1/2 件 · 選択 1 件 今回除外 1 件（うち非表示 1 件） · 累計除外 1 件");
+  const showAll = dialog.getByRole("button", { name: "全件表示", exact: true });
   await expect(showAll).toBeVisible();
   expect(await list.evaluate(element => element.clientHeight)).toBe(listHeight);
   await showAll.click();
