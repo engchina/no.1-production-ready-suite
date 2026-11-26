@@ -4046,6 +4046,27 @@ def test_retrieval_counts_save_reload_and_preserve_other_settings(
         assert after[name] == before[name]
 
 
+@pytest.mark.parametrize("value", [0, 1, 20, 200])
+def test_candidates_per_document_save_reload_and_preserve_other_settings(
+    value: int, monkeypatch: MonkeyPatch, tmp_path: Path
+) -> None:
+    """検索経路ごとの候補の文書ごとの上限(#5854)は .env に保存し、ほかの値を変えない。"""
+    env_file = _settings_env_file(monkeypatch, tmp_path)
+    before = client.get("/api/settings/answering").json()["data"]
+    assert before["retrieval_max_candidates_per_document"] == 0
+    response = client.patch(
+        "/api/settings/answering", json={"retrieval_max_candidates_per_document": value}
+    )
+    assert response.status_code == 200, response.text
+    assert f"RAG_RETRIEVAL_MAX_CANDIDATES_PER_DOCUMENT={value}" in env_file.read_text()
+    saved = Settings(_env_file=env_file)
+    assert saved.rag_retrieval_max_candidates_per_document == value
+    after = client.get("/api/settings/answering").json()["data"]
+    assert after["retrieval_max_candidates_per_document"] == value
+    for name in before.keys() - {"retrieval_max_candidates_per_document"}:
+        assert after[name] == before[name]
+
+
 def test_removed_rerank_order_and_top_n_settings_are_not_exposed(
     monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -4066,6 +4087,10 @@ def test_removed_rerank_order_and_top_n_settings_are_not_exposed(
         ("retrieval_query_limit", 4),
         ("retrieval_query_limit", 201),
         ("retrieval_query_limit", True),
+        ("retrieval_max_candidates_per_document", -1),
+        ("retrieval_max_candidates_per_document", 201),
+        ("retrieval_max_candidates_per_document", True),
+        ("retrieval_max_candidates_per_document", 2.5),
     ],
 )
 def test_retrieval_counts_reject_invalid_without_persisting(

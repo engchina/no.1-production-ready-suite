@@ -996,6 +996,7 @@ def evaluation_settings(
             "section_expansion_enabled": "rag_section_expansion_enabled",
             "section_expansion_max_levels": "rag_section_expansion_max_levels",
             "max_anchors_per_document": "rag_max_anchors_per_document",
+            "retrieval_max_candidates_per_document": "rag_retrieval_max_candidates_per_document",
             "oracle_vector_target_accuracy": "oracle_vector_target_accuracy",
             "generation_reasoning_effort": "rag_generation_reasoning_effort",
         }

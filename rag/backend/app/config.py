@@ -1449,6 +1449,17 @@ class Settings(
             "渡す(rerank の入力は最大 200 × 2 = 400 件。#5443・#5829)。"
         ),
     )
+    rag_retrieval_max_candidates_per_document: int = Field(
+        default=0,
+        ge=0,
+        le=200,
+        description=(
+            "検索経路ごとの候補(rerank の前)に、1 つの文書が占める数の上限(#5854。既定 0 = 上限"
+            "なし)。上限があるときは取得件数の 4 倍を取り、上限を超えた文書の chunk の代わりに次の"
+            "順位の別の文書の chunk を入れて取得件数に切る(別の文書で埋めきれなければ外した"
+            " chunk を戻す)。頁に絞った検索(業務ガイドの手順など)と Wiki の検索には掛けない。"
+        ),
+    )
     rag_rerank_max_documents_per_request: int = Field(
         default=1000,
         ge=1,

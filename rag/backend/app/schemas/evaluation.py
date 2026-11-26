@@ -796,6 +796,8 @@ class EvaluationRagOverrides(BaseModel):
     section_expansion_max_levels: int | None = Field(default=None, ge=1, le=3)
     # rerank の後、起点に採る同じ文書の chunk の上限(#2167)。0 は上限なし。
     max_anchors_per_document: int | None = Field(default=None, ge=0, le=20)
+    # 検索経路ごとの候補(rerank の前)に 1 つの文書が占める数の上限(#5854)。0 は上限なし。
+    retrieval_max_candidates_per_document: int | None = Field(default=None, ge=0, le=200)
     oracle_vector_target_accuracy: int | None = Field(default=None, ge=1, le=100)
     # 回答文の生成の推論の量(#1499)。
     generation_reasoning_effort: ReasoningEffortOverride | None = None

@@ -627,6 +627,42 @@ test("実体・別名による検索拡張の上限は 1〜10 から選び、保
   await page.keyboard.press("Escape");
 });
 
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 900 },
+  { name: "mobile", width: 375, height: 812 },
+]) {
+  test(`1 つの文書から取る検索候補の上限を検証・保存する (#5854) (${viewport.name})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.addInitScript(() => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: "light", sidebarCollapsed: true }, version: 0 })));
+    await mockRetrievalCards(page);
+    const saved: Record<string, unknown>[] = [];
+    await mockAnsweringSettings(page, saved);
+    await page.goto("/settings/retrieval");
+    const card = page.getByTestId("answering-settings-card");
+    const field = card.getByRole("spinbutton", { name: "1 つの文書から取る検索候補の上限", exact: true });
+    const save = card.getByRole("button", { name: "回答の設定を保存", exact: true });
+    // 既定は 0（上限なし）。補足は欄の説明として読める。
+    await expect(field).toHaveValue("0");
+    await expect(field).toHaveAccessibleDescription(/既定は 0（上限なし）です。0～200 件で指定します。/);
+    const group = card.getByRole("region", { name: "検索の実行", exact: true });
+    await group.scrollIntoViewIfNeeded();
+    await group.screenshot({ path: testInfo.outputPath("candidates-per-document.png") });
+    for (const invalid of ["", "-1", "1.5", "201"]) {
+      await field.fill(invalid);
+      await expect(save).toBeDisabled();
+    }
+    await expect(card.getByText("0～200 の整数を入力してください。", { exact: true })).toBeVisible();
+    await field.fill("20");
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(save).toBeDisabled();
+    expect(saved.at(-1)).toMatchObject({ retrieval_max_candidates_per_document: 20 });
+    await page.reload();
+    await expect(field).toHaveValue("20");
+    await expectNoPageOverflow(page);
+  });
+}
+
 for (const theme of ["light", "dark"] as const) {
   test(`検索候補数を検証・保存し、並びの比率と Top-N の欄は出さない (${theme})`, { tag: "@responsive" }, async ({ page }, testInfo) => {
     await page.addInitScript((theme) => window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme, sidebarCollapsed: true }, version: 0 })), theme);

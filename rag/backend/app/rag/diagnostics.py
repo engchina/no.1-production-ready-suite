@@ -121,6 +121,10 @@ def rag_config_fingerprint(settings: Settings | None = None) -> str:
         ),
         "rrf_method_ratio": resolved_settings.rag_rrf_method_ratio,
         "retrieval_query_limit": resolved_settings.rag_retrieval_query_limit,
+        # 検索経路ごとの候補の文書ごとの上限(#5854。候補の集め方が変わる)。
+        "retrieval_max_candidates_per_document": (
+            resolved_settings.rag_retrieval_max_candidates_per_document
+        ),
         "rerank_min_relevance_score": resolved_settings.rag_rerank_min_relevance_score,
         "rerank_min_relevance_fallback_ratio": (
             resolved_settings.rag_rerank_min_relevance_fallback_ratio
