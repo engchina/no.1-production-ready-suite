@@ -374,7 +374,7 @@ def _reset_runtime_settings(settings: Settings, tmp_path: Path) -> None:
     # chunk を 1 つ足す。既存テストは要約の chunk の無い索引を前提にするのでテスト既定は無効とし、
     # 要約は専用テスト（test_document_summary*.py）で確かめる。
     settings.rag_document_summary_enabled = False
-    settings.rag_retrieval_max_candidates_per_document = Settings.model_fields[
+    settings.rag_retrieval_max_candidates_per_document = type(settings).model_fields[
         "rag_retrieval_max_candidates_per_document"
     ].default
     settings.rag_outline_selection_enabled = False
