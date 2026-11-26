@@ -35,7 +35,6 @@ from app.features.agent.docx_document import (
     MAX_LIST_ITEMS,
     MAX_TABLE_COLUMNS,
     Block,
-    Column,
     DocumentContent,
     DocxSpecError,
     HeadingBlock,
@@ -49,18 +48,17 @@ from app.features.agent.docx_document import (
 from app.features.agent.file_tool_support import (
     FILE_LIMIT_CODE,
     FILE_OUTPUT_SCHEMA,
-    FORMAT_NAMES_HELP,
     MAX_FILES_PER_RUN,
+    TEXT_COLUMN_SCHEMA,
     check_file_count,
-    column_header,
     invalid_content,
     run_data_index,
     running_run,
     save_run_file,
     source_schema,
-    table_values,
+    text_table,
 )
-from app.features.agent.table_columns import DATE_FORMATS, NUMBER_FORMATS, SpecIssue
+from app.features.agent.table_columns import SpecIssue
 from app.features.agent.tools import ToolDefinition, ToolHandler, ToolInvocationContext
 
 DOCX_CREATE_TOOL = "docx_create"
@@ -72,7 +70,6 @@ HEADING_MAX_CHARS = 200
 PARAGRAPH_MAX_CHARS = 4000
 ITEM_MAX_CHARS = 500
 CAPTION_MAX_CHARS = 200
-HEADER_MAX_CHARS = 100
 
 # ブロックの種類ごとの、使う項目。
 _BLOCK_FIELDS: dict[str, tuple[str, ...]] = {
@@ -91,38 +88,6 @@ _UNUSED_VALUES: dict[str, str] = {
     "table": "null",
 }
 
-_FORMAT_HELP = (
-    FORMAT_NAMES_HELP + "。percent・percent1 は値を 100 倍して表示する（0.15 が 15%）。null は、"
-    "数値が値のままの表示、日付が date（時刻のある値を含む列は datetime）。文字の列は null"
-)
-
-_COLUMN_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "header": {
-            "type": ["string", "null"],
-            "maxLength": HEADER_MAX_CHARS,
-            "description": (
-                "列の見出し。source を使う表では null にすると、参照した表の列名になる"
-            ),
-        },
-        "type": {
-            "type": "string",
-            "enum": ["text", "number", "date"],
-            "description": (
-                "列の値の型。text=文字 / number=数値 / date=日付・日時（rows に書くときは "
-                "YYYY-MM-DD か ISO 8601 の日時の文字列）。number と date の列は右寄せになる"
-            ),
-        },
-        "format": {
-            "type": ["string", "null"],
-            "enum": [*NUMBER_FORMATS, *DATE_FORMATS, None],
-            "description": f"表示の書式。{_FORMAT_HELP}",
-        },
-    },
-    "required": ["type"],
-    "additionalProperties": False,
-}
 _TABLE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -135,7 +100,7 @@ _TABLE_SCHEMA: dict[str, Any] = {
             "type": "array",
             "minItems": 1,
             "maxItems": MAX_TABLE_COLUMNS,
-            "items": _COLUMN_SCHEMA,
+            "items": TEXT_COLUMN_SCHEMA,
             "description": "表の列（左から）",
         },
         "source": source_schema("表"),
@@ -294,24 +259,10 @@ def _table(
     issues: list[SpecIssue],
 ) -> TableBlock | None:
     """表の引数を生成の内容にする（参照した表の値を写す）。誤りなら None。"""
-    values = table_values(at, raw, index, "表", issues)
-    if values is None:
+    resolved = text_table(at, raw, index, "表", issues)
+    if resolved is None:
         return None
-    names, rows = values
-    columns = [
-        Column(
-            header=column_header(
-                f"{at}.columns.{column_index}",
-                column,
-                names[column_index] if names else None,
-                "表",
-                issues,
-            ),
-            type=column["type"],
-            format=column.get("format"),
-        )
-        for column_index, column in enumerate(raw.get("columns") or [])
-    ]
+    columns, rows = resolved
     return TableBlock(columns=columns, rows=rows, caption=raw.get("caption"))
 
 

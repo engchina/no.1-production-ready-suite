@@ -47,6 +47,7 @@ from app.features.agent.docx_document import (
     build_document,
 )
 from app.features.agent.table_columns import DATE_FORMATS, NUMBER_FORMATS, display_width
+from app.features.agent.table_text import DATE_DISPLAY, NUMBER_DISPLAY
 
 
 def _build(*blocks: Block, title: str = "合成の報告", subtitle: str | None = None) -> BuiltDocument:
@@ -420,8 +421,8 @@ def test_cell_values_follow_the_column_type_and_format() -> None:
 
 
 def test_format_names_are_the_same_as_the_spreadsheet_columns() -> None:
-    assert set(docx_document._NUMBER_DISPLAY) == set(NUMBER_FORMATS)  # noqa: SLF001
-    assert set(docx_document._DATE_DISPLAY) == set(DATE_FORMATS)  # noqa: SLF001
+    assert set(NUMBER_DISPLAY) == set(NUMBER_FORMATS)
+    assert set(DATE_DISPLAY) == set(DATE_FORMATS)
 
 
 # ---- 作れない内容（切り捨てずに誤りにする） ---------------------------------------------------

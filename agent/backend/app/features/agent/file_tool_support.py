@@ -1,7 +1,7 @@
-"""ファイルを作るツール（`xlsx_create`・`docx_create`）の共通の部品（#5837）。
+"""ファイルを作るツール（`xlsx_create`・`docx_create`・`pptx_create`）の共通の部品（#5837）。
 
-形式に依らない所だけを置く。生成の本体（`xlsx_workbook`・`docx_document`）は Run に依らず、ここは
-Run を読む（ツールの層 `tools.py` からは import しない）。
+形式に依らない所だけを置く。生成の本体（`xlsx_workbook`・`docx_document`・`pptx_presentation`）は
+Run に依らず、ここは Run を読む（ツールの層 `tools.py` からは import しない）。
 
 - 表の参照（`source`）: その Run で取得済みの表（NL2SQL の結果）を、回答の表の参照
   （`answer_data`）と同じ番号（`T1`）と行・列の指定で選ぶ。値は保存した step の結果から写す
@@ -9,6 +9,8 @@ Run を読む（ツールの層 `tools.py` からは import しない）。
 - 1 つの Run で作れるファイルの数の上限（形式を問わず、その Run のファイルの成果物の数）と、
   数の確認から保存までを 1 つずつにする lock。
 - 内容の誤りの返し方（`tool.invalid_arguments` と `argument_errors`。値を含まない）。
+- 値を文字として入れる表（Word・PowerPoint）の、列の引数の schema と、引数から列の定義と行の値を
+  決める所（`TEXT_COLUMN_SCHEMA`・`text_table`）。
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from app.features.agent.artifact_file_store import (
     save_tool_file,
 )
 from app.features.agent.table_columns import DATE_FORMATS, NUMBER_FORMATS, SpecIssue
+from app.features.agent.table_text import Column
 from app.features.agent.tool_arguments import INVALID_ARGUMENTS_CODE
 from app.features.agent.tools import ExternalToolError
 
@@ -44,6 +47,40 @@ FORMAT_NAMES_HELP = (
     + " / ".join(f"{name}（{code}）" for name, code in DATE_FORMATS.items())
 )
 SELECTOR_HELP = "* はすべて、1-8 は範囲、1,3,5 は列挙（書いた順に並ぶ）。番号は 1 始まり"
+
+# 値を文字として入れる表（Word・PowerPoint）の、列の引数の schema。
+HEADER_MAX_CHARS = 100
+TEXT_FORMAT_HELP = (
+    FORMAT_NAMES_HELP + "。percent・percent1 は値を 100 倍して表示する（0.15 が 15%）。null は、"
+    "数値が値のままの表示、日付が date（時刻のある値を含む列は datetime）。文字の列は null"
+)
+TEXT_COLUMN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "header": {
+            "type": ["string", "null"],
+            "maxLength": HEADER_MAX_CHARS,
+            "description": (
+                "列の見出し。source を使う表では null にすると、参照した表の列名になる"
+            ),
+        },
+        "type": {
+            "type": "string",
+            "enum": ["text", "number", "date"],
+            "description": (
+                "列の値の型。text=文字 / number=数値 / date=日付・日時（rows に書くときは "
+                "YYYY-MM-DD か ISO 8601 の日時の文字列）。number と date の列は右寄せになる"
+            ),
+        },
+        "format": {
+            "type": ["string", "null"],
+            "enum": [*NUMBER_FORMATS, *DATE_FORMATS, None],
+            "description": f"表示の書式。{TEXT_FORMAT_HELP}",
+        },
+    },
+    "required": ["type"],
+    "additionalProperties": False,
+}
 
 # 作ったファイルの参照（結果の `file`。中身は含まない）。
 FILE_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -232,6 +269,38 @@ def column_header(
     return str(header)
 
 
+def text_table(
+    at: str,
+    raw: Mapping[str, Any],
+    index: Callable[[], DataIndex],
+    owner: str,
+    issues: list[SpecIssue],
+) -> tuple[list[Column], list[list[Any]]] | None:
+    """値を文字として入れる表の引数から、列の定義と行の値を決める（参照した表の値を写す）。
+
+    誤りなら None。列の見出しが引数に無い列は、参照した表の列名にする。
+    """
+    values = table_values(at, raw, index, owner, issues)
+    if values is None:
+        return None
+    names, rows = values
+    columns = [
+        Column(
+            header=column_header(
+                f"{at}.columns.{column_index}",
+                column,
+                names[column_index] if names else None,
+                owner,
+                issues,
+            ),
+            type=column["type"],
+            format=column.get("format"),
+        )
+        for column_index, column in enumerate(raw.get("columns") or [])
+    ]
+    return columns, rows
+
+
 def check_file_count(run: Any, limit: int) -> None:
     """その Run のファイルの成果物が `limit` 個に達していたら `ExternalToolError`。"""
     count = sum(1 for artifact in run.artifacts if artifact.kind == FILE_ARTIFACT_KIND)
@@ -258,9 +327,12 @@ __all__ = [
     "FILE_LIMIT_CODE",
     "FILE_OUTPUT_SCHEMA",
     "FORMAT_NAMES_HELP",
+    "HEADER_MAX_CHARS",
     "INVALID_CONTENT_MESSAGE",
     "MAX_FILES_PER_RUN",
     "SELECTOR_HELP",
+    "TEXT_COLUMN_SCHEMA",
+    "TEXT_FORMAT_HELP",
     "check_file_count",
     "column_header",
     "invalid_content",
@@ -270,4 +342,5 @@ __all__ = [
     "source_schema",
     "source_table",
     "table_values",
+    "text_table",
 ]

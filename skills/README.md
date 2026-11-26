@@ -11,10 +11,11 @@ Production Ready RAG・NL2SQL の MCP を使って調べるスキルと、Agent 
 | [`structured-data-query`](./structured-data-query/SKILL.md)（構造化データ照会） | `nl2sql` | 業務データの件数・金額・一覧を SQL で照会する |
 | [`xlsx-create`](./xlsx-create/SKILL.md)（Excel 作成） | なし（Agent の業務 Agent のツール `xlsx_create`） | 利用者の依頼に応じて Excel のファイル（.xlsx）を新しく作る。**Agent の業務 Agent だけで使える**（#5837） |
 | [`docx-create`](./docx-create/SKILL.md)（Word 作成） | なし（Agent の業務 Agent のツール `docx_create`） | 利用者の依頼に応じて Word のファイル（.docx）を新しく作る。**Agent の業務 Agent だけで使える**（#5837） |
+| [`pptx-create`](./pptx-create/SKILL.md)（PowerPoint 作成） | なし（Agent の業務 Agent のツール `pptx_create`） | 利用者の依頼に応じて PowerPoint のファイル（.pptx。グラフを含む）を新しく作る。**Agent の業務 Agent だけで使える**（#5837） |
 
 RAG だけのスキル（`rag-chat`・`rag-search`）は metadata の `production-ready-final-answer-tools` に回答のツールを宣言し、組み込みの Agent はそのツールの回答（登録済みQ&Aの候補・業務ガイドの確認を含む）をそのまま Run の回答にする（回答の書き方は RAG の検索・回答プロファイルで設定する）。
 
-`xlsx-create`・`docx-create` が使うツール（`xlsx_create`・`docx_create`）は Agent の中にだけあり、MCP サーバーでは提供しない。plugin で外部の Agent に入っても、そこでは使えない（`compatibility` に書いてある）。この 2 つのスキルは [anthropics/skills](https://github.com/anthropics/skills) の `skills/xlsx`・`skills/docx`（Apache License 2.0）の指針を元にしており、許諾の全文（`LICENSE.txt`）と出典・変更点（`NOTICE`）をそれぞれのフォルダに置く。
+`xlsx-create`・`docx-create`・`pptx-create` が使うツール（`xlsx_create`・`docx_create`・`pptx_create`）は Agent の中にだけあり、MCP サーバーでは提供しない。plugin で外部の Agent に入っても、そこでは使えない（`compatibility` に書いてある）。この 3 つのスキルは [anthropics/skills](https://github.com/anthropics/skills) の `skills/xlsx`・`skills/docx`・`skills/pptx`（Apache License 2.0）の指針を元にしており、許諾の全文（`LICENSE.txt`）と出典・変更点（`NOTICE`）をそれぞれのフォルダに置く。
 
 このディレクトリは Claude Code の plugin `production-ready-skills`（[`.claude-plugin/plugin.json`](./.claude-plugin/plugin.json)）でもあり、repo 直下の [`.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json)（marketplace `production-ready-suite`）が配る。
 
