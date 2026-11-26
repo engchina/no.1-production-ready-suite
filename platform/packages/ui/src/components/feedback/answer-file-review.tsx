@@ -1,5 +1,5 @@
 import { BookOpen, RotateCcw, Search, ThumbsDown, ThumbsUp } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Button } from "../ui/button";
 import { RadioOptionGroup } from "../ui/radio-option-group";
@@ -10,6 +10,7 @@ import {
   files,
   locator,
   page,
+  passagePageLabel,
   position,
   type AnswerRating,
   type FileReviewAction,
@@ -92,7 +93,10 @@ export function AnswerFileReview({
   const latest = state?.versions.at(-1);
   const pending = state?.pending[task];
   const source = pending ?? latest?.sources[task];
-  const groups = files(source?.citations ?? []).filter((file) => !Object.hasOwn(state?.excluded ?? {}, file.id));
+  const groups = useMemo(
+    () => files(source?.citations ?? []).filter((file) => !Object.hasOwn(state?.excluded ?? {}, file.id)),
+    [source?.citations, state?.excluded],
+  );
   const normalize = (v: string) => v.normalize("NFKC").trim().toLocaleLowerCase();
   const matching = groups.filter((f) => normalize(f.name).includes(normalize(query)));
   const shown = new Set(matching.map((f) => f.id));
@@ -216,7 +220,7 @@ export function AnswerFileReview({
     mode === "only" || pending
       ? t("fileReview.confirm")
       : checked.length
-        ? t("fileReview.keepFind", { count: checked.length })
+        ? t("fileReview.keepFind")
         : mode === "replace" && groups.length
           ? t("fileReview.replaceFind")
           : t("fileReview.find");
@@ -286,8 +290,13 @@ export function AnswerFileReview({
             <div className="space-y-2">
               {errorView}
               {task && !selectedFile && !manage && !reset && (
-                <p className="text-sm" aria-live="polite">
-                  {t("fileReview.counts", { keep: checked.length, remove: dropping.length, total })}
+                <p className="text-xs text-fg-muted tnum" role="status" aria-atomic="true">
+                  {t("fileReview.counts", {
+                    scope: t(query ? "fileReview.showing" : "fileReview.all", { shown: matching.length, total: groups.length }),
+                    keep: checked.length,
+                    remove: dropping.length,
+                    total,
+                  })}
                 </p>
               )}
               <div className="flex flex-wrap items-center gap-2">
@@ -352,29 +361,25 @@ export function AnswerFileReview({
                   }}
                 />
               )}
-              <h3 className="text-sm font-semibold">
-                {t(pending ? "fileReview.found" : "fileReview.given", { count: groups.length })}
-              </h3>
+              <div className="flex h-[var(--button-height-sm)] shrink-0 items-center justify-between gap-1">
+                <h3 className="text-sm font-semibold">{t(pending ? "fileReview.found" : "fileReview.given")}</h3>
+                {hidden > 0 && (
+                  <Button variant="ghost" size="sm" aria-controls={selectionId} onClick={() => setQuery("")}>
+                    {t("fileReview.showHidden", { count: hidden })}
+                  </Button>
+                )}
+              </div>
               <SearchField
                 id={selectionId + "-search"}
                 value={query}
                 onSearch={setQuery}
                 label={t("fileReview.filename")}
+                labelHidden
                 placeholder={t("fileReview.placeholder")}
                 clearLabel={t("fileReview.clear")}
                 aria-controls={selectionId}
                 debounceMs={0}
               />
-              <div className="flex h-[var(--button-height-sm)] shrink-0 items-center justify-between gap-1">
-                <p aria-live="polite" className="shrink-0 text-xs text-fg-muted">
-                  {t("fileReview.showing", { shown: matching.length, total: groups.length })}
-                </p>
-                {hidden > 0 && (
-                  <Button variant="ghost" size="sm" onClick={() => setQuery("")}>
-                    {t("fileReview.showHidden", { count: hidden })}
-                  </Button>
-                )}
-              </div>
               <div
                 id={selectionId}
                 ref={list}
@@ -429,7 +434,7 @@ export function AnswerFileReview({
                       <p className="text-xs text-fg-muted">
                         {[
                           t("fileReview.locations", { count: f.hits.length }),
-                          f.pages.length ? "p." + f.pages.join("、") : "",
+                          f.pages.remaining ? t("fileReview.morePages", { pages: f.pages.label, count: f.pages.remaining }) : f.pages.label,
                           t(count ? "fileReview.cited" : "fileReview.noCites", { count }),
                         ]
                           .filter(Boolean)
@@ -463,7 +468,7 @@ export function AnswerFileReview({
                   <section key={hit.chunk_id} className="space-y-1 border-t border-border pt-2">
                     <p className="text-xs text-fg-muted">
                       {[
-                        page(hit) ? "p." + page(hit) : "",
+                        passagePageLabel(hit),
                         locator(hit).section_title ?? "",
                         cited(hit) ? t("fileReview.used") : "",
                       ]

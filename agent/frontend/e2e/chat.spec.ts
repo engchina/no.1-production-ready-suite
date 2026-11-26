@@ -954,7 +954,7 @@ for (const tool of ["rag_chat","rag_search"]) {
     await sheet.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
     await sheet.getByRole("checkbox",{name:"操作ガイド A.pdf"}).check();
     if(process.env.AGENT_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.AGENT_E2E_SCREENSHOT_DIR+"/"+tool+"-files-"+testInfo.project.name+".png"});
-    await sheet.getByRole("button",{name:/選択した1件を残して/}).click();
+    await sheet.getByRole("button",{name:"選んだ資料を残して、ほかの候補を探す"}).click();
     await expect(sheet.getByRole("checkbox",{name:"確認手順 C.pdf"})).not.toBeChecked();
     await sheet.getByRole("checkbox",{name:"確認手順 C.pdf"}).check();
     await sheet.getByRole("button",{name:"選んだ資料だけで再回答"}).click();

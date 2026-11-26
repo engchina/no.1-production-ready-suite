@@ -54,12 +54,14 @@ export const FILE_REVIEW_JA = {
   "fileReview.mix": "選んだ資料を残し、ほかも探す",
   "fileReview.replace": "今回の資料を外して探し直す",
   "fileReview.replaceNew": "前回の選択以外を入れ替える",
-  "fileReview.given": "AI に渡した資料（{count} 件）",
-  "fileReview.found": "候補ファイル（{count} 件）",
+  "fileReview.given": "AI に渡した資料",
+  "fileReview.found": "候補ファイル",
   "fileReview.filename": "ファイル名で絞り込み",
   "fileReview.placeholder": "ファイル名の一部を入力",
   "fileReview.clear": "絞り込みを解除",
-  "fileReview.showing": "{shown} 件表示 ／ 全 {total} 件",
+  "fileReview.all": "全 {total} 件",
+  "fileReview.showing": "表示 {shown}/{total} 件",
+  "fileReview.morePages": "{pages}、ほか {count} ページ",
   "fileReview.locations": "{count} 箇所",
   "fileReview.cited": "{count} 箇所を引用",
   "fileReview.noCites": "引用なし",
@@ -68,14 +70,14 @@ export const FILE_REVIEW_JA = {
   "fileReview.back": "戻る",
   "fileReview.close": "閉じる",
   "fileReview.confirm": "選んだ資料だけで再回答",
-  "fileReview.keepFind": "選択した{count}件を残して、ほかの候補を探す",
+  "fileReview.keepFind": "選んだ資料を残して、ほかの候補を探す",
   "fileReview.replaceFind": "今回の資料を除外して、ほかの候補を探す",
   "fileReview.find": "候補を探す",
   "fileReview.more": "ほかの候補を探す",
   "fileReview.reset": "この質問を最初から探す",
   "fileReview.manage": "除外した資料（{count} 件）",
   "fileReview.restore": "候補に戻す",
-  "fileReview.counts": "残す {keep} 件 ／ 今回外す {remove} 件 ／ 累計除外 {total} 件",
+  "fileReview.counts": "{scope} · 選択 {keep} 件 · 今回除外 {remove} 件 · 累計除外 {total} 件",
   "fileReview.showHidden": "全件表示（除外予定 {count} 件が非表示）",
   "fileReview.none": "新しい候補はありません。",
   "fileReview.noMatch": "一致するファイルはありません。",
@@ -94,6 +96,38 @@ export function locator(hit: ReviewCitation) {
 export function page(hit: ReviewCitation) {
   const loc = locator(hit);
   return Number(loc.page_start ?? loc.page_number ?? loc.page) || 0;
+}
+
+function pageRange(hit: ReviewCitation) {
+  const start = page(hit);
+  if (!Number.isSafeInteger(start) || start < 1) return null;
+  const end = Number(locator(hit).page_end);
+  return { start, end: Number.isSafeInteger(end) && end >= start ? end : start };
+}
+
+function rangeText({ start, end }: { start: number; end: number }) {
+  return start === end ? String(start) : `${start}–${end}`;
+}
+
+export function passagePageLabel(hit: ReviewCitation) {
+  const range = pageRange(hit);
+  return range ? "p." + rangeText(range) : "";
+}
+
+/** 重なる頁と隣接する頁だけをまとめる。間の未命中の頁は含めない。 */
+function filePages(hits: ReviewCitation[]) {
+  const ranges = hits.map(pageRange).filter(range => range !== null).sort((a, b) => a.start - b.start);
+  const merged: typeof ranges = [];
+  for (const range of ranges) {
+    const previous = merged.at(-1);
+    if (previous && range.start <= previous.end + 1) previous.end = Math.max(previous.end, range.end);
+    else merged.push(range);
+  }
+  const displayed = merged.slice(0, 3).map(rangeText);
+  return {
+    label: displayed.length ? "p." + displayed.join("、") : "",
+    remaining: merged.slice(displayed.length).reduce((count, range) => count + range.end - range.start + 1, 0),
+  };
 }
 export function position(hit: ReviewCitation) {
   const loc = locator(hit);
@@ -129,6 +163,6 @@ export function files(citations: ReviewCitation[]) {
         Number(a.retrieval_rank ?? a.metadata?.evidence_retrieval_rank ?? Infinity) -
           Number(b.retrieval_rank ?? b.metadata?.evidence_retrieval_rank ?? Infinity),
     )[0],
-    pages: [...new Set(hits.map(page).filter(Boolean))].sort((a, b) => a - b),
+    pages: filePages(hits),
   }));
 }

@@ -18,6 +18,7 @@ export default defineConfig({
     },
     rollupOptions: {
       external: [
+        "@tanstack/react-virtual",
         "@xyflow/react",
         "react",
         "react/jsx-runtime",

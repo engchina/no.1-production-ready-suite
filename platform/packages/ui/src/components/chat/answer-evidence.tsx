@@ -12,6 +12,7 @@ import { Button } from "../ui/button";
 import { Disclosure } from "../ui/disclosure";
 import { SideSheet } from "../ui/side-sheet";
 import { TEXT_ICON_SIZE } from "../ui/text-icon";
+import { VirtualEvidenceList } from "./virtual-evidence-list";
 
 /**
  * 回答の根拠（AI に渡した箇所の一覧。RAG のチャット・RAG 検索・Agent のチャットで共通。#2328）。
@@ -280,16 +281,17 @@ export function EvidenceCard({
   leadingActions,
   actions,
   children,
-}: EvidenceCardProps) {
+  as: Element = "li",
+}: EvidenceCardProps & { as?: "li" | "div" }) {
   return (
-    <li className="rounded-lg border border-border bg-surface p-3" data-testid="evidence-card">
+    <Element className="rounded-lg border border-border bg-surface p-3" data-testid="evidence-card">
       <EvidenceSummaryBody item={item} index={index} labels={labels} excerpt="card" />
       <EvidenceActionRow>
         {leadingActions ? <EvidenceLeadingActions>{leadingActions}</EvidenceLeadingActions> : null}
         {actions}
       </EvidenceActionRow>
       {children}
-    </li>
+    </Element>
   );
 }
 
@@ -670,32 +672,37 @@ export function EvidenceList({
   idPrefix = "evidence",
   testId,
 }: EvidenceListProps) {
+  // 短い一覧は自然な高さのまま。どちらも同じカードと元の配列の番号を使う。
+  const windowed = items.length > 16;
+  function card(index: number) {
+    const item = items[index];
+    return (
+      <EvidenceCard
+        key={`${item.key}-${index}`}
+        as={windowed ? "div" : "li"}
+        item={item}
+        index={index}
+        labels={labels}
+        leadingActions={
+          onOpenSource && !item.sourceUnavailable ? (
+            <EvidenceSourceButton
+              fileName={item.fileName}
+              onOpen={() => onOpenSource(index)}
+              labels={labels}
+              data-testid={`${idPrefix}-source-${index}`}
+            />
+          ) : undefined
+        }
+        actions={renderActions?.(item, index)}
+      >
+        {renderExtra?.(item, index)}
+      </EvidenceCard>
+    );
+  }
+  if (windowed) return <VirtualEvidenceList items={items} renderCard={card} testId={testId} />;
   return (
     <ul className={EVIDENCE_LIST_CLASS} data-testid={testId}>
-      {items.map((item, index) => {
-        const extraActions = renderActions?.(item, index);
-        return (
-          <EvidenceCard
-            key={`${item.key}-${index}`}
-            item={item}
-            index={index}
-            labels={labels}
-            leadingActions={
-              onOpenSource && !item.sourceUnavailable ? (
-                <EvidenceSourceButton
-                  fileName={item.fileName}
-                  onOpen={() => onOpenSource(index)}
-                  labels={labels}
-                  data-testid={`${idPrefix}-source-${index}`}
-                />
-              ) : undefined
-            }
-            actions={extraActions}
-          >
-            {renderExtra?.(item, index)}
-          </EvidenceCard>
-        );
-      })}
+      {items.map((_, index) => card(index))}
     </ul>
   );
 }
