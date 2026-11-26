@@ -509,6 +509,31 @@ def test_chart_values_match_the_table(chart_type: str, series: list[int]) -> Non
     assert _without_workbook_reference(actual) == _without_workbook_reference(expected)
 
 
+@pytest.mark.parametrize("chart_type", ["column", "bar", "line"])
+def test_chart_with_negative_values_stays_readable(chart_type: str) -> None:
+    """負の値の棒の色を反転せず、項目の名前をグラフの端に置く（#5858。体裁は共通の部品）。"""
+    rows: list[list[Any]] = [["1 月", 120, -30.5], ["2 月", -80, None], ["3 月", 45, -90]]
+    [slide] = _open(
+        ChartSlide("月ごとの増減", SALES, rows, ChartSpec(chart_type, 1, [2, 3]))
+    ).slides
+    chart = _chart(slide)
+
+    assert [list(item.values) for item in chart.plots[0].series] == [
+        [120.0, -80.0, 45.0],
+        [-30.5, None, -90.0],
+    ]
+    assert chart.element.xpath("//c:catAx/c:tickLblPos/@val") == ["low"]
+    assert chart.element.xpath("//c:ser/c:invertIfNegative/@val") == (
+        [] if chart_type == "line" else ["0", "0"]
+    )
+
+
+def test_pie_chart_writes_the_legend_position() -> None:
+    [slide] = _open(ChartSlide("月ごとの割合", SALES, SALES_ROWS, ChartSpec("pie", 1, [2]))).slides
+
+    assert _chart(slide).element.xpath("//c:legendPos/@val") == ["r"]
+
+
 def _decimal(value: Any) -> Any:
     return None if value is None else Decimal(str(value))
 

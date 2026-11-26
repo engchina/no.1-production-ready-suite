@@ -5,7 +5,9 @@
 
 - 値: 項目の名前と系列の値が、渡した値と一致する（XML の中の値と、埋め込みのブックの両方）。
 - 体裁: 種類ごとの色・凡例・値のラベル・表示形式・横棒の並び順。題と全体の枠は無い。
-- 雛形の手当て: 軸の ID が正の数で対応している・`c:varyColors` が 0・字体が英数字と東アジアの両方。
+- 負の値（#5858）: 棒の色を反転しない・項目の名前をグラフの端に置く。
+- 雛形の手当て: 軸の ID が正の数で対応している・`c:varyColors` が 0・字体が英数字と東アジアの両方・
+  凡例の位置の属性を省かない（openpyxl が読める）。
 """
 
 from __future__ import annotations
@@ -16,8 +18,10 @@ from typing import Any
 
 import pytest
 from openpyxl import load_workbook  # type: ignore[import-untyped]
+from openpyxl.chart.chartspace import ChartSpace  # type: ignore[import-untyped]
+from openpyxl.xml.functions import fromstring  # type: ignore[import-untyped]
 from pptx.chart.chart import Chart
-from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION, XL_TICK_LABEL_POSITION
 from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
 from pptx.util import Pt
@@ -37,6 +41,8 @@ CATEGORIES = ("品目 A", "品目 B", "品目 C")
 QUANTITY = ChartSeries("数量（個）", (Decimal(1200), Decimal("30.5"), None), "integer")
 RATE = ChartSeries("比率", (Decimal("0.25"), Decimal("0.5"), Decimal("0.125")), "percent1")
 PLAIN = ChartSeries("値", (Decimal(3), Decimal(2), Decimal(1)), None)
+CHANGE = ChartSeries("増減", (Decimal(120), Decimal(-80), Decimal("-150.5")), "integer")
+DIFFERENCE = ChartSeries("差", (Decimal(-30), None, Decimal(-90)), None)
 
 
 def _chart(data: ChartData) -> tuple[Any, bytes]:
@@ -140,6 +146,59 @@ def test_legend_is_shown_only_when_colors_tell_things_apart() -> None:
     assert many.has_legend and many.legend.position == XL_LEGEND_POSITION.BOTTOM
     assert pie.has_legend and pie.legend.position == XL_LEGEND_POSITION.RIGHT
     assert many.legend.include_in_layout is False
+    # 位置は、既定の値（右）でも属性に書く。
+    assert _values(pie.element, "//c:legendPos/@val") == ["r"]
+    assert _values(many.element, "//c:legendPos/@val") == ["b"]
+    assert single.element.xpath("//c:legendPos") == []
+
+
+@pytest.mark.parametrize("chart_type", list(CHART_TYPES), ids=list(CHART_TYPES))
+def test_openpyxl_reads_the_chart_xml(chart_type: str) -> None:
+    """既定の値の属性を省いた XML は、schema に合っていても openpyxl が読めない（#5858）。"""
+    series = (PLAIN,) if chart_type == "pie" else (QUANTITY, RATE)
+    xml, _ = chart_parts(ChartData(chart_type, CATEGORIES, series), font_name=FONT)
+
+    space = ChartSpace.from_tree(fromstring(xml))
+    legend = space.chart.legend
+    assert legend is not None and legend.position == ("r" if chart_type == "pie" else "b")
+
+
+@pytest.mark.parametrize("chart_type", ["column", "bar", "line"])
+def test_negative_values_stay_readable(chart_type: str) -> None:
+    """負の値の棒も系列の色で塗り、項目の名前を負の値の棒・線に重ねない（#5858）。"""
+    chart, _ = _chart(ChartData(chart_type, CATEGORIES, (CHANGE, DIFFERENCE)))
+    root = chart.element
+
+    # 値は負のまま入る。
+    assert [list(item.values) for item in chart.plots[0].series] == [
+        [120.0, -80.0, -150.5],
+        [-30.0, None, -90.0],
+    ]
+    # 項目の名前はグラフの端（縦棒・折れ線は下、横棒は左）。値の軸の目盛りは軸のそばのまま。
+    assert chart.category_axis.tick_label_position == XL_TICK_LABEL_POSITION.LOW
+    assert _values(root, "//c:catAx/c:tickLblPos/@val") == ["low"]
+    assert _values(root, "//c:valAx/c:tickLblPos/@val") == ["nextTo"]
+    if chart_type == "line":
+        # 折れ線に、棒の塗りの指定は無い。
+        assert root.xpath("//c:invertIfNegative") == []
+        return
+    # 棒は、負の値でも色を反転しない（系列ごとに書く。schema の順では `c:spPr` のすぐ後ろ）。
+    assert [item.invert_if_negative for item in chart.plots[0].series] == [False, False]
+    after_fill = "//c:ser/c:spPr/following-sibling::*[1][self::c:invertIfNegative]/@val"
+    assert _values(root, after_fill) == ["0", "0"]
+    assert [item.format.fill.fore_color.rgb for item in chart.plots[0].series] == list(
+        CHART_COLORS[:2]
+    )
+
+
+@pytest.mark.parametrize("chart_type", ["column", "bar", "line"])
+def test_charts_without_negative_values_have_the_same_settings(chart_type: str) -> None:
+    """負の値の指定は、値に依らず書く（利用者が Office で値を負に変えても崩れない）。"""
+    chart, _ = _chart(ChartData(chart_type, CATEGORIES, (QUANTITY,)))
+
+    assert _values(chart.element, "//c:catAx/c:tickLblPos/@val") == ["low"]
+    inverted = _values(chart.element, "//c:ser/c:invertIfNegative/@val")
+    assert inverted == ([] if chart_type == "line" else ["0"])
 
 
 def test_series_colors_follow_the_fixed_order() -> None:

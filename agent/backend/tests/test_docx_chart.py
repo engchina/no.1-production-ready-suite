@@ -423,6 +423,38 @@ def test_chart_is_the_shared_drawing_with_the_document_text_sizes() -> None:
     ]
 
 
+@pytest.mark.parametrize("chart_type", ["column", "bar", "line"])
+def test_chart_with_negative_values_stays_readable(chart_type: str) -> None:
+    """負の値の棒の色を反転せず、項目の名前をグラフの端に置く（#5858。体裁は共通の部品）。"""
+    rows: list[list[Any]] = [
+        ["4 月", 120, -0.25, None],
+        ["5 月", -80, None, None],
+        ["6 月", 45, -0.5, None],
+    ]
+    [(chart, sheet)] = _charts(_build(_chart_block(chart_type, (2, 3), rows=rows)).data)
+
+    assert [list(item.values) for item in chart.plots[0].series] == [
+        [120.0, -80.0, 45.0],
+        [-0.25, None, -0.5],
+    ]
+    # 値のブック（利用者が「データの編集」で開く表）にも、負の値のまま入る。
+    assert [row[1:] for row in sheet.iter_rows(min_row=2, values_only=True)] == [
+        (120, -0.25),
+        (-80, None),
+        (45, -0.5),
+    ]
+    assert chart.element.xpath("//c:catAx/c:tickLblPos/@val") == ["low"]
+    assert chart.element.xpath("//c:ser/c:invertIfNegative/@val") == (
+        [] if chart_type == "line" else ["0", "0"]
+    )
+
+
+def test_pie_chart_writes_the_legend_position() -> None:
+    [(chart, _)] = _charts(_build(_chart_block("pie", (2,), rows=PIE_ROWS)).data)
+
+    assert chart.element.xpath("//c:legendPos/@val") == ["r"]
+
+
 def test_names_are_written_as_text_not_formulas_or_links() -> None:
     """表の値を、数式・リンクとして評価される形でファイルに入れない。"""
     labels = ["=1+1", "http://example.invalid/x", "@SUM(1)", '<b>&"']

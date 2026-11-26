@@ -1,8 +1,8 @@
 """Excel のシートに置くグラフ（#5837）。そのシートの表の cell を参照する Office のグラフ。
 
 Run・DB・ツールの層に依らない。指定（種類・列・上限）の検証は `chart_spec`、グラフの XML（種類ごとに
-決まっている色・凡例・値のラベル・軸の体裁と、雛形の手当て）は PowerPoint・Word と同じ
-`chart_drawing` が作る。ここは Excel に合わせる所だけを持つ。
+決まっている色・凡例・値のラベル・軸の体裁・負の値の表示と、雛形の手当て）は PowerPoint・Word と
+同じ `chart_drawing` が作る。ここは Excel に合わせる所だけを持つ。
 
 - 値の参照（`c:f`）を、そのシートの表の cell に書き換える。系列の名前は表の見出しの cell、項目の
   名前と系列の値は表のデータの行（集計の行は含めない）。利用者が cell の値を変えると、グラフも
@@ -14,14 +14,9 @@ Run・DB・ツールの層に依らない。指定（種類・列・上限）の
   日付の軸に切り替えないようにする）。
 - グラフの全体を白く塗り、薄い線で囲む（透明のままだと、シートの枠線が透ける）。角は丸めない
   （`c:roundedCorners` が無いと、Excel は枠の角を丸める）。
-- 凡例の位置は、既定の値（右）でも属性に書く（省くと、openpyxl がブックを読めない。Excel の
-  ファイルは、利用者や別の処理が openpyxl で読み直すことがある）。
 - 字の大きさは、シートの cell の字に合わせて小さくする（`chart_drawing` の大きさはスライド用）。
   グラフの大きさも同じ割合で小さくし、縦と横の比はスライドのグラフに合わせる（値のラベル・凡例・
   円の配置は、その比で重ならないように決まっている）。
-- 負の値があっても読めるようにする: 負の値の棒も系列の色で塗り（`c:invertIfNegative` が無いと、
-  Excel は負の値の棒を白く塗る）、項目の名前はグラフの端に置く（既定の「軸のそば」だと、0 の線の
-  所に出て、負の値の棒・線に重なる）。
 - 置き場所は表の右（1 列空けて、表の見出しの行から）。大きさは決まっている（`CHART_WIDTH_CM`・
   `CHART_HEIGHT_CM`。横棒だけは、棒の数が多いときに、縦棒と同じ棒の太さになる高さまで高くする）。
   cell と一緒に動くが、列の幅・行の高さを変えても大きさは変わらない。
@@ -41,7 +36,6 @@ from openpyxl.utils.datetime import to_excel  # type: ignore[import-untyped]
 from openpyxl.worksheet.worksheet import Worksheet  # type: ignore[import-untyped]
 from openpyxl.xml.functions import fromstring  # type: ignore[import-untyped]
 from pptx.chart.chart import Chart
-from pptx.enum.chart import XL_TICK_LABEL_POSITION
 from pptx.opc.oxml import serialize_part_xml
 from pptx.oxml import parse_xml
 from pptx.oxml.ns import qn
@@ -189,20 +183,13 @@ def sheet_chart_xml(
                 continue
             [formula] = holder.iter(qn("c:f"))
             formula.text = reference
-    if data.type in ("column", "bar"):
-        for bar in chart.plots[0].series:
-            bar.invert_if_negative = False
     if data.type != PIE:
-        chart.category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
         if numeric:
             labels = chart.category_axis.tick_labels
             labels.number_format = categories[0].number_format
             labels.number_format_is_linked = True
         for auto in root.iter(qn("c:auto")):
             auto.set("val", "0")
-    for position in root.iter(qn("c:legendPos")):
-        if position.get("val") is None:
-            position.set("val", "r")
     _fill_frame(root)
     _resize_text(root)
     return bytes(serialize_part_xml(root))

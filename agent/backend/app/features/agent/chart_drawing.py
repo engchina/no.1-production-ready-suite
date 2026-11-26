@@ -21,11 +21,16 @@
     （軸の目盛りは 1 つ目の系列の列の書式）。項目の名前は間引かない。
   - 横棒は、表の上の行から順に、上から並べる。
   - 空の値は、棒を置かず、線をつながない。
+  - 負の値があっても読めるようにする: 負の値の棒も系列の色で塗り（`c:invertIfNegative` が無いと、
+    Office は負の値の棒を白く塗って黒い線で囲む）、項目の名前はグラフの端（縦棒・折れ線は下、
+    横棒は左）に置く（既定の「軸のそば」だと、0 の線の所に出て、負の値の棒・線に重なる。負の値が
+    無いグラフでは、0 の線が端なので、置き場所は変わらない）。
 - 雛形の手当て: 軸の ID を 1 からの番号に振り直す（雛形の負の数は、schema の符号なしの整数に
   合わない。32 bit の符号つきの整数を超える値は、LibreOffice が軸を取り違える）。棒と
   折れ線は `c:varyColors` を 0 にする（無いと、系列が 1 つのときに Office が棒ごとに色を変える）。
   字体は `a:latin` に加えて東アジアの `a:ea` も書く。字の大きさを明示する（既定はスライドの本文用の
-  大きさで、グラフには大きすぎる）。
+  大きさで、グラフには大きすぎる）。凡例の位置は、既定の値（右）でも属性に書く（python-pptx は
+  既定の値の属性を省く。schema では省けるが、省くと openpyxl がグラフを読めない）。
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from pptx.enum.chart import (
     XL_LABEL_POSITION,
     XL_LEGEND_POSITION,
     XL_MARKER_STYLE,
+    XL_TICK_LABEL_POSITION,
     XL_TICK_MARK,
 )
 from pptx.opc.oxml import serialize_part_xml
@@ -167,6 +173,9 @@ def style_chart(
     if chart.has_legend:
         chart.legend.position = XL_LEGEND_POSITION.RIGHT if pie else XL_LEGEND_POSITION.BOTTOM
         chart.legend.include_in_layout = False
+        # 位置が既定の値（右）のとき、python-pptx は属性を省く。省かずに書く。
+        for position in chart.element.iter(qn("c:legendPos")):
+            position.set("val", position.get("val", "r"))
     if pie:
         _style_pie(plot, data, label_pt)
         return
@@ -185,6 +194,8 @@ def style_chart(
         else:
             series.format.fill.solid()
             series.format.fill.fore_color.rgb = color
+            # 負の値の棒も、系列の色で塗る（指定が無いと、Office は白く塗って黒い線で囲む）。
+            series.invert_if_negative = False
     if data.type != "line":
         plot.gap_width = 80
         plot.overlap = -10
@@ -213,6 +224,8 @@ def _style_axes(chart: Any, data: ChartData) -> None:
     category_axis, value_axis = chart.category_axis, chart.value_axis
     category_axis.has_major_gridlines = False
     category_axis.major_tick_mark = XL_TICK_MARK.NONE
+    # 項目の名前は、グラフの端に置く（軸のそばだと、負の値があるときに棒・線と重なる）。
+    category_axis.tick_label_position = XL_TICK_LABEL_POSITION.LOW
     category_axis.format.line.color.rgb = _GRID
     value_axis.major_tick_mark = XL_TICK_MARK.NONE
     value_axis.format.line.fill.background()
