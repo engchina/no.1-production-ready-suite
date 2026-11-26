@@ -257,7 +257,7 @@ class AgentSkillListOutput(BaseModel):
 # ID の文字の順ではなく、RAG チャット → RAG 検索 → RAG チャット＋データ → RAG 検索＋データ → 構造化
 # データ照会（#5342。業務 RAG 調査・資料とデータの横断調査・条の目録から根拠を探すは消した）→
 # Excel 作成 → Word 作成 → PowerPoint 作成（#5837。Control Plane のツール `xlsx_create`・
-# `docx_create`・`pptx_create` を宣言する）。
+# `docx_create`・`pptx_create` を宣言する）→ Markdown 作成（#5867。`markdown_create`）。
 RAG_CHAT_SKILL_ID = "rag-chat"
 RAG_SEARCH_SKILL_ID = "rag-search"
 RAG_CHAT_AND_DATA_SKILL_ID = "rag-chat-and-data"
@@ -266,6 +266,7 @@ STRUCTURED_DATA_QUERY_SKILL_ID = "structured-data-query"
 XLSX_CREATE_SKILL_ID = "xlsx-create"
 DOCX_CREATE_SKILL_ID = "docx-create"
 PPTX_CREATE_SKILL_ID = "pptx-create"
+MARKDOWN_CREATE_SKILL_ID = "markdown-create"
 BUILTIN_SKILL_IDS: tuple[str, ...] = (
     RAG_CHAT_SKILL_ID,
     RAG_SEARCH_SKILL_ID,
@@ -275,6 +276,7 @@ BUILTIN_SKILL_IDS: tuple[str, ...] = (
     XLSX_CREATE_SKILL_ID,
     DOCX_CREATE_SKILL_ID,
     PPTX_CREATE_SKILL_ID,
+    MARKDOWN_CREATE_SKILL_ID,
 )
 
 

@@ -1,8 +1,10 @@
-"""ファイルを作る組み込みの業務 Agent の Run（#5837）。
+"""ファイルを作る組み込みの業務 Agent の Run（#5837・#5867）。
 
 - 文書作成アシスタント: MCP 接続（RAG・NL2SQL）のツールを持たず、会話の内容からファイルを作る。
 - RAG 検索＋データ＋文書作成・RAG チャット＋データ＋文書作成: 対応する業務 Agent と同じ資料・
   業務データのツールに、ファイルを作るツールが加わり、調べた表をファイルにする。
+- RAG 検索＋文書作成・RAG チャット＋文書作成（#5867）: RAG だけの業務 Agent と同じ資料のツールに、
+  ファイルを作るツールが加わる。RAG の回答で Run を終えず、調べた内容をファイルにする。
 
 モデルは SDK の `ScriptedModel`、RAG・NL2SQL は契約どおりの fake の MCP（`mcp_support`）、保存先は
 memory。値は合成。
@@ -22,14 +24,17 @@ from openpyxl import load_workbook  # type: ignore[import-untyped]
 from pytest import MonkeyPatch
 
 from app.features.agent import builtin_runtime
-from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND
+from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND, MARKDOWN_MIME_TYPE
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.docx_tool import DOCX_CREATE_TOOL
+from app.features.agent.markdown_tool import MARKDOWN_CREATE_TOOL
 from app.features.agent.pptx_tool import PPTX_CREATE_TOOL
 from app.features.agent.runtime import (
     DOC_CREATE_AGENT_ID,
     RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
+    RAG_CHAT_DOC_CREATE_AGENT_ID,
     RAG_SEARCH_DATA_DOC_CREATE_AGENT_ID,
+    RAG_SEARCH_DOC_CREATE_AGENT_ID,
     RunCreateRequest,
     RunState,
     RunStatus,
@@ -42,8 +47,13 @@ from app.features.agent.tools import MCP_TOOL_SEPARATOR
 from app.features.agent.xlsx_tool import XLSX_CREATE_TOOL
 
 USER_UUID = "11111111-2222-3333-4444-555555558370"
-FILE_TOOLS = {XLSX_CREATE_TOOL, DOCX_CREATE_TOOL, PPTX_CREATE_TOOL}
-FILE_SKILL_HEADINGS = ("# Skill: Excel 作成", "# Skill: Word 作成", "# Skill: PowerPoint 作成")
+FILE_TOOLS = {XLSX_CREATE_TOOL, DOCX_CREATE_TOOL, PPTX_CREATE_TOOL, MARKDOWN_CREATE_TOOL}
+FILE_SKILL_HEADINGS = (
+    "# Skill: Excel 作成",
+    "# Skill: Word 作成",
+    "# Skill: PowerPoint 作成",
+    "# Skill: Markdown 作成",
+)
 # 合成の NL2SQL の結果。
 COLUMNS = ["LABEL", "AMOUNT"]
 ROWS: list[dict[str, Any]] = [
@@ -139,7 +149,7 @@ def test_doc_create_agent_makes_a_file_from_the_conversation_without_mcp(script:
 
     assert run.status == RunStatus.COMPLETED, run.events[-1].model_dump_json()
     assert run.approvals == []
-    # 渡るツールはファイルを作る 3 つで、MCP 接続（RAG・NL2SQL）のツールは渡らない。
+    # 渡るツールはファイルを作る 4 つで、MCP 接続（RAG・NL2SQL）のツールは渡らない。
     names = _tool_names(model)
     assert names >= FILE_TOOLS
     assert [name for name in names if MCP_TOOL_SEPARATOR in name] == []
@@ -203,7 +213,7 @@ def test_data_and_file_agents_make_a_file_from_the_looked_up_table(
     assert run.status == RunStatus.COMPLETED, run.events[-1].model_dump_json()
     assert run.approvals == []
     names = _tool_names(model)
-    # 資料・業務データのツールは対応する業務 Agent と同じで、ファイルを作る 3 つが加わる。
+    # 資料・業務データのツールは対応する業務 Agent と同じで、ファイルを作る 4 つが加わる。
     assert {rag_tool, "nl2sql__nl2sql_query", *FILE_TOOLS} <= names
     assert other_rag_tool not in names
     instructions = str(model.calls[0].system_instructions)
@@ -214,6 +224,60 @@ def test_data_and_file_agents_make_a_file_from_the_looked_up_table(
     assert all(heading in instructions for heading in FILE_SKILL_HEADINGS)
     # 値は業務データの照会の結果と一致する（モデルの引数に値は無い）。
     assert _file_rows(run) == [COLUMNS, *[[row["LABEL"], row["AMOUNT"]] for row in ROWS]]
+    assert run_answer_text(run) == answer
+    model.assert_complete()
+
+
+@pytest.mark.parametrize(
+    ("agent_id", "rag_tool", "other_rag_tool"),
+    [
+        (RAG_SEARCH_DOC_CREATE_AGENT_ID, "rag__rag_search", "rag__rag_chat"),
+        (RAG_CHAT_DOC_CREATE_AGENT_ID, "rag__rag_chat", "rag__rag_search"),
+    ],
+    ids=["rag_search", "rag_chat"],
+)
+def test_rag_and_file_agents_make_a_file_from_the_rag_answer(
+    monkeypatch: MonkeyPatch, script: Any, agent_id: str, rag_tool: str, other_rag_tool: str
+) -> None:
+    """RAG だけ＋文書作成は、RAG の回答で Run を終えずに、調べた内容をファイルにする（#5867）。"""
+    fake_product_mcp(monkeypatch)
+    content = "# 合成の手順\n\n## 概要\n\n合成の内容。\n"
+    answer = "ファイル「合成の手順.md」を作りました。章は「概要」の 1 つです。"
+
+    run, model = script(
+        agent_id,
+        "合成の手順を資料で調べて Markdown のファイルにして",
+        [function_call(rag_tool, {"query": "合成の手順"}, call_id="call-rag")],
+        [
+            function_call(
+                MARKDOWN_CREATE_TOOL,
+                {"file_name": "合成の手順", "content": content},
+                call_id="call-md",
+            )
+        ],
+        [assistant_message(answer)],
+    )
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].model_dump_json()
+    assert run.approvals == []
+    names = _tool_names(model)
+    # 資料のツールは RAG だけの業務 Agent と同じで、業務データのツールは渡らない。
+    assert {rag_tool, *FILE_TOOLS} <= names
+    assert other_rag_tool not in names
+    assert [name for name in names if name.startswith("nl2sql")] == []
+    instructions = str(model.calls[0].system_instructions)
+    assert instructions.index("## Step 1: ") < instructions.index(
+        "## Step 2: 確かめた内容をファイルにする"
+    )
+    assert all(heading in instructions for heading in FILE_SKILL_HEADINGS)
+    # RAG の回答の後にモデルがファイルを作り、モデルの回答で終わる（3 回とも呼ばれる）。
+    assert len(model.calls) == 3
+    [artifact] = [item for item in run.artifacts if item.kind == FILE_ARTIFACT_KIND]
+    assert (artifact.content["file_name"], artifact.content["mime_type"]) == (
+        "合成の手順.md",
+        MARKDOWN_MIME_TYPE,
+    )
+    assert runtime_repository.read_artifact_file(run.id, artifact.id).data == content.encode()
     assert run_answer_text(run) == answer
     model.assert_complete()
 

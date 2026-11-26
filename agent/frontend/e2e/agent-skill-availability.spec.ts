@@ -87,6 +87,13 @@ test.describe("削除されたスキルと RAG の回答をそのまま返すス
     await notices.scrollIntoViewIfNeeded();
     await page.screenshot({ path: testInfo.outputPath("agent-editor-skill-notices.png") });
 
+    // 回答のツールを宣言せずにツールを使うスキルも選ぶと、モデルが回答を書くので案内は消える（#5867）。
+    const dataQuery = picker.getByRole("option", { name: /^構造化データ照会/ });
+    await dataQuery.click();
+    await expect(notices.getByTestId("agent-final-answer-notice")).toHaveCount(0);
+    await dataQuery.click();
+    await expect(notices.getByTestId("agent-final-answer-notice")).toHaveCount(1);
+
     // RAG チャットを外すと RAG の回答の案内は消え、削除されたスキル（公開中の版）の案内は残る。
     await picker.getByRole("option", { name: /^RAG チャット(?!＋)/ }).click();
     await expect(notices.getByTestId("agent-final-answer-notice")).toHaveCount(0);

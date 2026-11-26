@@ -45,10 +45,12 @@ describe("runFileArtifacts", () => {
           mime_type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
           size_bytes: 10,
         }),
+        file("a3", { file_name: "手順.md", mime_type: "text/markdown; charset=utf-8", size_bytes: 5 }),
       ]),
     ).toEqual([
       { id: "a1", fileName: "集計.xlsx", type: "xlsx", sizeBytes: 2048 },
       { id: "a2", fileName: "資料.pptx", type: "pptx", sizeBytes: 10 },
+      { id: "a3", fileName: "手順.md", type: "md", sizeBytes: 5 },
     ]);
   });
 

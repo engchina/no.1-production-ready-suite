@@ -445,9 +445,15 @@ export function AgentEditorView({
   // 公開中の版のものは、選び直して公開するまで残る。
   const unavailableSkillIds = [...new Set([...missingSkillIds, ...(agent?.unavailable_skill_ids ?? [])])];
   // RAG の回答をそのまま返すスキル（final_answer_tools。#5342）を選んでいたら、回答の書き方の置き場を示す。
-  const finalAnswerSkillNames = availableSkills
-    .filter((skill) => skillIds.includes(skill.id) && skill.final_answer_tools?.length)
-    .map((skill) => skill.name);
+  // 回答のツールを宣言せずにツールを使うスキル（データつき・ファイルを作るスキルなど）も選んでいれば、モデルが
+  // 回答を書くので示さない（backend の `final_answer_tool_names` と同じ判定。#5867）。
+  const selectedSkills = availableSkills.filter((skill) => skillIds.includes(skill.id));
+  const modelWritesAnswer = selectedSkills.some(
+    (skill) => skill.enabled && !skill.final_answer_tools?.length && skill.mcp_requirements.length > 0
+  );
+  const finalAnswerSkillNames = modelWritesAnswer
+    ? []
+    : selectedSkills.filter((skill) => skill.final_answer_tools?.length).map((skill) => skill.name);
   // 公開は保存済みの下書きを版にする。画面の入力と違う内容を公開しないよう、未保存の変更があるあいだは
   // 押せなくする（自動実行の「今すぐ実行」と同じ。#925）。
   const publishBlocked = formDirty && actions.some((action) => action.id === "publish" && action.visible !== false);

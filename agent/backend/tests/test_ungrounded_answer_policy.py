@@ -557,7 +557,7 @@ def test_new_builtin_and_saved_agents_default_to_annotate(tmp_path: Path) -> Non
     assert AgentProfile(name="新しい業務 Agent").ungrounded_answer_policy == "annotate"
     assert "ungrounded_answer_policy" in AGENT_VERSIONED_FIELDS
     builtin = [item for item in runtime_repository.list_agents() if item.id in BUILTIN_AGENT_IDS]
-    assert len(builtin) == len(BUILTIN_AGENT_IDS) == 8
+    assert len(builtin) == len(BUILTIN_AGENT_IDS) == 10
     for agent in builtin:
         published = agent.published()
         assert agent.ungrounded_answer_policy == "annotate", agent.id

@@ -21,13 +21,15 @@ export const USER_OUTPUT_ARTIFACT_KINDS: ReadonlySet<string> = new Set([
   FILE_ARTIFACT_KIND,
 ]);
 
-/** ファイルの形式（backend の `FILE_ARTIFACT_EXTENSIONS` と同じ 3 つ。それ以外は `other`）。 */
-export type FileArtifactType = "xlsx" | "docx" | "pptx" | "other";
+/** ファイルの形式（backend の `FILE_ARTIFACT_EXTENSIONS` と同じ 4 つ。それ以外は `other`）。 */
+export type FileArtifactType = "xlsx" | "docx" | "pptx" | "md" | "other";
 
 const FILE_ARTIFACT_TYPES: Record<string, FileArtifactType> = {
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
   "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  // Markdown（#5867。backend の `MARKDOWN_MIME_TYPE`）。画面ではプレビューせず、ダウンロードだけ。
+  "text/markdown; charset=utf-8": "md",
 };
 
 /** ファイルの成果物の表示に使う値（中身は成果物に無い。ダウンロードの API で取る）。 */

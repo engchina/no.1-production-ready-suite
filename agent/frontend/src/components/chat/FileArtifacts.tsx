@@ -1,5 +1,14 @@
 import { useMutation } from "@tanstack/react-query";
-import { Download, File, FileDown, FileSpreadsheet, FileText, Presentation, type LucideIcon } from "lucide-react";
+import {
+  Download,
+  File,
+  FileCode,
+  FileDown,
+  FileSpreadsheet,
+  FileText,
+  Presentation,
+  type LucideIcon,
+} from "lucide-react";
 import { ApiErrorBanner, Button, formatAttachmentSize } from "@production-ready/ui";
 
 import { downloadBlob } from "@/components/evaluation/EvaluationSetEditor";
@@ -8,7 +17,7 @@ import { t } from "@/lib/i18n";
 import type { FileArtifactType, RunFileArtifact } from "@/lib/run-artifacts";
 
 /**
- * 業務 Agent のツールが作ったファイル（#5837。成果物 `file`）。チャットの回答の下と、実行の詳細の「成果物」に出す。
+ * 業務 Agent のツールが作ったファイル（#5837・#5867。成果物 `file`）。チャットの回答の下と、実行の詳細の「成果物」に出す。
  *
  * 成果物はファイル名・形式・大きさだけを持つ。中身は押したときにダウンロードの API から Cookie セッションで取り
  * （リンクの直打ちにしない）、ブラウザに保存させる。失敗（無い・権限なし）は、その行の直下に出す。
@@ -18,6 +27,7 @@ const TYPE_ICON: Record<FileArtifactType, LucideIcon> = {
   xlsx: FileSpreadsheet,
   docx: FileText,
   pptx: Presentation,
+  md: FileCode,
   other: File,
 };
 

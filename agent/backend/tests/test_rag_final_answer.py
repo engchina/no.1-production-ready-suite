@@ -29,6 +29,7 @@ from app.features.agent.runtime import (
     runtime_repository,
 )
 from app.features.agent.skills import (
+    MARKDOWN_CREATE_SKILL_ID,
     AgentSkillDefinition,
     FinalAnswerTool,
     SkillMcpRequirement,
@@ -41,6 +42,7 @@ USER_UUID = "11111111-2222-3333-4444-535353535353"
 AGENT_ID = "test5342-agent"
 FINAL_SKILL = "test5342-final"
 DATA_SKILL = "test5342-data"
+TEXT_SKILL = "test5867-text"
 RAG_ANSWER = "合成の RAG の回答"
 ORIGINS = {("rag", "rag_chat"): "rag__rag_chat", ("rag", "rag_search"): "rag__rag_search"}
 
@@ -76,6 +78,24 @@ def test_final_answer_tools_skip_tools_also_used_without_the_declaration(skills:
     assert final_answer_tool_names([DATA_SKILL], ORIGINS) == frozenset()
     # モデルに渡していないツールは対象にしない。
     assert final_answer_tool_names([FINAL_SKILL], {}) == frozenset()
+
+
+def test_final_answer_tools_skip_when_another_skill_uses_tools(skills: None) -> None:
+    """回答のツールを宣言せずにツールを使うスキル（ファイルを作るスキルなど）も選んだ Agent は、
+    モデルが回答をほかのツールの結果と合わせる（調べた内容をファイルにする。#5867）。"""
+    assert final_answer_tool_names([FINAL_SKILL, MARKDOWN_CREATE_SKILL_ID], ORIGINS) == frozenset()
+    assert final_answer_tool_names([MARKDOWN_CREATE_SKILL_ID, FINAL_SKILL], ORIGINS) == frozenset()
+    # ツールを使わないスキル（指示だけ）と、回答のツールを宣言したスキル同士はそのまま返す。
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(id=TEXT_SKILL, name=TEXT_SKILL, instructions="丁寧に書く。")
+    )
+    try:
+        assert final_answer_tool_names([FINAL_SKILL, TEXT_SKILL], ORIGINS) == frozenset(
+            {"rag__rag_chat"}
+        )
+    finally:
+        with contextlib.suppress(KeyError, ValueError):
+            skill_registry.remove(TEXT_SKILL)
 
 
 def test_rag_final_answer_stops_on_answers_candidates_and_clarifications() -> None:

@@ -177,6 +177,37 @@ def test_third_party_based_skill_keeps_its_license_in_the_folder_and_the_export(
     assert {"SKILL.md", *LICENSE_FILE_NAMES} == {item.path for item in export_skill(skill).files}
 
 
+def test_markdown_skill_keeps_both_licenses_in_the_folder_and_the_export() -> None:
+    """Markdown 作成（#5867）は 2 つの出典（Apache License 2.0 と MIT License）を元にする。
+
+    Apache License 2.0 の全文は LICENSE.txt、MIT License の全文と両方の出典・変更点は NOTICE に
+    置き、書き出しにも入れる。
+    """
+    source = BUILTIN_SKILLS_DIR / "markdown-create"
+    license_text = (source / "LICENSE.txt").read_text(encoding="utf-8")
+    notice = (source / "NOTICE").read_text(encoding="utf-8")
+    assert "Version 2.0, January 2004" in license_text
+    assert "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION" in license_text
+    for expected in (
+        "K-Dense-AI/claude-scientific-skills",
+        "skills/markdown-mermaid-writing/SKILL.md",
+        "a92663a0214b3b9fa1ba6b958284ffd919c00a0c",
+        "SuperiorByteWorks-LLC/agent-project",
+        "github/awesome-copilot",
+        "instructions/markdown-gfm.instructions.md",
+        "b1537c6d96f660d54bcb5a9c6a40ab0a4518448e",
+        "Copyright GitHub, Inc.",
+        "Permission is hereby granted, free of charge",
+        "Changes made",
+    ):
+        assert expected in notice, expected
+    skill_md = (source / "SKILL.md").read_text(encoding="utf-8")
+    assert 'license: "Apache-2.0 と MIT（' in skill_md
+    skill = skill_registry.get("markdown-create")
+    assert skill is not None
+    assert {"SKILL.md", *LICENSE_FILE_NAMES} == {item.path for item in export_skill(skill).files}
+
+
 def test_export_api_returns_a_zip(runtime_skill: AgentSkillDefinition, tmp_path: Path) -> None:
     response = client.get(f"/api/skills/{SKILL_ID}/export")
     assert response.status_code == 200, response.text

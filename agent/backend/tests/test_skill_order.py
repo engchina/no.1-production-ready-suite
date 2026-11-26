@@ -51,6 +51,7 @@ def test_builtin_skill_ids_are_in_display_order() -> None:
         "xlsx-create",
         "docx-create",
         "pptx-create",
+        "markdown-create",
     )
 
 

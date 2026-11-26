@@ -133,7 +133,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 ツールを使う。組み込み Runtime は、Agent の選択 Skill が要求するツールの和集合だけをモデルに渡す（指示への列挙だけで
 権限を表現せず、渡すツールの一覧を実体として絞る）。
 
-組み込みの Skill と初期の業務 Agent（#1573・#5342・#5837）:
+組み込みの Skill と初期の業務 Agent（#1573・#5342・#5837・#5867）:
 
 | Skill の ID | 名前 | 使うツール |
 |---|---|---|
@@ -145,12 +145,14 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 | `xlsx-create` | Excel 作成 | Control Plane のツール `xlsx_create`（#5837。Excel のファイルを新しく作る。MCP 接続を使わないので、外部の Agent では使えない） |
 | `docx-create` | Word 作成 | Control Plane のツール `docx_create`（#5837。Word のファイルを新しく作る。MCP 接続を使わないので、外部の Agent では使えない） |
 | `pptx-create` | PowerPoint 作成 | Control Plane のツール `pptx_create`（#5837。PowerPoint のファイルを新しく作る。MCP 接続を使わないので、外部の Agent では使えない） |
+| `markdown-create` | Markdown 作成 | Control Plane のツール `markdown_create`（#5867。Markdown のファイル（.md）を新しく作る。MCP 接続を使わないので、外部の Agent では使えない） |
 
 `business-rag-research`・`rag-and-structured-data`・`article-catalog-lookup` は #5342 で消した（互換なし。選んでいた
 業務 Agent は `unavailable_skill_ids` で画面が示し、下書き・常に最新の版の Run は `runtime.skill_unavailable` で失敗する）。
 RAG だけのスキルは metadata `production-ready-final-answer-tools` で回答のツールを宣言し、組み込み Runtime はその回答を
 そのまま Run の回答にする（`docs/agents/runtime.md`「RAG の回答をそのまま返す」。回答の書き方は RAG の検索・回答
-プロファイルで設定する）。
+プロファイルで設定する）。回答のツールを宣言せずにツールを使うスキル（データつき・ファイルを作るスキル）も選んだ業務
+Agent では、モデルが回答を書く（#5867）。
 
 組み込みの Skill は Agent Skills の形式（agentskills.io）で、repo 直下の `skills/<name>/`（3 製品のどれにも属さない）に
 置く（#1816）。Agent は起動時に `skills.register_builtin_skills()` でこのフォルダを読み（コードに指示・説明・ツールを
@@ -173,7 +175,7 @@ RAG だけのスキルは metadata `production-ready-final-answer-tools` で回�
   読まれなかった。#1846）。
 - 仕様の検証は公式の `skills-ref`（`tests/test_skill_md_spec.py`）。`metadata` のツールが RAG / NL2SQL の MCP の契約
   （`platform/contracts/mcp/`）にあることも確かめる。Control Plane のツールを宣言するスキル（`control-plane:<ツール>`。
-  `xlsx-create`・`docx-create`・`pptx-create`）は、ツールが `tool_registry` に登録済みで、本文の `code` の識別子がそのツールの定義（引数・結果の
+  `xlsx-create`・`docx-create`・`pptx-create`・`markdown-create`）は、ツールが `tool_registry` に登録済みで、本文の `code` の識別子がそのツールの定義（引数・結果の
   schema）にあることを確かめる。`description` に MCP サーバーの名前は要らず、`compatibility` に業務 Agent 専用であることを
   書く。第三者の資料を元にするスキルは、許諾の全文（`LICENSE.txt`）と出典・変更点（`NOTICE`）をフォルダに置く
   （読み込みは無視し、書き出しの zip には入れる）。
@@ -209,22 +211,35 @@ RAG だけのスキルは metadata `production-ready-final-answer-tools` で回�
 | `rag-search` | RAG 検索アシスタント | `rag-search` |
 | `rag-search-data` | RAG 検索＋データアシスタント | `rag-search-and-data` |
 | `data-query` | データ照会アシスタント | `structured-data-query` |
-| `doc-create` | 文書作成アシスタント | `xlsx-create`・`docx-create`・`pptx-create` |
-| `rag-search-data-doc-create` | RAG 検索＋データ＋文書作成アシスタント | `rag-search-and-data`・`xlsx-create`・`docx-create`・`pptx-create` |
-| `rag-chat-data-doc-create` | RAG チャット＋データ＋文書作成アシスタント | `rag-chat-and-data`・`xlsx-create`・`docx-create`・`pptx-create` |
+| `doc-create` | 文書作成アシスタント | `xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
+| `rag-search-data-doc-create` | RAG 検索＋データ＋文書作成アシスタント | `rag-search-and-data`・`xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
+| `rag-chat-data-doc-create` | RAG チャット＋データ＋文書作成アシスタント | `rag-chat-and-data`・`xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
+| `rag-search-doc-create` | RAG 検索＋文書作成アシスタント | `rag-search`・`xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
+| `rag-chat-doc-create` | RAG チャット＋文書作成アシスタント | `rag-chat`・`xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
 
-ファイルを作る 3 つ（#5837）は、既にあるスキルの組み合わせ（新しい RAG・NL2SQL のスキルは持たない）。
+ファイルを作る 5 つ（#5837・#5867）は、既にあるスキルの組み合わせ（新しい RAG・NL2SQL のスキルは持たない）。ファイルを作る
+4 つのスキル（Excel・Word・PowerPoint・Markdown）をすべて持ち、どの形式で作るかはモデルが選ぶ（コードで振り分けない）。
 
 - 文書作成アシスタントは MCP 接続（RAG・NL2SQL）を使わず、ファイルの内容を会話と添付だけから取る。
 - 「＋文書作成」の 2 つは、対応する業務 Agent（`rag-search-data`・`default`）と同じ資料・業務データのツールで内容を
   確かめてから、求められた形式のファイルにする。指示は、対応する業務 Agent の Step 1 に、この順を書いた Step 2 を
   足したもの（ファイルの作り方はスキル、いつ作るかはツールの説明が持つ）。
-- 8 つとも、モデルは既定（`model_id` は空）、データの範囲（`data_scopes`）は空（利用者が使えるすべての
+- RAG だけ＋文書作成の 2 つ（#5867）は、「＋データ＋文書作成」から NL2SQL を除いた構成で、対応する業務 Agent
+  （`rag-search`・`rag-chat`）と同じ資料のツールに、ファイルを作るツールが加わる。`rag-search`・`rag-chat` のスキルは
+  回答のツールを宣言しているが、ファイルを作るスキル（宣言の無いスキル）も選んでいるので、RAG の回答で Run を終えずに
+  モデルが回答を書く（`builtin_runtime.final_answer_tool_names`。データつきの 2 つと同じく、調べた内容をファイルに
+  できる）。指示は、対応する業務 Agent の Step 1 に Step 2 を足したもの。
+- 10 個とも、モデルは既定（`model_id` は空）、データの範囲（`data_scopes`）は空（利用者が使えるすべての
   プロファイルから選ぶ）。Agent 管理が変えた内容は残る。
 
-8 つは builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開した
-状態。前の 5 つだけを保存した環境にも、足りない 3 つが入る。Oracle の保存先では、読み込みで足した業務 Agent の行は
-内容を変えたときに書く）。保存済みの `default` が前の組み込みの内容（名前が「汎用業務 Agent」のまま、か #5342 より前の「資料・データ横断
+10 個は builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開
+した状態。前の分だけを保存した環境にも、足りない分が入る。Oracle の保存先では、読み込みで足した業務 Agent の行は
+内容を変えたときに書く）。保存済みのファイルを作る組み込みの業務 Agent には、後から足したスキル（`markdown-create`。
+`runtime._ADDED_FILE_CREATE_SKILL_IDS`）を読み込みで足す（#5867。`runtime._add_builtin_skills`）: 下書き・残っている
+どの版にも入ったことの無い業務 Agent だけに、下書きのスキルの末尾と、公開中の版の内容にスキルを足した次の版（公開。
+版がスキルを固定していれば足すスキルも固定する）に足す。指示・説明・ほかのスキル・モデル・データの範囲は変えない。
+利用者が外したスキルは、外す前の版が残っている間は戻さない（版の上限 `AGENT_MAX_PUBLISHED_VERSIONS` で外す前の版が
+すべて消えた後の読み込みでは、もう一度足す）。保存済みの `default` が前の組み込みの内容（名前が「汎用業務 Agent」のまま、か #5342 より前の「資料・データ横断
 アシスタント」の内容）のままなら、新しい内容を次の版として公開する（前の版は残す。冪等。利用者が変えた内容は残す）。
 廃止した `rag-research`（資料調査アシスタント。#5342）は、下書きとすべての版が前の組み込みの内容のままなら読み込みで
 外して削除の印を付け、変えていたら組織の業務 Agent（由来 `runtime`）として残す（`runtime._migrate_builtin_agent`）。
