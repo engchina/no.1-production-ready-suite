@@ -109,11 +109,14 @@ from app.features.agent.report_preview import (
 from app.features.agent.run_budget import RUN_BUDGET_METADATA_KEY
 from app.features.agent.run_claim import RunClaim
 from app.features.agent.skills import (
+    DOCX_CREATE_SKILL_ID,
+    PPTX_CREATE_SKILL_ID,
     RAG_CHAT_AND_DATA_SKILL_ID,
     RAG_CHAT_SKILL_ID,
     RAG_SEARCH_AND_DATA_SKILL_ID,
     RAG_SEARCH_SKILL_ID,
     STRUCTURED_DATA_QUERY_SKILL_ID,
+    XLSX_CREATE_SKILL_ID,
     PinnedSkill,
     pin_skill,
     skill_registry,
@@ -6684,14 +6687,39 @@ RAG_CHAT_AGENT_ID = "rag-chat"
 RAG_SEARCH_AGENT_ID = "rag-search"
 RAG_SEARCH_DATA_AGENT_ID = "rag-search-data"
 DATA_QUERY_AGENT_ID = "data-query"
-# 組み込みの業務 Agent（#1573・#5342）。削除できず、保存済みの snapshot に無ければ読み込みで足す。
-# 既定の Agent（default。RAG チャット＋データ）が先頭（一覧は作成日時の順）。
+DOC_CREATE_AGENT_ID = "doc-create"
+RAG_SEARCH_DATA_DOC_CREATE_AGENT_ID = "rag-search-data-doc-create"
+RAG_CHAT_DATA_DOC_CREATE_AGENT_ID = "rag-chat-data-doc-create"
+# 組み込みの業務 Agent（#1573・#5342・#5837）。削除できず、保存済みの snapshot に無ければ読み込みで
+# 足す。既定の Agent（default。RAG チャット＋データ）が先頭（一覧は作成日時の順）。ファイルを作る
+# 3 つ（#5837）は後ろに足した（前の 5 つだけを保存した環境にも、読み込みで足りない分が入る）。
 BUILTIN_AGENT_IDS: tuple[str, ...] = (
     DEFAULT_AGENT_ID,
     RAG_CHAT_AGENT_ID,
     RAG_SEARCH_AGENT_ID,
     RAG_SEARCH_DATA_AGENT_ID,
     DATA_QUERY_AGENT_ID,
+    DOC_CREATE_AGENT_ID,
+    RAG_SEARCH_DATA_DOC_CREATE_AGENT_ID,
+    RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
+)
+# ファイルを作るスキル（#5837。Excel・Word・PowerPoint。Control Plane のツールだけを使う）。
+_FILE_CREATE_SKILL_IDS: tuple[str, ...] = (
+    XLSX_CREATE_SKILL_ID,
+    DOCX_CREATE_SKILL_ID,
+    PPTX_CREATE_SKILL_ID,
+)
+# データつきの組み込みの業務 Agent の指示（資料と業務データの使い分け）。
+_SOURCE_CHOICE_STEP = (
+    "## Step 1: 必要な情報源を選ぶ\n"
+    "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。"
+)
+# データつきでファイルも作る組み込みの業務 Agent の指示の続き（#5837）。調べるスキルとファイルを
+# 作るスキルをつなぐ順だけを書く（ファイルの作り方はスキル、いつ作るかはツールの説明が持つ）。
+_FILE_AFTER_SOURCES_STEP = (
+    "\n\n## Step 2: 確かめた内容をファイルにする\n"
+    "ファイルでの出力を求められたときは、資料と業務データで内容を確かめてから、"
+    "求められた形式のファイルにする。"
 )
 # 廃止した組み込みの業務 Agent（#5342。資料調査アシスタント）。読み込みで外し、利用者が中身を
 # 変えていたら組織の業務 Agent として残す。
@@ -6722,10 +6750,13 @@ _PREVIOUS_RAG_RESEARCH_CONTENT: dict[str, Any] = {
 
 
 def _builtin_agents() -> list[AgentProfile]:
-    """組み込みの業務 Agent（#5342）。並びは BUILTIN_AGENT_IDS と同じ。
+    """組み込みの業務 Agent（#5342・#5837）。並びは BUILTIN_AGENT_IDS と同じ。
 
     RAG だけの Agent は RAG の回答をそのまま返し（スキルの宣言）、データつきの Agent はモデルが
     RAG の回答と業務データの値を合わせる。回答の書き方は RAG の検索・回答プロファイルが決める。
+    ファイルを作る Agent（#5837）は、ファイルを作るスキルだけのもの（内容は会話と添付から。MCP
+    接続を使わない）と、データつきのスキルに足したもの（調べてからファイルにする）。データの
+    範囲はどれも空（利用者が使えるすべてのプロファイルから選ぶ）。
     """
     return [
         AgentProfile(
@@ -6735,10 +6766,7 @@ def _builtin_agents() -> list[AgentProfile]:
                 "社内の資料（RAG のチャットと同じ流れ）と業務データ（NL2SQL）を、問いに合わせて"
                 "使い分けて調べる既定の業務 Agent。"
             ),
-            instructions=(
-                "## Step 1: 必要な情報源を選ぶ\n"
-                "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。"
-            ),
+            instructions=_SOURCE_CHOICE_STEP,
             skill_ids=[RAG_CHAT_AND_DATA_SKILL_ID],
             source="builtin",
         ),
@@ -6773,10 +6801,7 @@ def _builtin_agents() -> list[AgentProfile]:
                 "社内の資料（基本の検索）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べる"
                 "業務 Agent。"
             ),
-            instructions=(
-                "## Step 1: 必要な情報源を選ぶ\n"
-                "問いと途中の結果から、資料と業務データのどちらが要るかを判断してツールを呼ぶ。"
-            ),
+            instructions=_SOURCE_CHOICE_STEP,
             skill_ids=[RAG_SEARCH_AND_DATA_SKILL_ID],
             source="builtin",
         ),
@@ -6789,6 +6814,45 @@ def _builtin_agents() -> list[AgentProfile]:
                 "業務データの照会の結果に基づいて答え、集計の条件（期間・対象）を示す。"
             ),
             skill_ids=[STRUCTURED_DATA_QUERY_SKILL_ID],
+            source="builtin",
+        ),
+        AgentProfile(
+            id=DOC_CREATE_AGENT_ID,
+            name="文書作成アシスタント",
+            description=(
+                "会話と添付の内容から、Excel・Word・PowerPoint のファイルを作る業務 Agent。"
+                "社内の資料の検索と業務データの照会はしない。"
+            ),
+            instructions=(
+                "## Step 1: 会話と添付の内容をファイルにする\n"
+                "利用者が会話に書いた内容と添付したファイルの内容を、求められた形式のファイルにする。\n"
+                "- 会話と添付に無い内容は足さない。\n"
+                "- ファイルにする内容が足りないときは、利用者に確かめる。"
+            ),
+            skill_ids=list(_FILE_CREATE_SKILL_IDS),
+            source="builtin",
+        ),
+        AgentProfile(
+            id=RAG_SEARCH_DATA_DOC_CREATE_AGENT_ID,
+            name="RAG 検索＋データ＋文書作成アシスタント",
+            description=(
+                "社内の資料（基本の検索）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べ、"
+                "確かめた内容を、求められたら Excel・Word・PowerPoint のファイルにする業務 Agent。"
+            ),
+            instructions=_SOURCE_CHOICE_STEP + _FILE_AFTER_SOURCES_STEP,
+            skill_ids=[RAG_SEARCH_AND_DATA_SKILL_ID, *_FILE_CREATE_SKILL_IDS],
+            source="builtin",
+        ),
+        AgentProfile(
+            id=RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
+            name="RAG チャット＋データ＋文書作成アシスタント",
+            description=(
+                "社内の資料（RAG のチャットと同じ流れ）と業務データ（NL2SQL）を、問いに合わせて"
+                "使い分けて調べ、確かめた内容を、求められたら Excel・Word・PowerPoint のファイルに"
+                "する業務 Agent。"
+            ),
+            instructions=_SOURCE_CHOICE_STEP + _FILE_AFTER_SOURCES_STEP,
+            skill_ids=[RAG_CHAT_AND_DATA_SKILL_ID, *_FILE_CREATE_SKILL_IDS],
             source="builtin",
         ),
     ]
