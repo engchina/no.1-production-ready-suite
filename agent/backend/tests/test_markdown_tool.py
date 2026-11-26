@@ -100,8 +100,9 @@ def test_content_is_saved_as_is_as_a_utf8_markdown_file(run_id: str) -> None:
     stored = runtime_repository.read_artifact_file(run_id, artifact.id)
     assert stored.data == data and stored.file_name == "合成の手順.md"
     # 結果は参照だけ（中身は載らない）。
-    assert set(result.output or {}) == {"file"}
-    assert result.output["file"]["artifact_id"] == artifact.id
+    output = result.output or {}
+    assert set(output) == {"file"}
+    assert output["file"]["artifact_id"] == artifact.id
     assert "合成の段落" not in str(result.output)
 
 
