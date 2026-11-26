@@ -29,13 +29,13 @@ def _progress(stage: str, outcome: str) -> SearchStageProgress:
 
 
 def test_answer_timeout_default_and_limit() -> None:
-    """回答生成の通しの上限は既定 600 秒・150〜1200 秒（#5280）。LLM 1 回の上限とは分ける。
+    """回答生成の通しの上限は既定 1200 秒・150〜1200 秒（#5280・#5862）。LLM 1 回の上限とは分ける。
 
     検索だけの上限（旧 rag_search_timeout_seconds）は #383 で削除した（品質評価の 1 ケースも
     回答生成の上限で打ち切る）。
     """
     settings = Settings()
-    assert settings.rag_answer_timeout_seconds == 600.0
+    assert settings.rag_answer_timeout_seconds == 1200.0
     assert (RAG_ANSWER_TIMEOUT_MIN_SECONDS, RAG_ANSWER_TIMEOUT_MAX_SECONDS) == (150.0, 1200.0)
     # 画面の選択肢は範囲の両端と既定を含む。
     assert RAG_ANSWER_TIMEOUT_CHOICES == (150, 300, 600, 1200)
@@ -56,7 +56,7 @@ def test_answer_timeout_env_example_documents_setting() -> None:
     from pathlib import Path
 
     env_example = Path(__file__).resolve().parents[1] / ".env.example"
-    assert "RAG_ANSWER_TIMEOUT_SECONDS=600" in env_example.read_text(encoding="utf-8")
+    assert "RAG_ANSWER_TIMEOUT_SECONDS=1200" in env_example.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("choice", RAG_ANSWER_TIMEOUT_CHOICES, ids=str)
