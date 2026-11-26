@@ -8,11 +8,12 @@ RAG の検索の工程（rerank・近傍・参照・実体・関係・章節の�
 
 | `disabled_aids` の値 | 外したときの動き | 全体の既定の設定 | 動いたことの記録 |
 |---|---|---|---|
-| `tool_grounding` | 根拠のツールを呼ばずに作った回答の差し戻し・拒答をしない（回答前の確認の前に調べさせることもしない） | `AGENT_TOOL_GROUNDING_REQUIRED` | Run のイベント `tool_grounding` |
+| `tool_grounding` | 根拠のツールを呼ばずに作った回答の扱い（業務 Agent の設定が拒答なら差し戻し・拒答、既定なら注意）をしない（回答前の確認の前に調べさせることもしない） | `AGENT_TOOL_GROUNDING_REQUIRED` | Run のイベント `tool_grounding`（差し戻し・拒答。既定の設定の注意はイベントを残さない） |
 | `context_compaction` | モデルの入力の上限に収めるための古いツールの結果の縮小をしない | `AGENT_CONTEXT_COMPACTION_ENABLED` | Run のイベント `context_compaction` |
 
 - 外すのは**その品質評価の Run（dry-run）だけ**。印は Run の metadata `evaluation_disabled_aids`（予約の key）で、評価の Run でなければ読まない。利用者の Run・本番の設定・全体の既定は変えない。
 - 外せるのは回答の品質のための補助だけ。ツール権限・承認・データの範囲・機微情報の保護・実行予算は外せない（値に無い名前は 422）。評価の Run は承認が要るツールを実行しない（dry-run）。
+- `tool_grounding` の差し戻し・拒答が動くのは、業務 Agent の設定「資料・データで確かめていない回答」が拒答（`ungrounded_answer_policy` が `refuse`）の版だけ（#5859）。既定（そのまま出して注意を付ける）の版は差し戻さないので、外しても回答の本文は同じで、基準の評価にイベントが無く比較は `not_applicable` になる（外した評価は注意と basis `ungrounded_answer` も付けない）。
 - 外せない補助: 支援タスクの状態（前の Run から引き継ぐ状態）・スキルの参照文書の開示は、外すとスキルの宣言どおりに動かなくなるので対象にしていない。
 
 ## 手順

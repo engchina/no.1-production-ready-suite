@@ -7,8 +7,8 @@
 
 - `context_compaction`: モデルの入力の上限に収めるための古いツールの結果の縮小をしない
   （全体の既定は `AGENT_CONTEXT_COMPACTION_ENABLED`）。
-- `tool_grounding`: 根拠のツールを呼ばずに作った回答の差し戻し・拒答をしない
-  （`AGENT_TOOL_GROUNDING_REQUIRED`）。
+- `tool_grounding`: 根拠のツールを呼ばずに作った回答の扱い（業務 Agent の設定が拒答なら差し戻し・
+  拒答、既定なら注意。#5859）をしない（`AGENT_TOOL_GROUNDING_REQUIRED`）。
 """
 
 from __future__ import annotations

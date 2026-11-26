@@ -49,6 +49,7 @@ import { countDelta, formatRate, Metric, rateDelta } from "@/pages/feedbackMetri
 /** シグナル → バッジの色（ドメインの値 → variant の対応表は製品が持つ。ARCHITECTURE §4）。 */
 const SIGNAL_VARIANT: Record<SignalKind, StatusVariant> = {
   not_helpful: "danger",
+  ungrounded_answer: "warning",
   unanswered: "warning",
   approval_rejected: "neutral",
   tool_failed: "danger",

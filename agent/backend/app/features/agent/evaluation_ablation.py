@@ -10,7 +10,9 @@
   悪化 / 改善したケース（`compare_jobs` の行）。
 - 補助が動いたか（`aid_activity`）は Run の記録で数える: 文脈の縮小のイベント
   （`context_compaction`）・差し戻し / 拒答の
-  イベント（`tool_grounding`）。基準で動いていない補助は、外しても同じ（`not_applicable`）。
+  イベント（`tool_grounding`。業務 Agent の設定が拒答の版だけ。既定の「そのまま出して注意を
+  付ける」は差し戻さないのでイベントが無い。#5859）。基準で動いていない補助は、外しても同じ
+  （`not_applicable`）。
 - 判定（`decision`）: `adopt`（外すと品質が確かに下がる。補助を続ける）、`reconsider`（外すと
   品質が確かに上がる）、`undetermined`（区間が 0 をまたぐ。小標本で差が見えないことは不要の
   証明ではない。手間・遅延の差だけを添える）、`not_applicable`、`not_comparable`（条件が違う）。

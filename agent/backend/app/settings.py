@@ -320,11 +320,12 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
             "出力項目の記録",
         ]
     )
-    # 根拠・データのツールを呼ばずに作った回答の拒答（#1835。既定 on）。on のとき、根拠・
+    # 根拠・データのツールを呼ばずに作った回答の扱い（#1835・#5859。既定 on）。on のとき、根拠・
     # データのツール（RAG・NL2SQL・登録した MCP 接続）を持つ業務 Agent が、どれも呼ばずに最終の
-    # 回答を作ったら 1 回だけモデルへ差し戻し、それでも呼ばなければ決まった拒答の文に置き換える
-    # （確認の質問だけの回答は除く）。回答前の確認（`ask_user_confirmation`）も、ツールを呼ぶ前なら
-    # 先に調べさせる（#1917）。
+    # 回答を作ったら、業務 Agent の設定（`ungrounded_answer_policy`）どおりに扱う: 既定はそのまま
+    # 出して注意を付け、拒答の設定は 1 回だけモデルへ差し戻し、それでも呼ばなければ決まった拒答の
+    # 文に置き換える（確認の質問だけの回答は除く）。off はどちらの設定でも何もしない。回答前の確認
+    # （`ask_user_confirmation`）も、ツールを呼ぶ前なら先に調べさせる（#1917）。
     agent_tool_grounding_required: bool = True
     agent_metrics_enabled: bool = True
     agent_trace_events_enabled: bool = True
