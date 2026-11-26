@@ -799,6 +799,8 @@ class AnsweringSettingsData(BaseModel):
     """
 
     retrieval_query_limit: int = Field(default=100, ge=5, le=200, strict=True)
+    # 検索経路ごとの候補に 1 つの文書が占める数の上限(#5854。0 = 上限なし)。
+    retrieval_max_candidates_per_document: int = Field(default=0, ge=0, le=200, strict=True)
     min_similarity: float = Field(default=0.2, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float = Field(default=0.3, ge=0.0, le=1.0, allow_inf_nan=False)
     hybrid_search_backend: Literal["oracle_hybrid_index", "oracle_separate_sql"] = (
@@ -834,6 +836,9 @@ class AnsweringSettingsUpdate(BaseModel):
     """回答の検索と生成の全体既定の更新 payload(送った項目だけを変える)。"""
 
     retrieval_query_limit: int | None = Field(default=None, ge=5, le=200, strict=True)
+    retrieval_max_candidates_per_document: int | None = Field(
+        default=None, ge=0, le=200, strict=True
+    )
     min_similarity: float | None = Field(default=None, ge=0.0, le=1.0, allow_inf_nan=False)
     rerank_min_relevance_score: float | None = Field(
         default=None, ge=0.0, le=1.0, allow_inf_nan=False

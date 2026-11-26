@@ -3850,6 +3850,9 @@ export const ja = {
   "settings.answering.retrievalQueryLimit": "検索候補数の上限",
   "settings.answering.retrievalQueryLimitHint": "既定は 100 件です。5～200 件で指定します。検索経路（ベクトル・全文）ごとに取得する候補の数で、取得した候補は重複を除いてすべて再ランキングに渡します。回答に使う根拠数とは異なります。",
   "settings.answering.retrievalQueryLimitInvalid": "5～200 の整数を入力してください。",
+  "settings.answering.retrievalMaxCandidatesPerDocument": "1 つの文書から取る検索候補の上限",
+  "settings.answering.retrievalMaxCandidatesPerDocumentHint": "既定は 0（上限なし）です。0～200 件で指定します。検索経路（ベクトル・全文）ごとの候補のうち、1 つの文書が占める数の上限です。超えた分は次の順位の別の文書の候補に置き換え、別の文書で埋めきれないときだけ戻します。細かく分割した文書が候補を占め、ほかの文書の根拠が候補に入らないときに使います。",
+  "settings.answering.retrievalMaxCandidatesPerDocumentInvalid": "0～200 の整数を入力してください。",
   "settings.answering.title": "回答の検索と生成",
   "settings.answering.description":
     "すべての検索・回答プロファイルと、プロファイルを指定しない呼び出しで使う全体設定です。各処理は有効な設定・対象資料・呼び出し方に応じて実行され、省略や繰り返しがあります。",

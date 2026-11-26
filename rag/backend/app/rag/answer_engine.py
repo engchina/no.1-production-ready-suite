@@ -91,6 +91,11 @@ from app.rag.answer_metrics import score_answer_evaluation
 from app.rag.answer_prompts import prompt_overrides
 from app.rag.answer_provenance import answer_prompt_version
 from app.rag.answer_threads import run_answer_in_thread
+from app.rag.candidate_cap import (
+    candidate_fetch_limit,
+    cap_candidates_per_document,
+    summarize_candidate_caps,
+)
 from app.rag.chat_attachments import is_attachment_chunk
 from app.rag.chunking_small_to_big import engine_search_text
 from app.rag.context_page_scope import CONTEXT_PAGE_SCOPE, contained, positive
@@ -1168,6 +1173,14 @@ class AnswerEngine:
             return HybridSearchResult(child_chunks=[], all_chunks=[])
         # 検索経路ごとの取得件数。取得した候補はすべて rerank へ進む(#5443)。
         depth = self._settings.rag_retrieval_query_limit
+        # 検索経路ごとの候補の、1 つの文書が占める数の上限(#5854。0 = 上限なし)。上限があるときは
+        # 多めに取り、融合の前に経路ごとに文書ごとに数えて ``depth`` 件に切る(``candidate_cap``)。
+        # 頁に絞った検索(業務ガイドの手順・派生の chunk の文書の本文の検索)は範囲が文書を選んで
+        # いるので掛けない。
+        per_document = (
+            0 if page_ranges else self._settings.rag_retrieval_max_candidates_per_document
+        )
+        fetch_limit = candidate_fetch_limit(depth, per_document)
         from rag_engine.retrieval.weighted_rrf import query_key
 
         query_sources = getattr(settings, "retrieval_query_sources", {}) or {}
@@ -1235,10 +1248,29 @@ class AnswerEngine:
             all_hits = await self._query_hits(
                 state,
                 searches,
-                candidate_limit=depth,
+                candidate_limit=fetch_limit,
                 filters=(_with_page_ranges(state.filters, page_ranges) or {})
                 if page_ranges
                 else dict(state.filters),
+            )
+        candidate_caps: dict[str, Any] | None = None
+        if fetch_limit != depth:
+            capped = [
+                cap_candidates_per_document(hits, max_per_document=per_document, limit=depth)
+                for hits in all_hits
+            ]
+            all_hits = [hits for hits, _record in capped]
+            candidate_caps = summarize_candidate_caps(
+                max_per_document=per_document,
+                query_limit=depth,
+                fetch_limit=fetch_limit,
+                lists=[
+                    (queries.index(query), mode.value, record)
+                    for (query, _text, _embedding, mode), (_hits, record) in zip(
+                        searches, capped, strict=True
+                    )
+                ],
+                capped_hits=all_hits,
             )
         raw_lists = []
         for (query, searched_text, _embedding, mode), hits in zip(searches, all_hits, strict=True):
@@ -1310,6 +1342,23 @@ class AnswerEngine:
                 observation.display(params={"status": "skipped"})
             observation.request(
                 {
+                    **(
+                        {
+                            "文書ごとの候補の上限": {
+                                key: candidate_caps[key]
+                                for key in (
+                                    "max_per_document",
+                                    "fetch_limit",
+                                    "excluded_count",
+                                    "excluded_by_document",
+                                    "added_count",
+                                    "added_by_document",
+                                )
+                            }
+                        }
+                        if candidate_caps
+                        else {}
+                    ),
                     "source_weights": budgets,
                     "channel_weights": {"vector": weights.vector, "keyword": weights.keyword},
                     "rank_constant": k,
@@ -1499,6 +1548,8 @@ class AnswerEngine:
                 "rrf": fusion.diagnostics(weights, budgets, k),
                 "query_count": len(queries),
                 "query_limit": depth,
+                # 文書ごとの候補の上限で外した・代わりに入った候補(#5854)。上限が無いときは無い。
+                **({"candidates_per_document": candidate_caps} if candidate_caps else {}),
                 "fused_count": len(fused),
                 "fused_ids": ordered,
                 "duplicates": duplicates,

@@ -70,6 +70,10 @@ def test_retrieval_defaults_match_backend_engine_and_env_example(tmp_path: Path)
     expected = {
         "RAG_RETRIEVAL_QUERY_LIMIT": (settings.rag_retrieval_query_limit, 100),
         "RAG_MAX_ANCHORS_PER_DOCUMENT": (settings.rag_max_anchors_per_document, 0),
+        "RAG_RETRIEVAL_MAX_CANDIDATES_PER_DOCUMENT": (
+            settings.rag_retrieval_max_candidates_per_document,
+            0,
+        ),
         "RAG_SEARCH_TOP_K_DEFAULT": (settings.rag_search_top_k_default, 50),
     }
     example = dict(
