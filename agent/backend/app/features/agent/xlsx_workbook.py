@@ -4,8 +4,13 @@ Run・DB・ツールの層に依らない純粋な関数（`build_workbook`）�
 モデルが書いた値か）は呼ぶ側（`xlsx_tool`）が解決し、ここには行の値として渡す。
 
 - 作るもの: 複数のシート、シートごとの題・説明の文と 1 つの表、列ごとの型（文字・数値・日付）と
-  書式、列の幅、表の見出しの固定とフィルター、集計の行。グラフ・画像・ピボット・マクロ・条件付き
-  書式・既存のファイルの編集は作らない。
+  書式、列の幅、表の見出しの固定とフィルター、集計の行、表の右のグラフ（1 つのシートに 1 つ）。
+  画像・ピボット・マクロ・条件付き書式・既存のファイルの編集は作らない。
+- グラフは Excel のグラフ（縦棒・横棒・折れ線・円。画像にしない）で、そのシートの表の cell を
+  参照する（集計の行は含めない。利用者が cell の値を変えると、グラフも変わる）。指定（種類・項目の
+  列・系列の列）の検証は `chart_spec`、cell の参照と置き場所は `xlsx_chart`、体裁は PowerPoint・
+  Word と同じ `chart_drawing`。
+- 字体は 1 つ（`FONT_NAME`。ブックの既定の字体・題と見出し・グラフ）。字体は埋め込まない。
 - 文字の cell は必ず文字型で書く（`=` `+` `-` `@` で始まる文字を数式として解釈させない）。数式として
   書くのは、ここで組み立てる集計の行だけ（集計は値を埋めずに数式にする）。
 - 数値は数値、日付は日付として cell に入れる。数値・日付として読めない値、Excel の精度（15 桁）を
@@ -21,6 +26,7 @@ import io
 import math
 import re
 from collections.abc import Sequence
+from copy import copy
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
@@ -37,7 +43,16 @@ from openpyxl.styles import (  # type: ignore[import-untyped]
 )
 from openpyxl.styles.fonts import DEFAULT_FONT  # type: ignore[import-untyped]
 from openpyxl.utils import get_column_letter  # type: ignore[import-untyped]
+from openpyxl.utils.indexed_list import IndexedList  # type: ignore[import-untyped]
 from openpyxl.worksheet.worksheet import Worksheet  # type: ignore[import-untyped]
+
+from app.features.agent.chart_spec import (
+    ChartData,
+    ChartSeries,
+    ChartSpec,
+    chart_data_issues,
+    chart_issues,
+)
 
 # 列の型・書式の名前と、形式に依らない値の読み方は Word の生成（`docx_document`）と共通。
 from app.features.agent.table_columns import (
@@ -52,6 +67,9 @@ from app.features.agent.table_columns import (
     format_issue,
     iso_date_value,
 )
+from app.features.agent.table_text import Column as TextColumn
+from app.features.agent.table_text import column_texts
+from app.features.agent.xlsx_chart import add_sheet_chart
 
 XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -90,10 +108,14 @@ SUMMARY_COLUMN_TYPES: dict[str, frozenset[str]] = {
 _INTEGER = re.compile(r"-?[0-9]+\Z")
 _SHEET_NAME_FORBIDDEN = re.compile(r"[\[\]:*?/\\]")
 
+# 字体（ブックの既定の字体・題と見出し・グラフ。Word・PowerPoint の生成と同じ名前）。
+FONT_NAME = "游ゴシック"
+# 日本語の字体の文字セット（Shift_JIS。字体が無い環境が、代わりの字体を選ぶ手がかりにする）。
+_FONT_CHARSET = 128
+_FONT_PT = 11
 # 固定の書式（1 つ）: 題は太字の大きい字、表の見出しは太字・薄い塗り・下線、集計の行は太字・上線。
-# 字体はブックの既定（`DEFAULT_FONT`）と同じ名前にする（名前が無いと、表示する側の別の字体になる）。
-_HEADING_FONT = Font(name=DEFAULT_FONT.name, size=14, bold=True)
-_BOLD_FONT = Font(name=DEFAULT_FONT.name, size=DEFAULT_FONT.size, bold=True)
+_HEADING_FONT = Font(name=FONT_NAME, charset=_FONT_CHARSET, size=14, bold=True)
+_BOLD_FONT = Font(name=FONT_NAME, charset=_FONT_CHARSET, size=_FONT_PT, bold=True)
 _HEADER_FILL = PatternFill(fill_type="solid", start_color="E7E6E6", end_color="E7E6E6")
 _THIN = Side(style="thin", color="7F7F7F")
 _HEADER_BORDER = Border(bottom=_THIN)
@@ -129,6 +151,8 @@ class Sheet:
     heading: str | None = None
     notes: Sequence[str] = ()
     summaries: Sequence[Summary] = ()
+    # 表の右に置くグラフ（この表のどの列を項目・系列にするか）。None は置かない。
+    chart: ChartSpec | None = None
 
 
 class XlsxSpecError(ValueError):
@@ -144,6 +168,8 @@ class BuiltWorkbook:
     data: bytes = field(repr=False)
     # シートごとの要約（`name` は Excel の制約に合わせた後の名前）。
     sheets: tuple[dict[str, Any], ...]
+    # グラフごとの要約（置いたシートの名前・種類・系列の数・項目の数。シートの順）。
+    charts: tuple[dict[str, Any], ...] = ()
 
 
 def clean_text(value: str) -> str:
@@ -277,6 +303,16 @@ def _structure_issues(sheets: Sequence[Sheet]) -> list[SpecIssue]:
             issues.extend(_column_issues(f"{at}.columns.{column_index}", column))
         for summary_index, summary in enumerate(sheet.summaries):
             issues.extend(_summary_issues(f"{at}.summaries.{summary_index}", sheet, summary))
+        if sheet.chart is not None:
+            issues.extend(
+                chart_issues(
+                    f"{at}.chart",
+                    sheet.chart,
+                    [column.type for column in sheet.columns],
+                    len(sheet.rows),
+                    rows_at=f"{at}.rows",
+                )
+            )
     if cells > MAX_CELLS:
         issues.append(
             SpecIssue(
@@ -374,6 +410,41 @@ def _converted_rows(
     return converted
 
 
+def _chart_data(
+    spec: ChartSpec,
+    sheet: Sheet,
+    rows: Sequence[Sequence[str | int | float | date | datetime | None]],
+) -> ChartData:
+    """グラフに描く値（cell に書く値と同じもの）。`chart_issues` が通った指定で呼ぶ。"""
+
+    def cells(position: int) -> list[Any]:
+        return [row[position - 1] for row in rows]
+
+    category = sheet.columns[spec.category_column - 1]
+    names = cells(spec.category_column)
+    # 項目の名前は、cell の表示の文字（数値・日付の列は、書式を当てた文字）。
+    if category.type == "date":
+        labels = column_texts(TextColumn(category.header, "date", category.format), names)
+    else:
+        code = _number_format(category, names)
+        labels = ["" if name is None else _shown(name, code) for name in names]
+    return ChartData(
+        type=spec.type,
+        categories=tuple(labels),
+        series=tuple(
+            ChartSeries(
+                name=clean_text(sheet.columns[position - 1].header),
+                # float は、書いた桁のままの 10 進の値にする（2 進の誤差を広げない）。
+                values=tuple(
+                    None if cell is None else Decimal(repr(cell)) for cell in cells(position)
+                ),
+                format=sheet.columns[position - 1].format,
+            )
+            for position in spec.series_columns
+        ),
+    )
+
+
 def _number_format(column: Column, values: Sequence[Any]) -> str:
     if column.type == "text":
         return _TEXT_FORMAT
@@ -406,6 +477,7 @@ def _write_sheet(
     worksheet: Worksheet,
     sheet: Sheet,
     rows: Sequence[Sequence[str | int | float | date | datetime | None]],
+    chart: ChartData | None,
 ) -> None:
     row_number = 1
     if sheet.heading:
@@ -482,6 +554,35 @@ def _write_sheet(
     worksheet.freeze_panes = worksheet.cell(row=first_data_row, column=1)
     last_column = get_column_letter(len(sheet.columns))
     worksheet.auto_filter.ref = f"A{header_row}:{last_column}{max(last_data_row, header_row)}"
+    if sheet.chart is not None and chart is not None:
+        # グラフの範囲はデータの行だけ（集計の行は含めない）。
+        add_sheet_chart(
+            worksheet,
+            sheet.chart,
+            chart,
+            header_row=header_row,
+            first_row=first_data_row,
+            last_row=last_data_row,
+            columns=len(sheet.columns),
+            font_name=FONT_NAME,
+        )
+
+
+def _new_workbook() -> Workbook:
+    """シートの無いブック。既定の字体（字体を指定しない cell と、標準のスタイル）を決める。"""
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    # テーマの字体に従う印（scheme）を外す（付いていると、Excel は名前よりテーマの字体を使う）。
+    font = copy(DEFAULT_FONT)
+    font.name = FONT_NAME
+    font.charset = _FONT_CHARSET
+    font.size = _FONT_PT
+    font.scheme = None
+    # openpyxl に、ブックの既定の字体を変える公開の API が無い。字体の一覧の先頭が既定の字体で、
+    # 標準のスタイルも同じ字体にする。
+    workbook._fonts = IndexedList([font])  # noqa: SLF001
+    workbook._named_styles["Normal"].font = font  # noqa: SLF001
+    return workbook
 
 
 def build_workbook(sheets: Sequence[Sheet]) -> BuiltWorkbook:
@@ -492,11 +593,21 @@ def build_workbook(sheets: Sequence[Sheet]) -> BuiltWorkbook:
     converted = [_converted_rows(index, sheet, issues) for index, sheet in enumerate(sheets)]
     if issues:
         raise XlsxSpecError(issues)
+    charts = [
+        None if sheet.chart is None else _chart_data(sheet.chart, sheet, rows)
+        for sheet, rows in zip(sheets, converted, strict=True)
+    ]
+    for index, (sheet, chart) in enumerate(zip(sheets, charts, strict=True)):
+        if sheet.chart is not None and chart is not None:
+            issues.extend(
+                chart_data_issues(sheet.chart, chart, columns_at=f"sheets.{index}.columns")
+            )
+    if issues:
+        raise XlsxSpecError(issues)
     titles = sheet_titles([sheet.name for sheet in sheets])
-    workbook = Workbook()
-    workbook.remove(workbook.active)
-    for title, sheet, rows in zip(titles, sheets, converted, strict=True):
-        _write_sheet(workbook.create_sheet(title=title), sheet, rows)
+    workbook = _new_workbook()
+    for title, sheet, rows, chart in zip(titles, sheets, converted, charts, strict=True):
+        _write_sheet(workbook.create_sheet(title=title), sheet, rows, chart)
     buffer = io.BytesIO()
     workbook.save(buffer)
     return BuiltWorkbook(
@@ -510,11 +621,22 @@ def build_workbook(sheets: Sequence[Sheet]) -> BuiltWorkbook:
             }
             for title, sheet in zip(titles, sheets, strict=True)
         ),
+        charts=tuple(
+            {
+                "sheet": title,
+                "type": chart.type,
+                "series": len(chart.series),
+                "categories": len(chart.categories),
+            }
+            for title, chart in zip(titles, charts, strict=True)
+            if chart is not None
+        ),
     )
 
 
 __all__ = [
     "DATE_FORMATS",
+    "FONT_NAME",
     "MAX_CELLS",
     "MAX_COLUMNS",
     "MAX_NOTES",

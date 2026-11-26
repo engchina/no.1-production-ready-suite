@@ -64,6 +64,7 @@ def _sheet(**changes: Any) -> dict[str, Any]:
         "source": None,
         "rows": [],
         "summaries": [],
+        "chart": None,
     }
     return {**base, **changes}
 
