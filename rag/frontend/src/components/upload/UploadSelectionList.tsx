@@ -4,6 +4,7 @@ import { FileText, Upload, X } from "lucide-react";
 import { t, type I18nKey } from "@/lib/i18n";
 import { formatByteSize, totalUploadBytes } from "@/lib/upload-requests";
 import {
+  hasDefaultUploadTypes,
   uploadFileProblem,
   type UploadFileProblem,
 } from "@/lib/upload-selection";
@@ -12,6 +13,7 @@ import { listCountProps } from "@/lib/list-paging";
 
 const PROBLEM_LABEL: Record<UploadFileProblem, I18nKey> = {
   unsupported: "upload.selection.problem.unsupported",
+  mimeNotAllowed: "upload.selection.problem.mimeNotAllowed",
   tooLarge: "upload.selection.problem.tooLarge",
   empty: "upload.selection.problem.empty",
   heicImage: "upload.selection.problem.heicImage",
@@ -33,6 +35,7 @@ const FORMAT_GUIDE: Partial<Record<UploadFileProblem, I18nKey>> = {
  * ファイルごとの進み具合を出す。失敗したら選択を残したまま戻る）。
  */
 export function UploadSelectionList({
+  allowedContentTypes,
   files,
   maxUploadBytes,
   onRemove,
@@ -41,12 +44,14 @@ export function UploadSelectionList({
 }: {
   files: readonly File[];
   maxUploadBytes: number;
+  allowedContentTypes?: readonly string[];
   onRemove: (file: File) => void;
   onClear: () => void;
   onStart: (sendable: File[]) => void;
 }) {
   if (files.length === 0) return null;
-  const rows = files.map((file) => ({ file, problem: uploadFileProblem(file, maxUploadBytes) }));
+  const showConversionGuide = allowedContentTypes !== undefined && hasDefaultUploadTypes(allowedContentTypes);
+  const rows = files.map((file) => ({ file, problem: uploadFileProblem(file, maxUploadBytes, allowedContentTypes) }));
   const sendable = rows.filter((row) => row.problem === null).map((row) => row.file);
   const blocked = rows.length - sendable.length;
   return (
@@ -97,7 +102,7 @@ export function UploadSelectionList({
                     className="mt-1"
                   />
                 ) : null}
-                {problem && FORMAT_GUIDE[problem] ? (
+                {problem && FORMAT_GUIDE[problem] && showConversionGuide ? (
                   <p className="mt-1 text-xs text-fg-muted" data-testid="upload-selection-guide">
                     {t(FORMAT_GUIDE[problem])}
                   </p>

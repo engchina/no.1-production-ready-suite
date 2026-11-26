@@ -1224,6 +1224,53 @@ def test_document_upload_rejects_formats_outside_main_list_before_storing(
     assert resp.json()["error_messages"] == [UNSUPPORTED_UPLOAD_FORMAT_MESSAGE]
 
 
+def test_upload_policy_preflight_and_batch_honor_explicit_mime_restrictions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        get_settings(), "allowed_upload_content_types", ["TEXT/PLAIN; charset=utf-8"]
+    )
+    policy = client.get("/api/documents/upload-policy")
+    assert policy.status_code == 200
+    assert policy.json()["data"]["allowed_content_types"] == ["text/plain"]
+    rejected = ("sample.json", b"{}", "application/json")
+    message = "このファイルの MIME タイプは、この環境のアップロード設定で許可されていません。"
+    response = client.post("/api/documents/upload", files={"file": rejected})
+    assert response.status_code == 415
+    assert response.json()["error_messages"] == [message]
+    batch = client.post(
+        "/api/documents/batch-upload",
+        files=[("files", rejected), ("files", ("sample.txt", b"test", "text/plain"))],
+    )
+    assert batch.status_code == 200
+    data = batch.json()["data"]
+    assert len(data["items"]) == 1
+    assert data["failed_items"][0]["status_code"] == 415
+    assert data["failed_items"][0]["message"] == message
+
+
+@pytest.mark.parametrize(
+    ("file_name", "content_type"),
+    [
+        ("sample.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        (
+            "sample.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+        ("sample.json", "application/json"),
+        ("sample.md", "text/markdown"),
+    ],
+)
+def test_distributed_upload_defaults_accept_standard_mime(
+    file_name: str, content_type: str
+) -> None:
+    policy = client.get("/api/documents/upload-policy")
+    assert content_type in policy.json()["data"]["allowed_content_types"]
+    result = client.post("/api/documents/upload", files={"file": (file_name, b"{}", content_type)})
+    assert result.status_code == 200
+    assert result.json()["data"]["file_name"] == file_name
+
+
 def test_document_upload_keeps_json_for_xml_tree_parser() -> None:
     """XML ツリー JSON の解析エンジンの入力の .json は受ける(#4730)。"""
     resp = client.post(

@@ -39,6 +39,9 @@ ACCEPTED_UPLOAD_EXTENSIONS = frozenset(
         ".png",
     }
 )
+SETTINGS_UPLOAD_FORMAT_MESSAGE = (
+    "このファイル形式はアップロードできません。この環境で受け付ける形式を確認してください。"
+)
 UNSUPPORTED_UPLOAD_FORMAT_MESSAGE = (
     "この形式は対応していません。PDF・Word・PowerPoint・Excel・CSV・テキスト・Markdown・HTML・"
     "JPEG / PNG のいずれかに変換してからアップロードしてください。"

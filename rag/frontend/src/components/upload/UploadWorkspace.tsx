@@ -55,6 +55,7 @@ import {
   useKnowledgeBaseChoices,
   useBatchUploadDocuments,
   useUploadDocument,
+  useUploadPolicy,
   useUploadStorageSettings,
 } from "@/lib/queries";
 import { DataLoadFailure } from "@/components/DataLoadStates";
@@ -101,6 +102,8 @@ export function UploadWorkspace() {
   const batchUpload = useBatchUploadDocuments();
   // 1 ファイルの上限。送信前の確認と、一括アップロードを分けて送る基準に使う（#280）。
   const maxUploadBytes = useUploadStorageSettings().data?.max_upload_bytes ?? DEFAULT_MAX_UPLOAD_BYTES;
+  const policy = useUploadPolicy();
+  const allowedContentTypes = policy.data?.allowed_content_types;
   const isBusy = upload.isPending || batchUpload.isPending;
   const mutationError = upload.error ?? batchUpload.error;
 
@@ -209,12 +212,14 @@ export function UploadWorkspace() {
               disabled={isBusy}
             />
             <Dropzone
+              allowedContentTypes={allowedContentTypes}
               onFiles={(files) => setSelectedFiles((current) => mergeUploadSelection(current, files))}
-              disabled={isBusy}
+              disabled={isBusy || allowedContentTypes?.length === 0}
               maxUploadBytes={maxUploadBytes}
             />
             {isBusy ? null : (
               <UploadSelectionList
+                allowedContentTypes={allowedContentTypes}
                 files={selectedFiles}
                 maxUploadBytes={maxUploadBytes}
                 onRemove={(file) =>

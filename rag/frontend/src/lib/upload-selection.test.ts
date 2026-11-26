@@ -7,6 +7,15 @@ function file(name: string, size: number, lastModified = 1): File {
 }
 
 describe("uploadFileProblem", () => {
+  it("実際に送る MIME タイプを設定と照合し、空の種類には octet-stream を使う", () => {
+    const md = { name: "sample.md", size: 3, type: "" };
+    expect(uploadFileProblem(md, 10, ["text/markdown"])).toBe("mimeNotAllowed");
+    expect(uploadFileProblem(md, 10, ["application/octet-stream"])).toBeNull();
+    expect(uploadFileProblem({ ...md, type: "TEXT/MARKDOWN; charset=utf-8" }, 10, ["text/markdown"])).toBeNull();
+    expect(uploadFileProblem(md, 10, [])).toBe("mimeNotAllowed");
+    expect(uploadFileProblem({ ...md, name: "sample.bin" }, 10, ["application/octet-stream"])).toBe("unsupported");
+  });
+
   it("形式・空・上限超えの順に送れない理由を返し、送れるなら null", () => {
     expect(uploadFileProblem(file("tool.exe", 5), 10)).toBe("unsupported");
     expect(uploadFileProblem(file("README", 5), 10)).toBe("unsupported");

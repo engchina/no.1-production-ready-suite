@@ -59,6 +59,13 @@ def test_frontend_mime_types_match_backend_allowed_upload_content_types() -> Non
     assert frontend == backend - {"application/octet-stream"}
 
 
+def test_distributed_env_uses_backend_upload_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RAG_ALLOWED_UPLOAD_CONTENT_TYPES", raising=False)
+    env_file = RAG_ROOT / "backend" / ".env.example"
+    defaults = Settings(_env_file=None).allowed_upload_content_types
+    assert set(Settings(_env_file=env_file).allowed_upload_content_types) == set(defaults)
+
+
 def test_frontend_extensions_match_backend_accepted_extensions() -> None:
     frontend = {item for item in _accepted_upload_types() if item.startswith(".")}
     assert frontend == set(ACCEPTED_UPLOAD_EXTENSIONS)

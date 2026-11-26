@@ -6,19 +6,37 @@ import { useRef, useState, type DragEvent } from "react";
 import { cn } from "@/lib/utils";
 import { t } from "@/lib/i18n";
 import { DEFAULT_MAX_UPLOAD_BYTES, formatByteSize } from "@/lib/upload-requests";
-import { ACCEPTED_UPLOAD_EXTENSION_LABELS, ACCEPTED_UPLOAD_TYPES } from "@/lib/upload-selection";
+import {
+  ACCEPTED_UPLOAD_EXTENSION_LABELS,
+  ACCEPTED_UPLOAD_TYPES,
+  hasDefaultUploadTypes,
+} from "@/lib/upload-selection";
+
+function uploadFormatsHint(allowedContentTypes: readonly string[] | undefined, restricted: boolean) {
+  const formats = ACCEPTED_UPLOAD_EXTENSION_LABELS.join(", ");
+  if (allowedContentTypes === undefined) return t("upload.dropzoneExtensions", { formats });
+  if (!restricted) return t("upload.dropzoneFormats", { formats });
+  if (allowedContentTypes.length === 0) return t("upload.dropzoneNoContentTypes");
+  return t("upload.dropzoneContentTypes", { formats: allowedContentTypes.join(", ") });
+}
 
 /** ドラッグ＆ドロップ + クリック選択のファイル入力。 */
 export function Dropzone({
   onFiles,
   disabled,
   maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES,
+  allowedContentTypes,
 }: {
   onFiles: (files: File[]) => void;
   disabled?: boolean;
   /** 1 ファイルの上限（upload-storage 設定の `max_upload_bytes`）。案内に表示する。 */
   maxUploadBytes?: number;
+  allowedContentTypes?: readonly string[];
 }) {
+  const restricted = allowedContentTypes !== undefined && !hasDefaultUploadTypes(allowedContentTypes);
+  const accept = restricted && !allowedContentTypes.includes("application/octet-stream")
+    ? allowedContentTypes.join(",")
+    : ACCEPTED_UPLOAD_TYPES;
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -56,20 +74,22 @@ export function Dropzone({
       )}
     >
       <UploadCloud size={24} className="text-accent-fg" aria-hidden />
-      <p className="text-sm font-medium text-fg">{t("upload.dropzone")}</p>
+      <p className="text-sm font-medium text-fg">{t(restricted || !allowedContentTypes ? "upload.dropzoneFiles" : "upload.dropzone")}</p>
       <p className="text-xs text-fg-muted">{t("upload.dropzoneHint", { size: formatByteSize(maxUploadBytes) })}</p>
-      <p className="max-w-2xl text-xs text-fg-muted">
-        {t("upload.dropzoneFormats", { formats: ACCEPTED_UPLOAD_EXTENSION_LABELS.join(", ") })}
+      <p className="max-w-2xl break-words text-xs text-fg-muted">
+        {uploadFormatsHint(allowedContentTypes, restricted)}
       </p>
-      <p className="max-w-2xl text-xs text-fg-muted" data-testid="upload-dropzone-unsupported">
-        {t("upload.dropzoneUnsupported")}
-      </p>
+      {allowedContentTypes && !restricted && (
+        <p className="max-w-2xl text-xs text-fg-muted" data-testid="upload-dropzone-unsupported">
+          {t("upload.dropzoneUnsupported")}
+        </p>
+      )}
       <input
         ref={inputRef}
         type="file"
         multiple
         className="hidden"
-        accept={ACCEPTED_UPLOAD_TYPES}
+        accept={accept}
         disabled={disabled}
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);

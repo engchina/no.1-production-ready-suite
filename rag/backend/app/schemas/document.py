@@ -479,6 +479,12 @@ class ParserSourceNotice(BaseModel):
     message: str = Field(description="利用者向けの理由と対処。")
 
 
+class UploadPolicy(BaseModel):
+    """文書アップロードで実際に受け付ける MIME type。"""
+
+    allowed_content_types: list[str]
+
+
 class UploadResult(BaseModel):
     """アップロード結果。"""
 

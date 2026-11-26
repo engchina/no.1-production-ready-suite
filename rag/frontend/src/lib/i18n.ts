@@ -2332,6 +2332,11 @@ export const ja = {
     "PDF・Office・テキスト・HTML・画像をここにドラッグ＆ドロップ",
   "upload.dropzoneHint":
     "複数ファイルをまとめて選択できます（最大 {size} / ファイル）。選んだファイルは下の一覧で確かめてから送ります。",
+  "upload.dropzoneFiles": "ファイルをここにドラッグ＆ドロップ",
+  "upload.dropzoneExtensions": "対応拡張子: {formats}（受け付ける MIME タイプは環境の設定に従います）",
+  "upload.dropzoneContentTypes": "この環境で許可されている MIME タイプ: {formats}",
+  "upload.dropzoneNoContentTypes": "この環境で許可されている MIME タイプはありません。",
+  "upload.selection.problem.mimeNotAllowed": "このファイルの MIME タイプは、この環境のアップロード設定で許可されていません。",
   "upload.dropzoneFormats": "対応形式: {formats}",
   "upload.dropzoneUnsupported":
     "HEIC / HEIF の画像・EPUB・音声・動画のファイルは対応していません。画像は JPEG / PNG、EPUB は PDF に変換し、音声・動画は内容をテキストに書き起こしてからアップロードしてください。",

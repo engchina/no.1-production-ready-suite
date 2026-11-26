@@ -344,6 +344,7 @@ _BV = "/search-answer-profiles/{search_answer_profile_id}"
 # (METHOD, route template) → 許可する権限（いずれか）。`/api` は付けない。
 ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     # ---- ナレッジ構築: 文書（アップロード・文書インデックス） ----
+    ("GET", "/documents/upload-policy"): _any(MENU_UPLOAD),
     ("POST", "/documents/upload"): _any(MENU_UPLOAD),
     ("POST", "/documents/batch-upload"): _any(MENU_UPLOAD),
     ("GET", "/documents"): _any(MENU_FILE_LIST, MENU_KNOWLEDGE_BASES),

@@ -40,6 +40,17 @@ export const ACCEPTED_UPLOAD_TYPES = [
   "image/png",
 ].join(",");
 
+const MIME_TYPES = ACCEPTED_UPLOAD_TYPES.split(",").filter((type) => !type.startsWith("."));
+const BINARY_TYPE = "application/octet-stream";
+
+function normalizedUploadType(type: string | undefined): string {
+  return type?.split(";", 1)[0]?.trim().toLowerCase() || BINARY_TYPE;
+}
+
+export function hasDefaultUploadTypes(allowed: readonly string[]): boolean {
+  return [...MIME_TYPES, BINARY_TYPE].every((type) => allowed.includes(type));
+}
+
 const ACCEPTED_EXTENSIONS = new Set(
   ACCEPTED_UPLOAD_TYPES.split(",").filter((item) => item.startsWith("."))
 );
@@ -87,7 +98,7 @@ export const REJECTED_UPLOAD_FORMATS = {
 
 export type RejectedUploadFormat = (typeof REJECTED_UPLOAD_FORMATS)[keyof typeof REJECTED_UPLOAD_FORMATS];
 
-export type UploadFileProblem = "unsupported" | "tooLarge" | "empty" | RejectedUploadFormat;
+export type UploadFileProblem = "unsupported" | "mimeNotAllowed" | "tooLarge" | "empty" | RejectedUploadFormat;
 
 function isRejectedUploadExtension(extension: string): extension is keyof typeof REJECTED_UPLOAD_FORMATS {
   return Object.hasOwn(REJECTED_UPLOAD_FORMATS, extension);
@@ -95,13 +106,15 @@ function isRejectedUploadExtension(extension: string): extension is keyof typeof
 
 /** 送れないファイルの理由。送れるなら null。ドロップしたファイルは `accept` を通らないので、ここで確かめる。 */
 export function uploadFileProblem(
-  file: Pick<File, "name" | "size">,
-  maxUploadBytes: number
+  file: Pick<File, "name" | "size"> & Partial<Pick<File, "type">>,
+  maxUploadBytes: number,
+  allowedContentTypes?: readonly string[]
 ): UploadFileProblem | null {
   const dot = file.name.lastIndexOf(".");
   const extension = dot >= 0 ? file.name.slice(dot).toLowerCase() : "";
   if (isRejectedUploadExtension(extension)) return REJECTED_UPLOAD_FORMATS[extension];
   if (!ACCEPTED_EXTENSIONS.has(extension)) return "unsupported";
+  if (allowedContentTypes && !allowedContentTypes.includes(normalizedUploadType(file.type))) return "mimeNotAllowed";
   if (file.size === 0) return "empty";
   if (file.size > maxUploadBytes) return "tooLarge";
   return null;

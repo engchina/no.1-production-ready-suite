@@ -347,9 +347,27 @@ DEFAULT_MODEL_SETTINGS_FILE = "model-settings.json"
 # 文書解析の設定（RAG 専用。#1701）。相対 path は backend/ 基準。
 DEFAULT_PARSER_SETTINGS_FILE = "parser-settings.json"
 DEFAULT_FILE_TYPE_DEFAULTS_FILE = "file-type-defaults.json"
-# 言語資源の全体の上書き(#2181)。
 DEFAULT_LOCAL_STORAGE_DIR = "/u01/data/production-ready-rag"
-
+# アップロードで受け付ける標準 MIME type。設定で制限した場合は、案内にもその値を使う。
+DEFAULT_UPLOAD_CONTENT_TYPES = (
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+    "application/csv",
+    "text/plain",
+    "text/markdown",
+    "application/json",
+    "text/html",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "application/octet-stream",
+)
 
 # 形式別の既定（#4732）の種類。受け付ける形式（#4730）に合わせる。分類は
 # app.rag.file_type_defaults の 1 か所。
@@ -769,25 +787,7 @@ class Settings(
     local_storage_dir: str = Field(default=DEFAULT_LOCAL_STORAGE_DIR)
     max_upload_bytes: int = Field(default=200 * 1024 * 1024, ge=1)
     allowed_upload_content_types: list[str] = Field(
-        default=[
-            "application/pdf",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "application/vnd.ms-powerpoint",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "application/vnd.ms-excel",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "text/csv",
-            "application/csv",
-            "text/plain",
-            "text/markdown",
-            "application/json",
-            "text/html",
-            "image/jpeg",
-            "image/jpg",
-            "image/png",
-            "application/octet-stream",
-        ]
+        default_factory=lambda: list(DEFAULT_UPLOAD_CONTENT_TYPES)
     )
     office_template_max_members: int = Field(
         default=20_000,

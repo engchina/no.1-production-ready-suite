@@ -3622,6 +3622,10 @@ export const api = {
         body: JSON.stringify(body),
       },
     ),
+  getUploadPolicy: (options: { signal?: AbortSignal } = {}) =>
+    request<{ allowed_content_types: string[] }>("/api/documents/upload-policy", {
+      signal: options.signal,
+    }),
   uploadDocument: (
     file: File,
     knowledgeBaseIds: string[] = [],
