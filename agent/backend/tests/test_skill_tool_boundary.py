@@ -412,6 +412,70 @@ def test_missing_required_tool_fails_the_run_instead_of_intersecting(
     assert mcp.calls_of("rag_search") == []
 
 
+def test_unregistered_control_plane_tool_fails_the_run_instead_of_skipping(
+    monkeypatch: MonkeyPatch, calls: _Calls
+) -> None:
+    """スキルが宣言した Control Plane のツールが未登録なら、ある分だけで続けずに失敗にする。
+
+    MCP 接続のツールの不足（`runtime.mcp_unavailable`）と同じ考え方（#5844）。登録済みのツール
+    （READ）も宣言しているが、それだけを渡して Run を始めない。
+    """
+    skill_id = "test5844-unregistered-skill"
+    skill_name = "未登録のツールを宣言したスキル"
+    agent_id = "test5844-unregistered-agent"
+    missing = "no_such_tool"
+    assert tool_registry.get(missing) is None
+    skill_registry.upsert_custom(
+        AgentSkillDefinition(
+            id=skill_id,
+            name=skill_name,
+            mcp_requirements=[
+                SkillMcpRequirement(server_id="control-plane", tool_names=[READ, missing])
+            ],
+        )
+    )
+    runtime_repository.create_agent(
+        AgentProfile(id=agent_id, name="未登録のツールの業務 Agent", skill_ids=[skill_id])
+    )
+    model = _script(monkeypatch, [assistant_message("ある分だけで答えました。")])
+    try:
+        names, warnings = builtin_runtime.declared_control_plane_tools([skill_id])
+        run_id = _run(agent_id)
+        run = runtime_repository.get_run(run_id)
+    finally:
+        _cleanup_runs(agent_id)
+        with contextlib.suppress(KeyError, ValueError):
+            skill_registry.remove(skill_id)
+
+    # 宣言の解決は、登録済みの分を返しつつ不足を理由として返す（呼び出し側が失敗にする）。
+    assert names == [READ]
+    assert len(warnings) == 1
+    assert skill_name in warnings[0] and f"control-plane:{missing}" in warnings[0]
+    assert run.status == RunStatus.FAILED
+    failed = run.events[-1]
+    assert failed.payload["error_code"] == "runtime.tool_unavailable"
+    # 失敗の文で、どのスキルのどのツールが無いかが分かる。
+    assert skill_name in failed.message and f"control-plane:{missing}" in failed.message
+    # MCP 接続の不足と同じく、理由を警告のイベントにも残す。
+    warning = next(event for event in run.events if event.type == "runtime.event")
+    assert warning.message == warnings[0]
+    assert warning.payload == {"severity": "warning"}
+    assert not model.calls
+    assert calls.names == []
+
+
+def test_builtin_skills_declare_only_registered_control_plane_tools() -> None:
+    """組み込みのスキルが宣言した Control Plane のツールは、すべて登録されている（#5844）。
+
+    登録の漏れは Run を `runtime.tool_unavailable` で失敗にするので、配備の前に CI で見つける。
+    """
+    from app.features.agent.skills import BUILTIN_SKILL_IDS
+
+    for skill_id in BUILTIN_SKILL_IDS:
+        _names, warnings = builtin_runtime.declared_control_plane_tools([skill_id])
+        assert warnings == [], (skill_id, warnings)
+
+
 # ---- 接続のすべてのツールの露出の棚卸し ---------------------------------------------------------
 
 

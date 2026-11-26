@@ -1224,9 +1224,15 @@ def _active_policy() -> ToolPolicy:
     )
 
 
-def agent_tool_names(skill_ids: list[str]) -> list[str]:
-    """Agent の Skill が必要とする Control Plane のツール（登録済みのものだけ、重複なし）。"""
+def declared_control_plane_tools(skill_ids: list[str]) -> tuple[list[str], list[str]]:
+    """Skill が宣言した Control Plane のツールを解決する。登録の無い宣言は飛ばして理由を返す。
+
+    1 つ目は登録済みのツールの名前（宣言の順、重複なし）、2 つ目は登録の無い宣言ごとの理由
+    （どのスキルのどのツールか）。`discover_mcp_tools` と同じく、ある分を返しつつ不足を理由として
+    返し、Run では呼び出し側（`build_sdk_agent`）が失敗にする（#5844）。
+    """
     names: list[str] = []
+    warnings: list[str] = []
     for skill_id in skill_ids:
         skill = resolve_skill(skill_id)
         if skill is None or not skill.enabled:
@@ -1235,9 +1241,22 @@ def agent_tool_names(skill_ids: list[str]) -> list[str]:
             if requirement.server_id != CONTROL_PLANE_SERVER_ID:
                 continue
             for name in requirement.tool_names:
-                if name not in names and tool_registry.get(name) is not None:
+                if tool_registry.get(name) is None:
+                    warnings.append(
+                        f"スキル「{skill.name or skill.id}」が宣言したツール"
+                        f"「{CONTROL_PLANE_SERVER_ID}:{name}」は登録されていません。"
+                    )
+                elif name not in names:
                     names.append(name)
-    return names
+    return names, warnings
+
+
+def agent_tool_names(skill_ids: list[str]) -> list[str]:
+    """Agent の Skill が必要とする Control Plane のツール（登録済みのものだけ、重複なし）。
+
+    登録の無い宣言の理由は `declared_control_plane_tools` が返す（Run はそれで失敗にする）。
+    """
+    return declared_control_plane_tools(skill_ids)[0]
 
 
 def agent_mcp_requirements(skill_ids: list[str]) -> dict[str, set[str] | None]:
@@ -2961,6 +2980,10 @@ class _ConfirmationTurnHooks(AgentHooks[Any]):
 # 業務 Agent のスキルが今は無い（組み込みのスキルの廃止など。#5342）。黙って飛ばさずに Run を失敗に
 # する（スキルの指示・ツールが欠けたまま答えない）。
 SKILL_UNAVAILABLE_CODE = "runtime.skill_unavailable"
+# スキルが宣言した Control Plane のツールが登録されていない（ツール名の誤り・登録の漏れ。#5844）。
+# MCP 接続のツールの不足（`runtime.mcp_unavailable`）と同じく、ある分だけで続けずに
+# Run を失敗にする。
+TOOL_UNAVAILABLE_CODE = "runtime.tool_unavailable"
 # 回答をそのまま Run の最終の回答にした RAG の回答のツールの記録（SDK の Agent に付ける。#5342）。
 _FINAL_ANSWER_ATTR = "_production_ready_final_answer"
 
@@ -3117,6 +3140,16 @@ def build_sdk_agent(
             f"業務 Agent のスキル（{'、'.join(missing_skills)}）がありません。"
             "業務 Agent の編集でスキルを選び直して公開してください。",
         )
+    # 宣言した Control Plane のツールが 1 つでも登録に無ければ、欠けたツールのまま回答させない
+    # （#5844。Run の開始も承認・確認の後の再開もここを通る）。
+    tool_names, tool_warnings = declared_control_plane_tools(skill_ids)
+    for warning in tool_warnings:
+        runtime_repository.note_builtin_warning(run_id, warning)
+    if tool_warnings:
+        raise BuiltinRuntimeError(
+            TOOL_UNAVAILABLE_CODE,
+            "必要なツールを利用できません。" + "\n" + "\n".join(tool_warnings),
+        )
     target = resolve_model_target(model_id)
     attachments = thread_attachment_toolset(thread_id)
     mcp_tools, warnings = discover_mcp_tools(
@@ -3157,7 +3190,7 @@ def build_sdk_agent(
     )
     tools = build_function_tools(
         run_id,
-        agent_tool_names(skill_ids),
+        tool_names,
         mcp_tools,
         reference_keys=skill_reference_keys(skill_ids),
         budget=budget,
