@@ -79,6 +79,15 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
             approvals_rejected=1,
         ),
         _fact(agent_id, "ok", now - timedelta(hours=5), answer_outcome="answered"),
+        # 確かめていない回答をそのまま出した Run（#5859）は「根拠を使わずに答えた」に数える。
+        _fact(
+            agent_id,
+            "ungrounded",
+            now - timedelta(hours=6),
+            data_tool_calls=0,
+            answer_outcome="answered",
+            answer_basis="ungrounded_answer",
+        ),
         # 拒答した Run（#1835）は「答えられなかった」だけに数える。
         _fact(
             agent_id,
@@ -86,6 +95,7 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
             now - timedelta(hours=9),
             data_tool_calls=0,
             answer_outcome="insufficient_evidence",
+            answer_basis="no_tool_grounding",
         ),
         _fact(
             agent_id, "evaluation", now - timedelta(hours=1), status="failed", source="evaluation"
@@ -110,10 +120,11 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
         user_names=lambda uuids: {},
     )
 
-    assert (report.summary.runs, report.summary.flagged, report.total) == (5, 4, 4)
+    assert (report.summary.runs, report.summary.flagged, report.total) == (6, 5, 5)
     counts = {item.kind: item.count for item in report.summary.counts}
     assert counts == {
         SignalKind.NOT_HELPFUL: 1,
+        SignalKind.UNGROUNDED_ANSWER: 1,
         SignalKind.UNANSWERED: 2,
         SignalKind.APPROVAL_REJECTED: 1,
         SignalKind.TOOL_FAILED: 1,
@@ -124,8 +135,15 @@ def test_facts_are_merged_and_runs_to_review_are_aggregated_in_oracle(agent_id: 
         "tool",
         "bad",
         "many",
+        "ungrounded",
         "refused",
     ]
+    ungrounded = report.items[3]
+    assert (ungrounded.answer_basis, ungrounded.signals) == (
+        "ungrounded_answer",
+        [SignalKind.UNGROUNDED_ANSWER],
+    )
+    assert report.items[4].signals == [SignalKind.UNANSWERED]
     tool = report.items[0]
     assert (tool.tool_failures, tool.signals, len(tool.question)) == (
         3,
