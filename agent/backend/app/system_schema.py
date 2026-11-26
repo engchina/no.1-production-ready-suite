@@ -397,6 +397,7 @@ RUN_FACTS_STATEMENTS: tuple[str, ...] = (
         TOOL_FAILURES NUMBER(10),
         APPROVALS_REJECTED NUMBER(10),
         DATA_TOOL_CALLS NUMBER(10),
+        ANSWER_BASIS VARCHAR2(32),
         CONSTRAINT PK_AGENT_RUN_FACTS PRIMARY KEY (RUN_ID)
     )
     """,
@@ -421,6 +422,13 @@ RUN_FACTS_SIGNAL_STATEMENTS: tuple[str, ...] = (
 # 除く。
 RUN_FACTS_DATA_TOOL_STATEMENTS: tuple[str, ...] = (
     "ALTER TABLE AGENT_RUN_FACTS ADD (DATA_TOOL_CALLS NUMBER(10))",
+)
+
+# 回答の対応を決めた手がかり（成果物 `answer` の `outcome.basis`。#5859。migration 019）。確かめる
+# べき実行の「根拠を使わずに答えた」（根拠・データのツールを呼ばずに作った回答を、注意を付けて
+# そのまま出した Run。basis `ungrounded_answer`）を SQL で数える。
+RUN_FACTS_ANSWER_BASIS_STATEMENTS: tuple[str, ...] = (
+    "ALTER TABLE AGENT_RUN_FACTS ADD (ANSWER_BASIS VARCHAR2(32))",
 )
 
 # migration 007 が作った形（checksum に入るため固定する。最新の形は RUN_FACTS_STATEMENTS）。
@@ -729,6 +737,15 @@ MIGRATIONS: tuple[MigrationArtifact, ...] = (
         # 表を足すだけ（データは消さない）。適用の前は、ファイルを作るツールが「保存できません
         # でした」のエラーになる（Run・ほかの成果物の保存は変わらない）。
         RUNTIME_ARTIFACT_FILE_STATEMENTS,
+    ),
+    MigrationArtifact(
+        "20261126_019_run_fact_answer_basis",
+        "add the answer outcome basis to run facts for the ungrounded answers to review (#5859)",
+        # 列を足すだけ（データは消さない）。既存の Run の事実は、アプリの起動時の backfill が
+        # Runtime repository にある Run から書く（保存期間の外の Run は空のままで、シグナルに
+        # しない）。適用の前は、Run の事実をこの列を除いて書き続け、確かめるべき実行の集計は
+        # メモリの Run に戻る。
+        RUN_FACTS_ANSWER_BASIS_STATEMENTS,
     ),
 )
 
@@ -1201,6 +1218,7 @@ __all__ = [
     "DOMAIN_STATEMENTS",
     "RUNTIME_ARTIFACT_FILE_STATEMENTS",
     "RUNTIME_STATEMENTS",
+    "RUN_FACTS_ANSWER_BASIS_STATEMENTS",
     "RUN_FACTS_DATA_TOOL_STATEMENTS",
     "RUNTIME_CHECKPOINT_VERSION_STATEMENTS",
     "RUN_FACTS_SIGNAL_STATEMENTS",

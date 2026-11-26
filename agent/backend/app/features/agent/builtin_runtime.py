@@ -4322,9 +4322,14 @@ async def _settle_and_finish(
         _record_usage(run.id, result, agent.model_id)
         await _finish(run.id, result, task, data_scopes=agent.data_scopes, rag_answer=True)
         return result
-    result, refused = await _require_tool_grounding(
-        run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
-    )
+    # 資料・データで確かめていない回答の扱いは、業務 Agent（Run が使う版）の設定で決める（#5859）。
+    # 拒答の設定だけが差し戻す。既定はモデルが返した回答をそのまま出し、確定のときに注意を付ける。
+    refuses = _ungrounded_answer_policy(agent) == tool_grounding.POLICY_REFUSE
+    refused = False
+    if refuses:
+        result, refused = await _require_tool_grounding(
+            run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
+        )
     result = _resolve_report_result(run.id, result, agent.output_contract)
     if not refused:
         _raise_on_grounding_failure(run.id, result)
@@ -4343,6 +4348,8 @@ async def _settle_and_finish(
         data_scopes=agent.data_scopes,
         refusal=_refusal_text(agent, sdk_agent) if refused else None,
         output_contract=agent.output_contract,
+        # 最後の結果で確かめる（上の差し戻しでモデルがツールを呼んだ Run には付けない）。
+        ungrounded=not refuses and _ungrounded_answer(run, sdk_agent, result),
     )
     return result
 
@@ -4849,6 +4856,57 @@ def _assumes(budget: ConfirmationBudget | None) -> bool:
     return budget is not None and (budget.policy == POLICY_ASSUME or budget.unattended)
 
 
+def _ungrounded_answer_policy(agent: Any) -> str:
+    """業務 Agent（Run が使う版）の、資料・データで確かめていない回答の扱い（#5859）。"""
+    return str(getattr(agent, "ungrounded_answer_policy", tool_grounding.POLICY_ANNOTATE))
+
+
+def _grounding_waived(current: Any) -> bool:
+    """根拠・データのツールを呼んでいなくても、差し戻し・拒答・注意の対象にしない Run か。
+
+    2 つの設定（`annotate` / `refuse`）で同じ例外にする（#5859）。
+    """
+    if declined_kinds(current.metadata):
+        # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
+        # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
+        return True
+    # この Run がファイルを作った（#5853）。利用者が渡した内容をファイルにした Run で、
+    # ファイルは成果物に残っている。回答だけを拒答に置き換えると、作れたファイルと
+    # 「お答えできません」が食い違うので、モデルが返した回答をそのまま出す（差し戻さない）。
+    return any(artifact.kind == FILE_ARTIFACT_KIND for artifact in current.artifacts)
+
+
+def _ungrounded_answer(run: Any, sdk_agent: Agent[Any], result: Any) -> bool:
+    """最後の回答が、根拠・データのツールを呼ばずに作った回答か（`annotate` の注意の対象。#5859）。
+
+    拒答の設定なら拒答になる回答と同じ集合にする: 根拠・データのツールを渡した Run で、モデルが
+    どれも呼ばず、確認の質問だけの回答（あいさつ・用件を聞くだけの回答を含む）でも NL2SQL の確認で
+    止まった Run でもない（`tool_grounding.needs_grounding`）。例外も同じ（`_grounding_waived`・
+    同じ会話の前の Run が根拠・データのツールで答えた続き・実行補助を外した Run）。回答の中身は
+    見ない。承認・確認で止まる結果（回答を確定しない）は対象外。
+    """
+    from app.features.agent.runtime import runtime_repository
+
+    if not aid_enabled(run.id, "tool_grounding"):
+        return False
+    tool_names = [str(getattr(tool, "name", "")) for tool in sdk_agent.tools]
+    if not tool_grounding.grounding_tools(tool_names):
+        return False
+    if list(getattr(result, "interruptions", []) or []):
+        return False
+    current = runtime_repository.get_run(run.id)
+    if _grounding_waived(current):
+        return False
+    if not tool_grounding.needs_grounding(
+        _answer_text(result.final_output),
+        steps=list(current.steps),
+        tool_names=tool_names,
+        question=str(getattr(current, "goal", "") or ""),
+    ):
+        return False
+    return not _grounded_in_thread(run.id)
+
+
 async def _require_tool_grounding(
     run: Any,
     sdk_agent: Agent[Any],
@@ -4859,6 +4917,8 @@ async def _require_tool_grounding(
 ) -> tuple[Any, bool]:
     """根拠・データのツールを呼ばずに作った回答を差し戻し、それでも呼ばなければ拒答にする（#1835）。
 
+    業務 Agent の設定が拒答（`ungrounded_answer_policy` が `refuse`。#5859）の Run だけが通る
+    （既定の `annotate` は差し戻さず、`_finish` が注意を付ける）。
     根拠・データのツールを持つ Run で、モデルがどれも呼ばずに最終の回答を作ったら（確認の質問
     だけの回答は除く。`tool_grounding.needs_grounding`）、`tool_grounding.MAX_RETRIES` 回まで
     「ツールで確かめてから答える。確かめられないなら拒答する」を利用者のメッセージとして足して
@@ -4891,14 +4951,7 @@ async def _require_tool_grounding(
     while not list(getattr(result, "interruptions", []) or []):
         answer = _answer_text(result.final_output)
         current = runtime_repository.get_run(run.id)
-        if declined_kinds(current.metadata):
-            # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
-            # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
-            return result, False
-        if any(artifact.kind == FILE_ARTIFACT_KIND for artifact in current.artifacts):
-            # この Run がファイルを作った（#5853）。利用者が渡した内容をファイルにした Run で、
-            # ファイルは成果物に残っている。回答だけを拒答に置き換えると、作れたファイルと
-            # 「お答えできません」が食い違うので、モデルが返した回答をそのまま出す（差し戻さない）。
+        if _grounding_waived(current):
             return result, False
         steps = list(current.steps)
         if not tool_grounding.needs_grounding(
@@ -5358,11 +5411,15 @@ async def _finish(
     refusal: str | None = None,
     output_contract: ReportOutputContract | None = None,
     rag_answer: bool = False,
+    ungrounded: bool = False,
 ) -> None:
     """Run を承認待ちにするか、回答を確定する。
 
-    `refusal` があれば（根拠・データのツールを呼ばずに作った回答。#1835）、モデルの回答の代わりに
-    その拒答の文を回答にする。
+    `refusal` があれば（根拠・データのツールを呼ばずに作った回答。拒答の設定。#1835）、モデルの
+    回答の代わりにその拒答の文を回答にする。
+    `ungrounded` は、根拠・データのツールを呼ばずに作った回答をそのまま出す Run（既定の設定。
+    #5859）。本文は変えず、回答の注意書きの先頭に注意を足し、回答の対応の basis を
+    `ungrounded_answer` にする（`_ungrounded_marks`）。
     `rag_answer` は RAG の回答をそのまま最終の回答にした Run（#5342）で、モデルの回答の整形
     （引用の描画・作業の経過の行・章節の読み切り）を当てず、安全チェック・確認のカード・回答の根拠
     （引用は RAG の `used_in_answer`）・回答の対応は残す。
@@ -5443,16 +5500,18 @@ async def _finish(
         evidence_text = getattr(selected_result, "_report_evidence_text", "")
         _save_answer_evidence(run_id, evidence_text)
         answer = _guarded_answer(run_id, answer)
+        outcome, notice = _ungrounded_marks(
+            _answer_outcome(run_id, answer, None),
+            answer,
+            confirmations=bool(tool_confirmations),
+            ungrounded=ungrounded,
+        )
         runtime_repository.complete_builtin_run(
             run_id,
             answer,
-            outcome=_answer_outcome(run_id, answer, None),
+            outcome=outcome,
             confirmations=tool_confirmations,
-            notice=current_answer_notice()
-            if answer_takes_notice(
-                _answer_outcome(run_id, answer, None), confirmations=bool(tool_confirmations)
-            )
-            else None,
+            notice=notice,
         )
         return
     answer = _answer_text(result.final_output)
@@ -5490,21 +5549,41 @@ async def _finish(
             },
         )
     _save_answer_evidence(run_id, answer)
-    outcome = _answer_outcome(run_id, model_answer, coverage)
     answer = _guarded_answer(run_id, answer)
+    # 回答の注意書き（#2405）。本文とは別の項目として付ける。回答前の確認
+    # （カード）と確認の質問だけの回答には付けない。
+    outcome, notice = _ungrounded_marks(
+        _answer_outcome(run_id, model_answer, coverage),
+        answer,
+        confirmations=bool(tool_confirmations),
+        ungrounded=ungrounded,
+    )
     runtime_repository.complete_builtin_run(
         run_id,
         answer,
         outcome=outcome,
         confirmations=tool_confirmations,
-        # 回答の注意書き（#2405）。本文とは別の項目として付ける。回答前の確認
-        # （カード）と確認の質問だけの回答には付けない。
-        notice=(
-            current_answer_notice()
-            if answer_takes_notice(outcome, confirmations=bool(tool_confirmations))
-            else None
-        ),
+        notice=notice,
     )
+
+
+def _ungrounded_marks(
+    outcome: dict[str, Any] | None, answer: str, *, confirmations: bool, ungrounded: bool
+) -> tuple[dict[str, Any] | None, str | None]:
+    """確定する回答の対応と回答の注意書き（#2405）。
+
+    `ungrounded`（根拠・データのツールを呼ばずに作った回答をそのまま出す。#5859）なら、注意書きの
+    先頭に「資料・業務データで確かめていません」を足し、回答の対応の basis を `ungrounded_answer` に
+    する。本文（`answer`）には混ぜない。回答の注意書きを付けない回答（回答前の確認のカード・確認の
+    質問だけの回答）と空の回答には足さない。運用設定の注意書きが無効でも、この注意は付ける。
+    """
+    if not answer_takes_notice(outcome, confirmations=confirmations):
+        return outcome, None
+    notice = current_answer_notice()
+    if not ungrounded or not answer.strip():
+        return outcome, notice
+    marked = tool_grounding.ungrounded_outcome(outcome) if outcome is not None else None
+    return marked, tool_grounding.ungrounded_notice(notice)
 
 
 def _guarded_answer(run_id: str, answer: str) -> str:

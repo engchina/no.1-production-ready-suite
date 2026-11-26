@@ -227,6 +227,12 @@ def _set_policy(policy: str, max_rounds: int = 2) -> None:
     runtime_repository.publish_agent(AGENT_ID)
 
 
+def _refuse_ungrounded_answers() -> None:
+    """業務 Agent を拒答の設定にする（差し戻すのはこの設定だけ。#5859。既定は差し戻さない）。"""
+    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(ungrounded_answer_policy="refuse"))
+    runtime_repository.publish_agent(AGENT_ID)
+
+
 # ---- 決定的な部品 ------------------------------------------------------------------------------
 
 
@@ -1451,6 +1457,7 @@ def test_confirmation_after_the_grounding_retry_waits_for_the_user(
     呼んだ後に「確認の答えを待っている」だけの本文で完了した。
     """
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    _refuse_ungrounded_answers()
     model = _script(
         monkeypatch,
         [assistant_message("対象の資料を教えてください。")],
@@ -1498,6 +1505,7 @@ def test_mcp_chat_returns_the_confirmation_after_the_grounding_retry(
 
     monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    _refuse_ungrounded_answers()
     _script(
         monkeypatch,
         [assistant_message("対象の資料を教えてください。")],

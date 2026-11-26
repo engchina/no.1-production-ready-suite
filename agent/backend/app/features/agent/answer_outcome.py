@@ -16,9 +16,11 @@ A / C（RAG の回答の記録の `outcome`）と同じ尺度で採点するた�
 - needs_human: 人への引き継ぎを示した
 - insufficient_evidence: 資料から答えられないと示した（拒答）
 
-根拠・データのツールを呼ばずに作った回答を拒答の文に置き換えた Run（#1835）は、ここを通さずに
-`tool_grounding.refusal_outcome`（insufficient_evidence、basis `no_tool_grounding`。ツールで調べずに
-範囲外・答えられないと判断した拒答は `declined_without_tools`。#2608）を残す。
+根拠・データのツールを呼ばずに作った回答を拒答の文に置き換えた Run（業務 Agent の設定が拒答。
+#1835）は、ここを通さずに `tool_grounding.refusal_outcome`（insufficient_evidence、basis
+`no_tool_grounding`。ツールで調べずに範囲外・答えられないと判断した拒答は `declined_without_tools`。
+#2608）を残す。同じ回答を注意を付けてそのまま出した Run（既定の設定。#5859）は、ここで決めた対応の
+値・シグナルのまま、basis だけを `ungrounded_answer` にする（`tool_grounding.ungrounded_outcome`）。
 
 決め方（上から順に、最初に当たったもの。`basis` に残す）:
 

@@ -28,6 +28,7 @@ async function useTheme(page: Page, theme: "light" | "dark") {
 
 const KINDS = [
   "not_helpful",
+  "ungrounded_answer",
   "unanswered",
   "approval_rejected",
   "tool_failed",
@@ -70,8 +71,8 @@ function seedSignals(mockApi: MockApi, items = [
     since: MOCK_NOW,
     until: MOCK_NOW,
     kind: null,
-    summary: { runs: 40, flagged: 6, flagged_rate: 0.15, counts: counts([1, 2, 1, 3, 1]) },
-    previous: { runs: 32, flagged: 8, flagged_rate: 0.25, counts: counts([1, 3, 0, 4, 1]) },
+    summary: { runs: 40, flagged: 6, flagged_rate: 0.15, counts: counts([1, 2, 2, 1, 3, 1]) },
+    previous: { runs: 32, flagged: 8, flagged_rate: 0.25, counts: counts([1, 1, 3, 0, 4, 1]) },
     items,
     total: items.length,
   };
@@ -97,6 +98,9 @@ for (const viewport of VIEWPORTS) {
       // 種類ごとの件数と前の期間からの増減（色だけに頼らず文言と数で出す）。
       await expect(page.getByTestId("signals-kind-tool_failed")).toContainText("ツールの失敗");
       await expect(page.getByTestId("signals-kind-tool_failed")).toContainText("前の期間から −1");
+      // 資料・業務データのツールを呼ばずに作り、注意を付けてそのまま出した回答（#5859）。「答えられなかった」とは別に数える。
+      await expect(page.getByTestId("signals-kind-ungrounded_answer")).toContainText("根拠を使わずに答えた");
+      await expect(page.getByTestId("signals-kind-ungrounded_answer")).toContainText("前の期間から +1");
 
       const layout = page.getByTestId("list-detail-feedback-signals");
       const list = page.getByTestId("list-detail-feedback-signals-list");

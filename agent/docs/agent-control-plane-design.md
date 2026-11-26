@@ -468,6 +468,13 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     聞かずに呼び直させ、RAG の確認は `answer_with_assumptions`。完了した Run の `confirmations` には NL2SQL・RAG の確認を出さず、
     支援タスクの状態にも確かめ中の問いを残さない（モデルが呼び直さなかったときも、カードで聞き直さない）。答えた（スキップ
     ではない）ときは今どおり。
+- **資料・データで確かめていない回答（#5859）**: 根拠・データのツールを渡した Run で、モデルがどれも呼ばずに答えたときの扱いは、
+  業務 Agent ごとの設定 `ungrounded_answer_policy`（版の項目。画面は「回答前の確認」の次の区画「資料・データで確かめていない
+  回答」）で決める（利用者の決定、2026-11-26。それまでは常に拒答していた）。`annotate`（既定）= そのまま出して注意を付ける
+  （回答の注意書きの先頭に「この回答は、資料・業務データで確かめていません。」。差し戻さない・本文を置き換えない。回答の対応の
+  basis は `ungrounded_answer`）、`refuse` = 出さずに「お答えできません」と返す（1 回差し戻し、それでも呼ばなければ拒答の文。
+  #1835）。判定はツールを呼んだかだけで、回答の中身は見ない。例外（確認の質問だけの回答・ファイルを作った Run・前の Run が
+  ツールで答えた続きなど）は 2 つの設定で同じ。正本は [agents/runtime.md](./agents/runtime.md) と `tool_grounding.py`。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 1500 秒。RAG の回答のツール〔`rag_chat`・`rag_search`〕は処理の全体を RAG の回答の上限
   （`RAG_ANSWER_TIMEOUT_SECONDS`、既定 1200 秒・画面で選べる最大も 1200 秒。#5280・#5862）の 1 つの期限で終える〔#5339〕ので、その外側の
@@ -718,6 +725,7 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   | シグナル | 定義（Run の事実の列） |
   |---|---|
   | `not_helpful` 役に立たなかった | 本人か管理者の評価が `not_helpful`（`FEEDBACK_RATING` / `ADMIN_RATING`） |
+  | `ungrounded_answer` 根拠を使わずに答えた | 回答の対応の basis が `ungrounded_answer`（`ANSWER_BASIS`。#5859）。根拠・データのツールを渡した業務 Agent がどれも呼ばずに作った回答を、注意を付けてそのまま出した Run（設定が `annotate`）。拒答に置き換えた Run（設定が `refuse`）は `unanswered` に数える |
   | `unanswered` 答えられなかった | 回答の対応（#1305）が `insufficient_evidence` / `needs_human`（`ANSWER_OUTCOME`） |
   | `approval_rejected` 承認の却下 | 承認が `rejected`（`APPROVALS_REJECTED > 0`。終了で無効にした承認は数えない） |
   | `tool_failed` ツールの失敗 | step が `failed`（`TOOL_FAILURES > 0`） |
@@ -725,9 +733,9 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
 
   対象は期間（Run を作った日時）と業務 Agent で絞った、終わった Run（品質評価の Run を除く）。集計は対象の Run の数・
   シグナルのある Run の数・種類ごとの数を前の同じ長さの期間と比べ、一覧は種類で絞って `CREATED_AT DESC, RUN_ID DESC` で
-  ページングする。列は migration 012 / 014（`DATA_TOOL_CALLS`。#1834）で足す（データは消さない）。既存の Run の事実の新しい列は起動時の backfill が
+  ページングする。列は migration 012 / 014（`DATA_TOOL_CALLS`。#1834）/ 019（`ANSWER_BASIS`。#5859）で足す（データは消さない）。既存の Run の事実の新しい列は起動時の backfill が
   Runtime repository の Run から書く（Run の snapshot を整理した古い事実は空のままで、シグナルにならない）。migration 012 の
-  前のテーブルには、シグナルの列を除いた MERGE（`LEGACY_MERGE_SQL`。014 の前は `MERGE_SQL_012`）で利用状況・フィードバックの事実を書き続ける。
+  前のテーブルには、シグナルの列を除いた MERGE（`LEGACY_MERGE_SQL`。014 の前は `MERGE_SQL_012`、019 の前は `MERGE_SQL_014`）で利用状況・フィードバックの事実を書き続ける（列が無い間、確かめるべき実行の集計はメモリの Run に戻る）。
 - 品質評価（#776）の job は、終わった job も自動では消さずに残し（#3235。以前は 365 日・2,000 件、その前は 50 件で消していた）、
   `GET /api/evaluations` を `offset` / `limit` でページングする。前回との比較は残っている全 job から探す。
 - 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。既定の 0 は自動で、接続 `rag` の待ち時間（画面で保存した値。既定 1500 秒）×（Run の RAG の予算 `AGENT_MAX_RAG_CALLS_PER_RUN`+ 1）にする（既定 1500 ×（10 + 1）= 16500 秒。300 秒〜86400 秒に収める）。RAG を使う業務 Agent の Run は RAG を予算の回数まで呼び、1 回は RAG の回答生成を通しで待つため（推論の量 medium の実測で 1 Run 160〜600 秒以上）、#1425 より前の固定の 300 秒では時間切れになった。RAG の予算が無制限（0 以下）なら `AGENT_MAX_TOOL_CALLS_PER_RUN`（既定 100）を回数に使う。上限までに決着しない Run は取り消し、ケースは時間切れ（`timed_out`。メッセージに実際の上限の秒数）にする。評価の job 全体の上限は持たない（ケースごとの上限で止まる）。

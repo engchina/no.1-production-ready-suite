@@ -25,6 +25,7 @@ const INTERNAL_WORDS = [
   "condition_id",
   "no_rag_evidence",
   "no_tool_grounding",
+  "ungrounded_answer",
   "absence_only",
   "validator_unavailable",
   "unvalidated",

@@ -536,6 +536,7 @@ function feedbackReportFromRuns(
 /** 確かめるべき実行のシグナルの種類（表示の順。#1822。backend の `run_signals.SignalKind`）。 */
 export const SIGNAL_KINDS = [
   "not_helpful",
+  "ungrounded_answer",
   "unanswered",
   "approval_rejected",
   "tool_failed",
@@ -588,10 +589,12 @@ function runSignals(run: Json): string[] {
   const notHelpful = [run.feedback, run.admin_review].some((item) => (item as Json | null | undefined)?.rating === "not_helpful");
   const answer = ((run.artifacts as Json[] | undefined) ?? []).find((artifact) => artifact.kind === "answer");
   const outcome = ((answer?.content as Json | undefined)?.outcome as Json | undefined)?.value;
+  const basis = ((answer?.content as Json | undefined)?.outcome as Json | undefined)?.basis;
   const toolFailures = ((run.steps as Json[] | undefined) ?? []).filter((step) => step.status === "failed").length;
   const rejected = ((run.approvals as Json[] | undefined) ?? []).filter((item) => item.status === "rejected").length;
   const checks: Record<string, boolean> = {
     not_helpful: notHelpful,
+    ungrounded_answer: basis === "ungrounded_answer",
     unanswered: outcome === "insufficient_evidence" || outcome === "needs_human",
     approval_rejected: rejected > 0,
     tool_failed: toolFailures > 0,
@@ -2502,6 +2505,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       "data_scopes",
       "clarification_policy",
       "clarification_max_rounds",
+      "ungrounded_answer_policy",
       "skill_policy",
       "output_fields",
     ] as const;
@@ -2541,9 +2545,11 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
             ? (value ?? "confirm")
             : field === "clarification_max_rounds"
               ? (value ?? 0)
-              : field === "skill_policy"
-                ? (value ?? "pinned")
-                : (value ?? null);
+              : field === "ungrounded_answer_policy"
+                ? (value ?? "annotate")
+                : field === "skill_policy"
+                  ? (value ?? "pinned")
+                  : (value ?? null);
       return VERSIONED.some(
         (field) => JSON.stringify(comparable(field, agent[field])) !== JSON.stringify(comparable(field, published[field]))
       );
@@ -2635,6 +2641,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         "data_scopes",
         "clarification_policy",
         "clarification_max_rounds",
+        "ungrounded_answer_policy",
         "skill_policy",
         "tool_names",
         "enabled",

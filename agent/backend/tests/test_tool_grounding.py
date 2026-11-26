@@ -1,5 +1,8 @@
 """根拠・データのツールを呼ばずに作った回答の差し戻しと拒答（#1835）の決定論テスト。
 
+業務 Agent の設定が拒答（`ungrounded_answer_policy` が `refuse`。#5859）のときの動作。既定の
+「そのまま出して注意を付ける」は `test_ungrounded_answer_policy.py` が確かめる。
+
 モデルは SDK の `ScriptedModel`、RAG / NL2SQL は契約どおりの fake の MCP（`mcp_support`）にする。
 ツールを呼ばずに答えたら 1 回だけ差し戻し、ツールを呼べば今どおり、呼ばなければ決まった拒答の文に
 置き換えることと、確認の質問だけの回答・ツールを持たない Agent・無効の設定は対象外であることを
@@ -99,9 +102,17 @@ def mcp(monkeypatch: MonkeyPatch) -> Iterator[FakeProductMcp]:
             name="経理の業務 Agent",
             description="経費精算と受注の質問に答えます。",
             skill_ids=[SKILL_ID],
+            # 拒答の設定（#5859。既定は「そのまま出して注意を付ける」）。
+            ungrounded_answer_policy=tool_grounding.POLICY_REFUSE,
         )
     )
-    runtime_repository.create_agent(AgentProfile(id=BARE_AGENT_ID, name="雑談の業務 Agent"))
+    runtime_repository.create_agent(
+        AgentProfile(
+            id=BARE_AGENT_ID,
+            name="雑談の業務 Agent",
+            ungrounded_answer_policy=tool_grounding.POLICY_REFUSE,
+        )
+    )
     try:
         yield fake
     finally:

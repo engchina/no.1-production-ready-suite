@@ -38,6 +38,7 @@ import {
 import {
   agentApi,
   type ClarificationPolicy,
+  type UngroundedAnswerPolicy,
   type AgentDataScopes,
   type AgentOutputField,
   type AgentDraftSuggestion,
@@ -83,6 +84,8 @@ interface AgentDraft {
   /** 回答前の確認（#1839）。曖昧な質問の扱いと確認の上限（往復）。 */
   clarification_policy: ClarificationPolicy;
   clarification_max_rounds: number;
+  /** 資料・データで確かめていない回答の扱い（#5859）。 */
+  ungrounded_answer_policy: UngroundedAnswerPolicy;
   /** スキルの更新の扱い（#1867。固定 / 常に最新）。 */
   skill_policy: SkillPolicy;
   /** 出力の項目（#2549）。 */
@@ -107,6 +110,8 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
     data_scopes: normalizeDataScopes(agent?.data_scopes),
     clarification_policy: agent?.clarification_policy === "assume" ? "assume" : "confirm",
     clarification_max_rounds: agent?.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
+    // この項目の無い保存済みの業務 Agent は既定（そのまま出して注意を付ける）。
+    ungrounded_answer_policy: agent?.ungrounded_answer_policy === "refuse" ? "refuse" : "annotate",
     skill_policy: agent?.skill_policy === "latest" ? "latest" : "pinned",
     output_fields: normalizeOutputFields(agent?.output_fields ?? []),
   };
@@ -185,6 +190,9 @@ export function AgentEditorView({
   const [dataScopes, setDataScopes] = useState<AgentDataScopes>(saved.data_scopes);
   const [clarificationPolicy, setClarificationPolicy] = useState<ClarificationPolicy>(saved.clarification_policy);
   const [clarificationMaxRounds, setClarificationMaxRounds] = useState(saved.clarification_max_rounds);
+  const [ungroundedAnswerPolicy, setUngroundedAnswerPolicy] = useState<UngroundedAnswerPolicy>(
+    saved.ungrounded_answer_policy,
+  );
   const [skillPolicy, setSkillPolicy] = useState<SkillPolicy>(saved.skill_policy);
   const [outputFields, setOutputFields] = useState<AgentOutputField[]>(saved.output_fields);
   const [outputErrors, setOutputErrors] = useState<OutputFieldErrors>({});
@@ -312,6 +320,7 @@ export function AgentEditorView({
         data_scopes: normalizeDataScopes(payload.data_scopes),
         clarification_policy: payload.clarification_policy ?? "confirm",
         clarification_max_rounds: payload.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
+        ungrounded_answer_policy: payload.ungrounded_answer_policy ?? "annotate",
         skill_policy: payload.skill_policy ?? "pinned",
         output_fields: normalizeOutputFields(payload.output_fields ?? []),
       });
@@ -334,6 +343,7 @@ export function AgentEditorView({
     setDataScopes(next.data_scopes);
     setClarificationPolicy(next.clarification_policy);
     setClarificationMaxRounds(next.clarification_max_rounds);
+    setUngroundedAnswerPolicy(next.ungrounded_answer_policy);
     setSkillPolicy(next.skill_policy);
     setOutputFields(next.output_fields);
     setOutputErrors({});
@@ -350,6 +360,7 @@ export function AgentEditorView({
     data_scopes: normalizeDataScopes(dataScopes),
     clarification_policy: clarificationPolicy,
     clarification_max_rounds: clarificationMaxRounds,
+    ungrounded_answer_policy: ungroundedAnswerPolicy,
     skill_policy: skillPolicy,
     output_fields: normalizeOutputFields(outputFields),
   };
@@ -380,6 +391,7 @@ export function AgentEditorView({
     setDataScopes(baseline.data_scopes);
     setClarificationPolicy(baseline.clarification_policy);
     setClarificationMaxRounds(baseline.clarification_max_rounds);
+    setUngroundedAnswerPolicy(baseline.ungrounded_answer_policy);
     setSkillPolicy(baseline.skill_policy);
     setOutputFields(baseline.output_fields);
     setOutputErrors({});
@@ -467,6 +479,7 @@ export function AgentEditorView({
       data_scopes: normalizeDataScopes(dataScopes),
       clarification_policy: clarificationPolicy,
       clarification_max_rounds: clarificationMaxRounds,
+      ungrounded_answer_policy: ungroundedAnswerPolicy,
       skill_policy: skillPolicy,
       output_fields: normalizeOutputFields(outputFields),
     };
@@ -940,6 +953,30 @@ export function AgentEditorView({
                             : t("agent.clarification.maxRounds.value", { count: rounds }),
                       }))}
                       onValueChange={(value) => setClarificationMaxRounds(Number(value))}
+                    />
+                  </FormGrid>
+                </CardContent>
+              </Card>
+            </Section>
+            {/* 資料・データで確かめていない回答（#5859）。資料・業務データのツールを呼ばずに作った回答の扱い。 */}
+            <Section
+              title={t("agent.ungroundedAnswer.title")}
+              description={t("agent.ungroundedAnswer.description")}
+            >
+              <Card className="min-w-0">
+                <CardContent className="pt-5">
+                  <FormGrid data-testid="agent-ungrounded-answer">
+                    <SelectField
+                      id={`${fieldId}-agent-ungrounded-answer-policy`}
+                      label={t("agent.ungroundedAnswer.policy")}
+                      helper={t("agent.ungroundedAnswer.policyHint")}
+                      width="lg"
+                      value={ungroundedAnswerPolicy}
+                      options={[
+                        { value: "annotate", label: t("agent.ungroundedAnswer.policy.annotate") },
+                        { value: "refuse", label: t("agent.ungroundedAnswer.policy.refuse") },
+                      ]}
+                      onValueChange={(value) => setUngroundedAnswerPolicy(value === "refuse" ? "refuse" : "annotate")}
                     />
                   </FormGrid>
                 </CardContent>

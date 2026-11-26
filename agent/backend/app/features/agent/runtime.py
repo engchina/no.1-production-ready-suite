@@ -127,6 +127,7 @@ from app.features.agent.support_task import (
     abandoned_run_consumption,
     with_abandoned_consumption,
 )
+from app.features.agent.tool_grounding import POLICY_ANNOTATE, UngroundedAnswerPolicy
 from app.features.agent.tools import (
     ToolCall,
     ToolInvocationContext,
@@ -283,6 +284,7 @@ AGENT_VERSIONED_FIELDS: tuple[str, ...] = (
     "data_scopes",
     "clarification_policy",
     "clarification_max_rounds",
+    "ungrounded_answer_policy",
     "skill_policy",
     "output_fields",
     "output_contract",
@@ -309,6 +311,8 @@ class AgentVersion(BaseModel):
     _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
         validate_max_rounds
     )
+    # 資料・データで確かめていない回答の扱い（#5859。この項目の無い保存済みの版は既定の annotate）。
+    ungrounded_answer_policy: UngroundedAnswerPolicy = POLICY_ANNOTATE
     # スキルの更新の扱い（#1867。latest は公開中の版でも今のスキルで動く）。
     skill_policy: SkillPolicy = SKILL_POLICY_PINNED
     # 出力の項目（#2549）。
@@ -385,6 +389,12 @@ class AgentProfile(BaseModel):
     _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
         validate_max_rounds
     )
+    # 資料・データで確かめていない回答の扱い（#5859。画面「資料・データで確かめていない回答」）。
+    # 根拠・データのツールを渡した Run で、モデルがどれも呼ばずに答えたとき: `annotate`（既定）=
+    # そのまま出して注意を付ける、`refuse` = 1 回差し戻し、それでも呼ばなければ拒答の文に置き換える
+    # （#1835）。判定はツールを呼んだかだけ（`tool_grounding`）。この項目の無い保存済みの業務 Agent
+    # は既定になる。
+    ungrounded_answer_policy: UngroundedAnswerPolicy = POLICY_ANNOTATE
     # スキルの更新の扱い（#1867）。pinned（既定）は公開の版に固定したスキル、latest は今のスキル。
     # 版の項目なので、変えたら公開して反映する。
     skill_policy: SkillPolicy = SKILL_POLICY_PINNED
@@ -558,6 +568,7 @@ class AgentProfilePatch(BaseModel):
     _check_clarification_max_rounds = field_validator("clarification_max_rounds")(
         validate_max_rounds
     )
+    ungrounded_answer_policy: UngroundedAnswerPolicy | None = None
     skill_policy: SkillPolicy | None = None
     output_fields: list[AgentOutputField] | None = None
     output_contract: ReportOutputContract | None = None

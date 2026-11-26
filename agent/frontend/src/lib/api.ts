@@ -1060,6 +1060,8 @@ export interface AgentProfile {
   clarification_policy?: ClarificationPolicy;
   /** 確認の上限（往復。0 は既定の 3 回、2〜6。NL2SQL の業務プロファイルと同じ）。 */
   clarification_max_rounds?: number;
+  /** 資料・データで確かめていない回答の扱い（#5859。既定はそのまま出して注意を付ける）。 */
+  ungrounded_answer_policy?: UngroundedAnswerPolicy;
   enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -1082,6 +1084,12 @@ export interface AgentShareRequest {
 
 /** 曖昧な質問の扱い（#1839）。`confirm` = 確認してから回答する、`assume` = 前提を示して回答する。 */
 export type ClarificationPolicy = "confirm" | "assume";
+
+/**
+ * 資料・データで確かめていない回答の扱い（#5859）。資料・業務データのツールを 1 つも呼ばずに作った回答を、
+ * `annotate` = そのまま出して注意を付ける（既定）、`refuse` = 出さずに「お答えできません」と返す。
+ */
+export type UngroundedAnswerPolicy = "annotate" | "refuse";
 
 /** データの範囲を持てる接続（標準の MCP 接続。#1378）。 */
 export type AgentDataScopeConnection = "nl2sql" | "rag";
@@ -1116,6 +1124,7 @@ export interface AgentProfileWritePayload {
   data_scopes?: AgentDataScopes;
   clarification_policy?: ClarificationPolicy;
   clarification_max_rounds?: number;
+  ungrounded_answer_policy?: UngroundedAnswerPolicy;
   enabled: boolean;
   /** 作成に使った業種テンプレート（#810）。 */
   template_id?: string;
@@ -1132,6 +1141,7 @@ export interface AgentProfilePatchPayload {
   data_scopes?: AgentDataScopes;
   clarification_policy?: ClarificationPolicy;
   clarification_max_rounds?: number;
+  ungrounded_answer_policy?: UngroundedAnswerPolicy;
   enabled?: boolean;
   skill_policy?: SkillPolicy;
   /** 出力の項目（#2549）。 */
@@ -1281,6 +1291,8 @@ export interface AgentVersion {
   skills?: PinnedSkill[] | null;
   /** スキルの更新の扱い（#1867）。 */
   skill_policy?: SkillPolicy;
+  /** 資料・データで確かめていない回答の扱い（#5859）。 */
+  ungrounded_answer_policy?: UngroundedAnswerPolicy;
   /** 出力の項目（#2549）。 */
   output_fields?: AgentOutputField[];
 }
@@ -1456,11 +1468,13 @@ export interface FeedbackFilters {
 /**
  * 確かめるべき実行のシグナルの種類（表示の順。#1822）。定義は backend の `run_signals.py`。
  * - not_helpful: 本人か管理者の評価が「役に立たなかった」
+ * - ungrounded_answer: 資料・業務データのツールを呼ばずに作った回答を、注意を付けてそのまま出した（#5859）
  * - unanswered: 回答の対応が「根拠不足」か「人への引き継ぎ」
  * - approval_rejected / tool_failed / run_failed: 承認の却下・ツールの失敗・実行の失敗と取り消し
  */
 export const SIGNAL_KINDS = [
   "not_helpful",
+  "ungrounded_answer",
   "unanswered",
   "approval_rejected",
   "tool_failed",
@@ -1491,6 +1505,8 @@ export interface SignalItem {
   status: RunState["status"];
   signals: SignalKind[];
   answer_outcome: string | null;
+  /** 回答の対応を決めた手がかり（#5859。記録の無い古い実行は null）。 */
+  answer_basis?: string | null;
   tool_failures: number;
   approvals_rejected: number;
   /** 業務データの道具の成功した呼び出しの数（記録の無い古い実行は null。#1834）。 */

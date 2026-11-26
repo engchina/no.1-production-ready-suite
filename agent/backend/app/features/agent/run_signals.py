@@ -7,6 +7,10 @@ fix の流れ）。モデルは呼ばない（保存した Run の事実だけ�
 シグナルの定義（Python の `fact_signals` と SQL の `SIGNAL_CONDITIONS` は同じ規則）:
 
 - `not_helpful`: 本人か管理者の評価が「役に立たなかった」。
+- `ungrounded_answer`: 根拠を使わずに答えた（#5859）。根拠・データのツールを渡した業務 Agent が
+  どれも呼ばずに作った回答を、注意を付けてそのまま出した（業務 Agent の設定が「そのまま出して
+  注意を付ける」。回答の対応の basis が `ungrounded_answer`。判定はツールを呼んだかだけで、回答の
+  中身は見ない）。拒答に置き換えた Run（設定が拒答）は下の `unanswered` に数え、ここには数えない。
 - `unanswered`: 回答の対応が「資料から答えられない」（insufficient_evidence）か「人への引き継ぎ」
   （needs_human）。
 - `approval_rejected`: 承認を却下したツールがある。
@@ -35,6 +39,7 @@ from app.features.agent.run_facts import (
     RunFact,
 )
 from app.features.agent.runtime import FeedbackRating, RunFeedback, RunStatus
+from app.features.agent.tool_grounding import BASIS_UNGROUNDED_ANSWER
 from app.features.agent.usage import ReportSource
 
 SIGNAL_PAGE_SIZE = DEFAULT_PAGE_LIMIT
@@ -45,6 +50,7 @@ class SignalKind(StrEnum):
     """確かめるべき実行のシグナルの種類（並びは画面の並び）。"""
 
     NOT_HELPFUL = "not_helpful"
+    UNGROUNDED_ANSWER = "ungrounded_answer"
     UNANSWERED = "unanswered"
     APPROVAL_REJECTED = "approval_rejected"
     TOOL_FAILED = "tool_failed"
@@ -74,6 +80,7 @@ SIGNAL_CONDITIONS: dict[SignalKind, str] = {
     SignalKind.NOT_HELPFUL: (
         f"(FEEDBACK_RATING = '{_NOT_HELPFUL}' OR ADMIN_RATING = '{_NOT_HELPFUL}')"
     ),
+    SignalKind.UNGROUNDED_ANSWER: f"ANSWER_BASIS = '{BASIS_UNGROUNDED_ANSWER}'",
     SignalKind.UNANSWERED: f"ANSWER_OUTCOME IN ({_sql_list(UNANSWERED_OUTCOMES)})",
     SignalKind.APPROVAL_REJECTED: "APPROVALS_REJECTED > 0",
     SignalKind.TOOL_FAILED: "TOOL_FAILURES > 0",
@@ -95,6 +102,7 @@ def fact_signals(fact: RunFact) -> list[SignalKind]:
     """Run の事実のシグナル（`SIGNAL_CONDITIONS` と同じ規則。並びは `SignalKind` の順）。"""
     checks = {
         SignalKind.NOT_HELPFUL: _not_helpful(fact.feedback) or _not_helpful(fact.admin_review),
+        SignalKind.UNGROUNDED_ANSWER: fact.answer_basis == BASIS_UNGROUNDED_ANSWER,
         SignalKind.UNANSWERED: fact.answer_outcome in UNANSWERED_OUTCOMES,
         SignalKind.APPROVAL_REJECTED: fact.approvals_rejected > 0,
         SignalKind.TOOL_FAILED: fact.tool_failures > 0,
@@ -136,6 +144,7 @@ class SignalItem(BaseModel):
     status: str
     signals: list[SignalKind]
     answer_outcome: str | None = None
+    answer_basis: str | None = None
     tool_failures: int = 0
     approvals_rejected: int = 0
     data_tool_calls: int | None = None
@@ -259,6 +268,7 @@ def signal_items(
             status=fact.status,
             signals=fact_signals(fact),
             answer_outcome=fact.answer_outcome,
+            answer_basis=fact.answer_basis,
             tool_failures=fact.tool_failures,
             approvals_rejected=fact.approvals_rejected,
             data_tool_calls=fact.data_tool_calls,
