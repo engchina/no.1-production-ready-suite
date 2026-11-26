@@ -15,6 +15,7 @@ import {
   Disclosure,
   DisclosureChevron,
   FieldActionRow,
+  FormGrid,
   InfoTip,
   TextareaField,
   SearchableSelectField,
@@ -1736,16 +1737,19 @@ function ExecutableNl2SqlWorkbench() {
                                 <p className="text-xs leading-5 text-fg-muted">
                                   {t("nl2sql.selectAiOverrides.hint")}
                                 </p>
-                                <TextareaField
-                                  id="nl2sql-select-ai-instructions-override"
-                                  label={t("nl2sql.selectAiOverrides.additionalInstructions")}
-                                  value={selectAiInstructionsOverride}
-                                  onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
-                                  disabled={active}
-                                  rows={3}
-                                  width="full"
-                                  placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
-                                />
+                                {/* Select AI への指示の文なので、プロンプトの編集と同じく区画の全幅を使う（#4847・#5851）。 */}
+                                <FormGrid columns={1} width="full">
+                                  <TextareaField
+                                    id="nl2sql-select-ai-instructions-override"
+                                    label={t("nl2sql.selectAiOverrides.additionalInstructions")}
+                                    value={selectAiInstructionsOverride}
+                                    onChange={(event) => setSelectAiInstructionsOverride(event.currentTarget.value)}
+                                    disabled={active}
+                                    rows={3}
+                                    width="full"
+                                    placeholder={t("nl2sql.selectAiOverrides.additionalInstructionsPlaceholder")}
+                                  />
+                                </FormGrid>
                                 <div className="overflow-hidden rounded-md border border-border bg-surface">
                                   <Button className="w-full justify-between"
                                     type="button"
@@ -1775,16 +1779,19 @@ function ExecutableNl2SqlWorkbench() {
                                     hidden={!selectAiRolePanelOpen}
                                     className="border-t border-border p-3"
                                   >
-                                    <TextareaField
-                                      id="nl2sql-select-ai-role-override-input"
-                                      label={t("nl2sql.selectAiOverrides.role")}
-                                      value={selectAiRoleOverride}
-                                      onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
-                                      disabled={active}
-                                      rows={2}
-                                      width="full"
-                                      placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
-                                    />
+                                    {/* Select AI への役割の指示の文なので、区画の全幅を使う（#4847・#5851）。 */}
+                                    <FormGrid columns={1} width="full">
+                                      <TextareaField
+                                        id="nl2sql-select-ai-role-override-input"
+                                        label={t("nl2sql.selectAiOverrides.role")}
+                                        value={selectAiRoleOverride}
+                                        onChange={(event) => setSelectAiRoleOverride(event.currentTarget.value)}
+                                        disabled={active}
+                                        rows={2}
+                                        width="full"
+                                        placeholder={t("nl2sql.selectAiOverrides.rolePlaceholder")}
+                                      />
+                                    </FormGrid>
                                   </div>
                                 </div>
                               </div>

@@ -376,3 +376,26 @@ test("詳細の読み取り失敗を対象なしと見せず、再試行で回�
   await expect(page.getByRole("heading", { name: "合成の自動実行 A", level: 1 })).toBeVisible();
   await expectNoPageHorizontalOverflow(page);
 });
+
+test("業務 Agent への指示は、普通の欄とは別の全幅の区画に置く（#4847・#5851）", async ({ page }) => {
+  for (const width of [1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/automations?id=new");
+    const goal = page.locator("#automation-goal");
+    await expect(goal).toBeVisible();
+    const metrics = await goal.evaluate((node) => {
+      const grid = node.closest<HTMLElement>("[data-form-grid]")!;
+      const parent = grid.parentElement!;
+      const style = getComputedStyle(parent);
+      return {
+        grid: grid.getAttribute("data-form-grid-width"),
+        width: node.getBoundingClientRect().width,
+        available: parent.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight),
+      };
+    });
+    expect(metrics.grid, `${width}px`).toBe("full");
+    expect(Math.abs(metrics.width - metrics.available), `${width}px`).toBeLessThanOrEqual(2);
+    // 名前は普通の欄なので、60rem の FormGrid のまま。
+    expect(await page.locator("#automation-name").evaluate((node) => node.closest("[data-form-grid]")?.getAttribute("data-form-grid-width"))).toBe("form");
+  }
+});

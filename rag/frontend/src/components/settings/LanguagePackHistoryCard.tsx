@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banner, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, DataTable, DEFAULT_PAGE_SIZE, INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS, OffsetPagination, ListToolbar, StatusBadge, FormStatus, TableSkeleton, TextareaField, TimedLoadingState, useConfirm } from "@production-ready/ui";
+import { Banner, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, DataTable, DEFAULT_PAGE_SIZE, INFORMATION_TABLE_ROW_CLASS, INFORMATION_TABLE_VISIBLE_ROWS, OffsetPagination, ListToolbar, StatusBadge, FormGrid, FormStatus, TableSkeleton, TextareaField, TimedLoadingState, useConfirm } from "@production-ready/ui";
 import { History, Send } from "lucide-react";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -77,7 +77,10 @@ export function LanguagePackHistoryCard({ dirty, metadata, state }: { dirty: boo
       <CardHeader><CardTitle>{t("settings.language.release.publishTitle")}</CardTitle><CardDescription>{t("settings.language.release.publishHelp")}</CardDescription></CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-fg-muted">{t("settings.language.release.current", { version: state.current.version })} · {formatDateTime(state.current.published_at)}</p>
-        <TextareaField id="language-release-note" label={t("settings.language.release.note")} width="full" rows={2} maxLength={2000} value={note} onValueChange={setNote} disabled={mutation.isPending} />
+        {/* 変更説明は普通の欄なので、フォームの最大幅（60rem）で止める（#1891・#5851）。 */}
+        <FormGrid columns={1}>
+          <TextareaField id="language-release-note" label={t("settings.language.release.note")} width="full" rows={2} maxLength={2000} value={note} onValueChange={setNote} disabled={mutation.isPending} />
+        </FormGrid>
         <div><Button variant="secondary" disabled={dirty || mutation.isPending} onClick={() => setReviewedRevision(revisionKey)}>{t("settings.language.release.review")}</Button></div>
         {reviewed ? draftComparison.isPending ? <TimedLoadingState label={t("settings.language.history.loading")} operationKey="language-draft-diff"><TableSkeleton columns={3} /></TimedLoadingState> : draftComparison.isError ? <ApiErrorState error={draftComparison.error} fallback={t("settings.language.history.loadError")} onRetry={() => { void qc.invalidateQueries({ queryKey: ["language-pack-draft"] }); setReviewedRevision(null); }} /> : <LanguagePackComparison comparison={draftComparison.data} /> : null}
         <div><Button icon={Send} disabled={dirty || !reviewed || !draftComparison.isSuccess || draftComparison.isFetching || !(draftComparison.data.differences.length || draftComparison.data.ingest_changed)} loading={mutation.isPending && mutation.variables === null} onClick={() => void publish(null)}>{t("settings.language.release.publish")}</Button></div>

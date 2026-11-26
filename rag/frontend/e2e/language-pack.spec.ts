@@ -211,6 +211,25 @@ test("言語資源の試すは、保存した値と編集中の値で例の文�
   expect(saved.overrides).toBeNull();
 });
 
+test("例の文と変更説明は普通の欄なので、広い画面でもフォームの最大幅（60rem）で止める（#5851）", async ({ page }) => {
+  await mockLanguagePack(page);
+  for (const width of [1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/settings/language-pack");
+    for (const id of ["language-preview-text", "language-release-note"]) {
+      const field = page.locator(`#${id}`);
+      await expect(field).toBeVisible();
+      const metrics = await field.evaluate((node) => ({
+        width: node.getBoundingClientRect().width,
+        formMax: Number.parseFloat(getComputedStyle(document.documentElement).fontSize) * 60,
+        grid: node.closest("[data-form-grid]")?.getAttribute("data-form-grid-width") ?? null,
+      }));
+      expect(metrics.grid, `${id} ${width}px`).toBe("form");
+      expect(metrics.width, `${id} ${width}px`).toBeLessThanOrEqual(metrics.formMax + 1);
+    }
+  }
+});
+
 test("公開版は読み取り専用で差分を確認して再公開し、編集中は回退できない", { tag: "@responsive" }, async ({ page }) => {
   const { restored } = await mockLanguagePack(page);
   await page.goto("/settings/language-pack");

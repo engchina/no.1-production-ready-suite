@@ -271,6 +271,8 @@ test("編集・読み取り専用のプロンプトは所属区画の全幅を�
       });
       expect(Math.abs(metrics.field - metrics.available)).toBeLessThanOrEqual(2);
       expect(Math.abs((await fixed.boundingBox())!.width - metrics.field)).toBeLessThanOrEqual(2);
+      // 読み取り専用の指示の文も、編集の欄と同じ全幅の FormGrid に置く（#4847・#5851）。
+      expect(await fixed.evaluate(node => node.closest("[data-form-grid]")?.getAttribute("data-form-grid-width"))).toBe("full");
       await expectNoPageOverflow(page);
       await role.screenshot({ path: testInfo.outputPath(`rag-role-${width}-${theme}.png`) });
     }

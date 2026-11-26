@@ -10,6 +10,7 @@ import {
   ChatAnswer,
   ErrorState,
   FormActionBar,
+  FormGrid,
   FormSkeleton,
   FormStatus,
   PageBody,
@@ -279,40 +280,43 @@ export function AnswerNoticeSettingsPage({
                     data-testid="answer-notice-enabled"
                   />
                 </div>
-                <TextareaField
-                  ref={textareaRef}
-                  id="answer-notice-text"
-                  label={m.fieldText}
-                  value={form.text}
-                  onValueChange={(text) => updateForm({ text })}
-                  helper={
-                    <>
-                      {m.helperText}
-                      <span className="mt-1 block" data-testid="answer-notice-source">
-                        {isDefaultText ? m.usingDefault : m.usingCustom}
-                      </span>
-                    </>
-                  }
-                  error={error}
-                  rows={4}
-                  maxLength={data.max_chars}
-                  showCount
-                  width="full"
-                  required
-                />
-                <TextField
-                  id="answer-notice-contact"
-                  label={m.fieldContact}
-                  value={form.contact}
-                  onValueChange={(contact) => updateForm({ contact })}
-                  helper={formatMessage(m.helperContact, {
-                    line: contactTemplate.replace("{contact}", `〈${m.fieldContact}〉`),
-                  })}
-                  placeholder={defaultContact}
-                  error={contactError}
-                  maxLength={data.contact_max_chars ?? 200}
-                  width="full"
-                />
+                {/* 本文と窓口は普通の欄なので、フォームの最大幅（60rem）で止める（#1891・#5851）。 */}
+                <FormGrid columns={1}>
+                  <TextareaField
+                    ref={textareaRef}
+                    id="answer-notice-text"
+                    label={m.fieldText}
+                    value={form.text}
+                    onValueChange={(text) => updateForm({ text })}
+                    helper={
+                      <>
+                        {m.helperText}
+                        <span className="mt-1 block" data-testid="answer-notice-source">
+                          {isDefaultText ? m.usingDefault : m.usingCustom}
+                        </span>
+                      </>
+                    }
+                    error={error}
+                    rows={4}
+                    maxLength={data.max_chars}
+                    showCount
+                    width="full"
+                    required
+                  />
+                  <TextField
+                    id="answer-notice-contact"
+                    label={m.fieldContact}
+                    value={form.contact}
+                    onValueChange={(contact) => updateForm({ contact })}
+                    helper={formatMessage(m.helperContact, {
+                      line: contactTemplate.replace("{contact}", `〈${m.fieldContact}〉`),
+                    })}
+                    placeholder={defaultContact}
+                    error={contactError}
+                    maxLength={data.contact_max_chars ?? 200}
+                    width="full"
+                  />
+                </FormGrid>
                 <FormActionBar
                   ariaLabel={m.actionsLabel}
                   primaryActions={[{ id: "save", type: "submit", label: m.save, icon: Save, loading: save.isPending }]}
