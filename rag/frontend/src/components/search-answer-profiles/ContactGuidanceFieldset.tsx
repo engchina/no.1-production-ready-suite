@@ -1,4 +1,4 @@
-import { TextField } from "@production-ready/ui";
+import { FormGrid, TextField } from "@production-ready/ui";
 
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { profileContactInheritance, type ContactInheritance } from "@/lib/contact-inheritance";
@@ -47,35 +47,40 @@ export function ContactGuidanceFieldset({
     >
       <legend className="px-1 text-sm font-semibold text-fg">{t("searchAnswerProfiles.contact.title")}</legend>
       <p className="text-xs text-fg-muted">{t("searchAnswerProfiles.contact.helper")}</p>
-      <div className="space-y-4 rounded-lg border border-border bg-surface-sunken p-3">
-        <TextField
-          id="search-answer-profile-contact-override"
-          label={t("searchAnswerProfiles.contact.override")}
-          value={contactOverride}
-          onValueChange={(value) => onChange({ contact_override: value })}
-          placeholder={contactInheritancePlaceholder(inheritance)}
-          helper={
-            <ContactInheritanceHelper
-              helper={t("searchAnswerProfiles.contact.overrideHelper")}
-              effective={profileEffectiveContactText(inheritance)}
-              sameAs={inheritance.sameAs === "system" ? t("searchAnswerProfiles.contact.sameAsSystem") : null}
-              testId="search-answer-profile-contact"
-            />
-          }
-          maxLength={CONTACT_OVERRIDE_MAX_CHARS}
-          disabled={disabled}
-          width="full"
-        />
-        {system.isError && system.data === undefined ? (
-          // 継承する窓口（欄の placeholder と「有効な窓口」）を読み取れなかった。欄は入力できるまま、直下に出す（#4817）。
-          <DataLoadFailure
-            error={system.error}
-            fallback={t("contactInheritance.loadError")}
-            onRetry={() => void system.refetch()}
-            layout="field"
-            testId="search-answer-profile-contact-load-failed"
+      <div className="rounded-lg border border-border bg-surface-sunken p-3">
+        {/* 1 行の普通の欄なので、フォームの読みやすい最大幅（FormGrid。60rem）で止める（説明の欄と同じ。#1891）。 */}
+        <FormGrid columns={1}>
+          <TextField
+            id="search-answer-profile-contact-override"
+            label={t("searchAnswerProfiles.contact.override")}
+            value={contactOverride}
+            onValueChange={(value) => onChange({ contact_override: value })}
+            placeholder={contactInheritancePlaceholder(inheritance)}
+            helper={
+              <ContactInheritanceHelper
+                helper={t("searchAnswerProfiles.contact.overrideHelper")}
+                effective={profileEffectiveContactText(inheritance)}
+                sameAs={inheritance.sameAs === "system" ? t("searchAnswerProfiles.contact.sameAsSystem") : null}
+                testId="search-answer-profile-contact"
+              />
+            }
+            maxLength={CONTACT_OVERRIDE_MAX_CHARS}
+            disabled={disabled}
+            width="full"
           />
-        ) : null}
+          {system.isError && system.data === undefined ? (
+            // 継承する窓口（欄の placeholder と「有効な窓口」）を読み取れなかった。欄は入力できるまま、直下に出す（#4817）。
+            <div className="col-span-full">
+              <DataLoadFailure
+                error={system.error}
+                fallback={t("contactInheritance.loadError")}
+                onRetry={() => void system.refetch()}
+                layout="field"
+                testId="search-answer-profile-contact-load-failed"
+              />
+            </div>
+          ) : null}
+        </FormGrid>
       </div>
     </fieldset>
   );

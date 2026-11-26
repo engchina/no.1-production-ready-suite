@@ -3574,6 +3574,20 @@ export const ja = {
   "searchAnswerProfiles.contact.source.system": "システム設定の窓口を継承",
   "searchAnswerProfiles.contact.sameAsSystem":
     "システム設定と同じ窓口です。空にすると、システム設定の窓口を継承します。",
+  // 追加の指示（#5848）
+  "searchAnswerProfiles.extraInstructions.title": "追加の指示",
+  "searchAnswerProfiles.extraInstructions.helper":
+    "このプロファイルの質問と回答に足す文を書きます。空の欄は何も足しません。",
+  "searchAnswerProfiles.extraInstructions.questionSuffix": "質問に足す文",
+  "searchAnswerProfiles.extraInstructions.questionSuffixPlaceholder": "例: 根拠の章の番号も答えてください。",
+  "searchAnswerProfiles.extraInstructions.questionSuffixHelper":
+    "この文をすべての質問の末尾に足して、検索と回答に使います。",
+  "searchAnswerProfiles.extraInstructions.answerInstruction": "回答の指示に足す文",
+  "searchAnswerProfiles.extraInstructions.answerInstructionPlaceholder": "例: 箇条書きで答えてください。",
+  "searchAnswerProfiles.extraInstructions.answerInstructionHelper":
+    "この文を回答の書き方の指示に足します。検索には使いません。",
+  "searchAnswerProfiles.extraInstructions.tooLong":
+    "{label}は {max} 文字以内で入力してください（現在 {count} 文字）。",
   "searchAnswerProfiles.clarification.title": "回答前の確認",
   "searchAnswerProfiles.clarification.helper":
     "チャットで曖昧な質問に回答する前に、業務ガイドの条件の確認事項を利用者に確かめるかを決めます。",
@@ -3808,6 +3822,8 @@ export const ja = {
   "settings.answerPrompts.stage.evaluation.condition":
     "品質評価と保存した回答の評価。正確性には標準回答が必要です。必須要点は参考の網羅率に使います",
   "settings.answerPrompts.part.assumptionSystem": "「前提を示して回答する」のときに追加する システムプロンプト",
+  "settings.answerPrompts.part.answerInstruction":
+    "検索・回答プロファイルの「回答の指示に足す文」があるときに追加する システムプロンプト（{instruction} にその文が入る）",
   "settings.answerPrompts.part.evidenceReading": "根拠に該当の印・値があるときに入力へ足す読み方",
   "settings.answerPrompts.part.guideRules": "業務ガイドがあるときに入力へ足す扱い",
   "settings.answerPrompts.part.role": "役割と回答の書き方",
@@ -4098,6 +4114,7 @@ export const ja = {
   // 回答の工程の利用者向けの名前（backend の工程名 → 画面の名前。#2096。lib/answer-process.ts）。
   "answer.step.understandQuestion": "質問から対象と条件を読み取る",
   "answer.step.terms": "一致する用語の別名を検索文に加える",
+  "answer.step.questionSuffix": "プロファイルの文を質問に足す",
   "answer.step.decideQueries": "検索文をまとめ、検索語を作る",
   "answer.step.answerFlow": "根拠を検索して回答を作る",
   "answer.step.evidenceFlow": "回答に使う根拠を検索する",

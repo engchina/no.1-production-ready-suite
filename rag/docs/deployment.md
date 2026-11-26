@@ -2851,3 +2851,13 @@ OS・サービス起動環境に`RAG_HYBRID_SEARCH_BACKEND`を直接設定して
 ```bash
 sudo -n ./platform/deploy/suite-update.sh
 ```
+
+## 検索・回答プロファイルの追加の指示（#5848）
+
+検索・回答プロファイルに「質問に足す文」（`question_suffix`）と「回答の指示に足す文」（`answer_instruction`）を足した。DB migration は不要（`rag_search_answer_profiles.profile_config` の JSON の直下の欄で、保存済みのプロファイルは空として読む）。既定は空で、空のプロファイルの検索と回答は変わらない。環境変数の追加は無い。repoの直下で通常の更新を行う。
+
+```bash
+sudo -n ./platform/deploy/suite-update.sh
+```
+
+回答の生成の指示の一覧に、追加の指示の Step の定型文が増えるため、回答の記録のプロンプトの版（`provenance.prompt_version`）は更新の前後で変わる（足す文が空のプロファイルに渡す指示の内容は変わらない）。

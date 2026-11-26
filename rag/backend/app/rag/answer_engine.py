@@ -45,7 +45,7 @@ from typing import Any, Literal, TypeVar, cast
 from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.output_budget import configured_online_output_tokens
 from pr_backend_core.timezones import configured_timezone_name
-from rag_engine.generation.answer_models import ANSWER_USES
+from rag_engine.generation.answer_models import ANSWER_USES, with_question_suffix
 from rag_engine.resources.context_expansion_trace import context_read_receipt
 from rag_engine.resources.deadline import Deadline, check_deadline, current_deadline
 from rag_engine.resources.runtime import saved_prompt_overrides
@@ -635,6 +635,10 @@ def build_engine_settings(
         evidence_plans=guide_evidence_plans(
             settings.rag_support_guide if settings.rag_support_guide_enabled else {}
         ),
+        # 検索・回答プロファイルの追加の指示（#5848）。質問に足す文は、回答の流れが用語・同義語の
+        # 照合の後に質問へ足す。回答の指示に足す文は、回答の生成の system にだけ足す。
+        question_suffix=settings.rag_question_suffix,
+        answer_instruction=settings.rag_answer_instruction,
     )
 
 
@@ -849,8 +853,16 @@ class AnswerEngine:
         )
         # 回答を作ったプロンプトの版（編集した内容とコードのプロンプト。#1276）。
         outcome.diagnostics.setdefault("provenance", {})["prompt_version"] = answer_prompt_version(
-            overrides
+            overrides, answer_instruction=self._settings.rag_answer_instruction
         )
+        # 検索・回答プロファイルの追加の指示（#5848）。この回答の検索と生成に渡した値を残す
+        # （記録の質問と ``rewritten_question`` は利用者の質問と履歴による補完のままで、足した文を
+        # 含めない）。
+        if suffix := self._settings.rag_question_suffix:
+            outcome.diagnostics["question_suffix"] = suffix
+            outcome.diagnostics["effective_question"] = with_question_suffix(request.query, suffix)
+        if request.generate_answer and self._settings.rag_answer_instruction:
+            outcome.diagnostics["answer_instruction"] = self._settings.rag_answer_instruction
         # 検索拡張の秒(#5518)。行った拡張は、足した chunk が 0 件でも秒を出す。
         seconds = state.expansion_seconds
         if state.entity_expansions or ENTITY_EXPANSION_DIAGNOSTICS in seconds:
@@ -961,6 +973,14 @@ class AnswerEngine:
         from rag_engine.generation.execution_record import bind_step_listener, bind_step_metrics
         from rag_engine.knowledge.classification import classification_filter_from_values
         from rag_engine.retrieval.scope import RETRIEVAL_SCOPE_KNOWLEDGE_BASE
+
+        # 検索・回答プロファイルの「質問に足す文」（#5848）。回答の流れには利用者の質問をそのまま
+        # 渡し（用語・同義語の照合は利用者の質問で行い、その後に回答の流れが足す）、backend の側の
+        # 検索（Wiki・検索拡張・目次からの章節の選択。``request.query`` を読む）には足した文を渡す。
+        question = request.query
+        request = request.model_copy(
+            update={"query": with_question_suffix(question, engine_settings.question_suffix)}
+        )
 
         def run_async(factory: Callable[[], Awaitable[T]]) -> T:
             return _run_on_loop(factory, loop)
@@ -1082,7 +1102,7 @@ class AnswerEngine:
             if wiki is not None:
                 cleanup.callback(wiki.cancel)
             return answer_question_result(
-                request.query,
+                question,
                 ENGINE_SOURCE_RUN_ID,
                 ["docling"],
                 engine_settings,
