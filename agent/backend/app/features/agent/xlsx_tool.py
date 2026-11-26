@@ -4,15 +4,19 @@
   Run に暗黙に足さない。不変条件 1）。実行は `tool_registry.invoke`（ツール権限・監査）を通る。
   Run の中に成果物を作るだけで外部へ書かないので、既定では承認が要らない（`record_output` と同じく
   副作用なしの宣言。管理者はツール権限で承認・拒否に変えられる）。
-- 引数: モデルは構造化した内容（題・シート・列・集計）を渡す。表の値は 2 つの出所のどちらか。
+- 引数: モデルは構造化した内容（題・シート・列・集計・グラフ）を渡す。表の値は 2 つの出所の
+  どちらか。
   - `source`: その Run で取得済みの表（NL2SQL の結果）の参照。回答の表の参照（`answer_data`）と同じ
     番号（`T1`）と行・列の指定で、値は保存した step の結果からここで写す（モデルは値を書かない）。
     無い参照・範囲外は引数の誤りとして返す。
   - `rows`: モデルが書いた小さい表。
+  グラフ（`chart`）は、そのシートの表のどの列を項目・系列にするかだけを指定する（指定の形・上限・
+  検証は PowerPoint のツールと同じ `chart_spec`）。グラフは表の cell を参照し、値を別に持たない。
 - 生成の本体は `xlsx_workbook.build_workbook`（Run に依らない）。保存は
   `artifact_file_store.save_tool_file`（参照だけを返す。大きさ・形式の検査もそこ）。結果・イベント・
   ログにファイルの中身を載せない。
-- 上限: 1 つの Run で作れるファイルは `MAX_FILES_PER_RUN` 個。内容の上限は `xlsx_workbook`。
+- 上限: 1 つの Run で作れるファイルは `MAX_FILES_PER_RUN` 個。内容の上限は `xlsx_workbook` と
+  `chart_spec`。
 - 表の参照の解決・ファイルの数の上限・内容の誤りの返し方は、Word のツール（`docx_tool`）と共通
   （`file_tool_support`）。
 
@@ -25,6 +29,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from app.features.agent.chart_spec import CHART_SCHEMA, CHART_TYPES, ChartSpec
 from app.features.agent.file_tool_support import (
     FILE_LIMIT_CODE,
     FILE_OUTPUT_SCHEMA,
@@ -185,6 +190,15 @@ _SHEET_SCHEMA: dict[str, Any] = {
                 "表の下に足す集計の行（1 要素が 1 行。Excel の数式で入る）。無ければ空の配列"
             ),
         },
+        "chart": {
+            "anyOf": [CHART_SCHEMA, {"type": "null"}],
+            "description": (
+                "表の右に置くグラフの指定（種類と、このシートの columns のどの列を項目・系列に"
+                "するか）。グラフは表の cell を参照し、集計の行は含まない。色・凡例・値のラベル・"
+                "軸の体裁は種類ごとに決まっている。行の多い表のシートには付けず、グラフにする"
+                "行と列だけの表を別のシートに置いて、そのシートに付ける。置かないなら null"
+            ),
+        },
     },
     "required": ["name", "columns"],
     "additionalProperties": False,
@@ -203,7 +217,10 @@ XLSX_CREATE_INPUT_SCHEMA: dict[str, Any] = {
             "minItems": 1,
             "maxItems": MAX_SHEETS,
             "items": _SHEET_SCHEMA,
-            "description": "シート（左から）。1 つのシートに 1 つの表を置く",
+            "description": (
+                "シート（左から）。1 つのシートに 1 つの表を置く（グラフは 1 つのシートに 1 つ"
+                "まで）"
+            ),
         },
     },
     "required": ["title", "sheets"],
@@ -225,6 +242,21 @@ XLSX_CREATE_OUTPUT_SCHEMA: dict[str, Any] = {
                 },
             },
         },
+        "charts": {
+            "type": "array",
+            "description": (
+                "グラフごとの、置いたシートの名前・種類・系列の数・項目の数（シートの順）"
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "sheet": {"type": "string"},
+                    "type": {"type": "string", "enum": list(CHART_TYPES)},
+                    "series": {"type": "integer"},
+                    "categories": {"type": "integer"},
+                },
+            },
+        },
     },
 }
 
@@ -237,8 +269,11 @@ XLSX_CREATE_DEFINITION = ToolDefinition(
         "## Step 1: 内容を引数にまとめる\n"
         "- 1 つのシートに 1 つの表を置く。表の値は、取得済みの表の参照（source）か、引数に書いた"
         "行（rows）のどちらかで渡す。\n"
-        "- 作れるのは、表・題と説明の文・数値と日付の書式・列の幅・集計の行。グラフ・画像・"
-        "ピボット・マクロ・条件付き書式と、既存のファイルの編集はできない。\n\n"
+        "- 作れるのは、表・題と説明の文・数値と日付の書式・列の幅・集計の行・グラフ（"
+        + "・".join(CHART_TYPES.values())
+        + "）。字体と表・グラフの体裁は決まっていて、変えられない。画像・ピボット・マクロ・"
+        "条件付き書式・ほかの種類のグラフ（積み上げ・2 軸・散布図など）と、既存のファイルの編集は"
+        "できない。\n\n"
         "## Step 2: 結果を確かめる\n"
         "作ったファイルは利用者の画面に表示され、利用者がダウンロードできる。結果の file.file_name "
         f"がファイル名。1 回の実行で作れるファイルは {MAX_FILES_PER_RUN} 個まで。"
@@ -278,6 +313,7 @@ def _sheets(arguments: Mapping[str, Any], run: Any) -> list[Sheet]:
             )
             for column_index, column in enumerate(raw.get("columns") or [])
         ]
+        chart = raw.get("chart")
         sheets.append(
             Sheet(
                 name=str(raw.get("name") or ""),
@@ -292,6 +328,13 @@ def _sheets(arguments: Mapping[str, Any], run: Any) -> list[Sheet]:
                         label=item.get("label"),
                     )
                     for item in raw.get("summaries") or ()
+                ),
+                chart=None
+                if chart is None
+                else ChartSpec(
+                    type=chart["type"],
+                    category_column=chart["category_column"],
+                    series_columns=tuple(chart["series_columns"]),
                 ),
             )
         )
@@ -316,7 +359,7 @@ def _create_xlsx(arguments: dict[str, Any], context: ToolInvocationContext) -> d
         mime_type=XLSX_MIME_TYPE,
         data=built.data,
     )
-    return {"file": reference, "sheets": list(built.sheets)}
+    return {"file": reference, "sheets": list(built.sheets), "charts": list(built.charts)}
 
 
 def xlsx_create_tool() -> tuple[ToolDefinition, ToolHandler]:

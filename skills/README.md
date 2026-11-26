@@ -9,7 +9,7 @@ Production Ready RAG・NL2SQL の MCP を使って調べるスキルと、Agent 
 | [`rag-chat-and-data`](./rag-chat-and-data/SKILL.md)（RAG チャット＋データ） | `rag`・`nl2sql` | 資料（`rag_chat`）と業務データの両方が要る調査。RAG の回答と業務データの値を合わせて答える |
 | [`rag-search-and-data`](./rag-search-and-data/SKILL.md)（RAG 検索＋データ） | `rag`・`nl2sql` | 資料（`rag_search`）と業務データの両方が要る調査 |
 | [`structured-data-query`](./structured-data-query/SKILL.md)（構造化データ照会） | `nl2sql` | 業務データの件数・金額・一覧を SQL で照会する |
-| [`xlsx-create`](./xlsx-create/SKILL.md)（Excel 作成） | なし（Agent の業務 Agent のツール `xlsx_create`） | 利用者の依頼に応じて Excel のファイル（.xlsx）を新しく作る。**Agent の業務 Agent だけで使える**（#5837） |
+| [`xlsx-create`](./xlsx-create/SKILL.md)（Excel 作成） | なし（Agent の業務 Agent のツール `xlsx_create`） | 利用者の依頼に応じて Excel のファイル（.xlsx。グラフを含む）を新しく作る。**Agent の業務 Agent だけで使える**（#5837） |
 | [`docx-create`](./docx-create/SKILL.md)（Word 作成） | なし（Agent の業務 Agent のツール `docx_create`） | 利用者の依頼に応じて Word のファイル（.docx）を新しく作る。**Agent の業務 Agent だけで使える**（#5837） |
 | [`pptx-create`](./pptx-create/SKILL.md)（PowerPoint 作成） | なし（Agent の業務 Agent のツール `pptx_create`） | 利用者の依頼に応じて PowerPoint のファイル（.pptx。グラフを含む）を新しく作る。**Agent の業務 Agent だけで使える**（#5837） |
 

@@ -101,8 +101,17 @@ def _sheet(**changes: Any) -> dict[str, Any]:
         "source": None,
         "rows": [],
         "summaries": [],
+        "chart": None,
     }
     return {**base, **changes}
+
+
+def _chart(chart_type: str, category_column: int, series_columns: list[int]) -> dict[str, Any]:
+    return {
+        "type": chart_type,
+        "category_column": category_column,
+        "series_columns": series_columns,
+    }
 
 
 def _source(table: str = "T1", rows: str = "*", columns: str = "*") -> dict[str, str]:
@@ -229,6 +238,7 @@ def test_referenced_values_are_copied_from_the_stored_result(run_id: str) -> Non
             "sha256": artifact.content["sha256"],
         },
         "sheets": [{"name": "参照", "rows": 3, "columns": 5, "summary_rows": 1}],
+        "charts": [],
     }
     encoded = base64.b64encode(data).decode("ascii")
     recorded = result.model_dump_json() + runtime_repository.get_run(run_id).model_dump_json()
@@ -265,6 +275,45 @@ def test_bracketed_table_reference_and_written_rows_work_together(run_id: str) -
         ["c", None],
     ]
     assert written["B8"].value == '=IF(COUNT(B5:B7)=0,"",AVERAGE(B5:B7))'
+
+
+def test_chart_refers_to_the_cells_copied_from_the_stored_result(run_id: str) -> None:
+    arguments = _sheet(
+        name="グラフ",
+        heading="合成のグラフ",
+        columns=[_column("text"), _column("number", format="integer"), _column("number")],
+        source=_source(rows="1-2", columns="1-3"),
+        summaries=[{"function": "sum", "columns": [2], "label": None}],
+        chart=_chart("column", 1, [2, 3]),
+    )
+    # モデルの引数に、グラフの値は 1 つも無い（どの列を項目・系列にするかだけ）。
+    assert all(str(value) not in json.dumps(arguments) for value in (1200, 0.25, "record-1"))
+
+    result = _invoke(run_id, arguments, _sheet(name="表だけ", rows=[["x"]]))
+
+    assert result.success, result.error
+    assert result.output is not None
+    assert result.output["charts"] == [
+        {"sheet": "グラフ", "type": "column", "series": 2, "categories": 2}
+    ]
+    workbook, _ = _workbook(run_id, _files(run_id)[0].id)
+    sheet = workbook["グラフ"]
+    # 題（1 行目）・空行・見出し（3 行目）・データ（4〜5 行目）・集計（6 行目）。
+    assert [[cell.value for cell in sheet[row]] for row in (3, 4, 5, 6)] == [
+        ["LABEL", "AMOUNT", "RATE"],
+        ["record-1", 1200, 0.25],
+        ["=1+1", 30, 0.5],
+        [None, "=SUM(B4:B5)", None],
+    ]
+    [chart] = sheet._charts  # noqa: SLF001 - openpyxl に、読んだグラフの公開の API が無い
+    # グラフは、写した表の cell を参照する（集計の行は含めない）。
+    assert [
+        (series.tx.strRef.f, series.cat.strRef.f, series.val.numRef.f) for series in chart.series
+    ] == [
+        ("'グラフ'!$B$3", "'グラフ'!$A$4:$A$5", "'グラフ'!$B$4:$B$5"),
+        ("'グラフ'!$C$3", "'グラフ'!$A$4:$A$5", "'グラフ'!$C$4:$C$5"),
+    ]
+    assert workbook["表だけ"]._charts == []  # noqa: SLF001
 
 
 @pytest.mark.parametrize(
@@ -323,6 +372,24 @@ def test_bracketed_table_reference_and_written_rows_work_together(run_id: str) -
             {"columns": [_column("date")], "source": _source(columns="2")},
             ("sheets.0.columns.0.type", "not_date"),
         ),
+        (
+            # 文字の列は、グラフの系列にできない。
+            {
+                "columns": [_column("text"), _column("text")],
+                "source": _source(columns="1,5"),
+                "chart": _chart("bar", 1, [2]),
+            },
+            ("sheets.0.chart.series_columns.0", "not_number"),
+        ),
+        (
+            # 円のグラフは、空の値を含められない（3 行目の値が無い）。
+            {
+                "columns": [_column("text"), _column("number")],
+                "source": _source(columns="1,2"),
+                "chart": _chart("pie", 1, [2]),
+            },
+            ("sheets.0.columns.1", "pie_values"),
+        ),
     ],
     ids=[
         "unknown-table",
@@ -337,6 +404,8 @@ def test_bracketed_table_reference_and_written_rows_work_together(run_id: str) -
         "text-as-number",
         "big-number",
         "number-as-date",
+        "chart-text-series",
+        "chart-pie-empty-value",
     ],
 )
 def test_bad_references_and_values_are_argument_errors(
@@ -362,6 +431,10 @@ def test_schema_violations_are_rejected_before_the_handler(run_id: str) -> None:
         {"title": "t", "sheets": [_sheet(rows=[[True]])]},
         {"title": "t", "sheets": [_sheet(rows=[["x"]] * (MAX_WRITTEN_ROWS + 1))]},
         {"title": "t", "sheets": [_sheet(chart={"type": "bar"})]},
+        {"title": "t", "sheets": [_sheet(chart=_chart("area", 1, [2]))]},
+        {"title": "t", "sheets": [_sheet(chart={**_chart("bar", 1, [2]), "title": "x"})]},
+        {"title": "t", "sheets": [_sheet(chart=_chart("bar", 0, [2]))]},
+        {"title": "t", "sheets": [_sheet(image="x")]},
         {
             "title": "t",
             "sheets": [_sheet(summaries=[{"function": "median", "columns": [1], "label": None}])],
@@ -506,6 +579,7 @@ XLSX_CALL = {
             columns=[_column("text"), _column("number", format="integer")],
             source=_source(columns="1,2"),
             summaries=[{"function": "sum", "columns": [2], "label": "合計"}],
+            chart=_chart("bar", 1, [2]),
         )
     ],
 }
@@ -591,12 +665,19 @@ def test_agent_with_the_skill_creates_a_file_from_the_run_data_without_approval(
         *[[row["LABEL"], row["AMOUNT"]] for row in ROWS],
     ]
     assert sheet["B5"].value == "=SUM(B2:B4)" and sheet["A5"].value == "合計"
+    # グラフは表の cell を参照する（集計の行は含めない）。
+    [chart] = sheet._charts  # noqa: SLF001 - openpyxl に、読んだグラフの公開の API が無い
+    assert [(item.cat.strRef.f, item.val.numRef.f) for item in chart.series] == [
+        ("'一覧'!$A$2:$A$4", "'一覧'!$B$2:$B$4")
+    ]
     # step・イベント・モデルへの入力に、ファイルの中身は載らない（参照だけ）。
     [step] = [
         item for item in run.steps if item.tool_call and item.tool_call.name == XLSX_CREATE_TOOL
     ]
     assert step.tool_result is not None and step.tool_result.success
-    assert set(step.tool_result.output or {}) == {"file", "sheets"}
+    output = step.tool_result.output or {}
+    assert set(output) == {"file", "sheets", "charts"}
+    assert output["charts"] == [{"sheet": "一覧", "type": "bar", "series": 1, "categories": 3}]
     encoded = base64.b64encode(data).decode("ascii")
     assert encoded[:64] not in run.model_dump_json()
     model_input = str(model.calls[2].input)

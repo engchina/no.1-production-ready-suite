@@ -5,20 +5,23 @@
 - シート名・題と説明の文・表の見出し・型（文字・数値・日付）・数値と日付の書式・列の幅。
 - 集計の行が値ではなく数式であること、表の見出しの固定、フィルターの範囲。
 - `=` `+` `-` `@` で始まる文字が数式にならないこと。
+- ブックの既定の字体（字体を指定しない cell・標準のスタイル）と、題・見出しの字体。
 - 作れない内容（上限の超過・型に合わない値・精度を超える数値）は、切り捨てずに誤りにすること。
 """
 
 from __future__ import annotations
 
 import io
+import zipfile
 from datetime import datetime
 from typing import Any
 
 import pytest
 from openpyxl import load_workbook  # type: ignore[import-untyped]
 
-from app.features.agent import xlsx_workbook
+from app.features.agent import docx_document, pptx_presentation, xlsx_workbook
 from app.features.agent.xlsx_workbook import (
+    FONT_NAME,
     MAX_CELLS,
     MAX_COLUMNS,
     MAX_NOTES,
@@ -119,6 +122,30 @@ def test_sheet_has_heading_notes_table_and_typed_cells() -> None:
         "yyyy/mm/dd",
         "yyyy-mm-dd hh:mm",
     ]
+
+
+def test_default_font_is_the_one_font_of_the_generated_files() -> None:
+    # Word・PowerPoint の生成と同じ字体。
+    assert FONT_NAME == docx_document.FONT_NAME == pptx_presentation.FONT_NAME
+    built = build_workbook([ITEMS])
+    workbook = load_workbook(io.BytesIO(built.data))
+
+    sheet = workbook["明細"]
+    # 題・説明の文・表の見出し・文字と数値と日付の cell・集計の行・何も書いていない cell。
+    cells = ("A1", "A2", "A5", "A6", "B6", "E6", "A9", "B9", "H30")
+    assert {sheet[cell].font.name for cell in cells} == {FONT_NAME}
+    # 既定の字体は、テーマの字体に従わない（従う印があると、Excel は名前よりテーマの字体を使う）。
+    assert sheet["A6"].font.scheme is None and sheet["H30"].font.scheme is None
+    assert (sheet["A6"].font.size, sheet["A1"].font.size) == (11, 14)
+    # 標準のスタイル（利用者が足す cell の字体）も同じ。字体の一覧に、ほかの字体が無い。
+    assert workbook._named_styles["Normal"].font.name == FONT_NAME  # noqa: SLF001
+    assert {font.name for font in workbook._fonts} == {FONT_NAME}  # noqa: SLF001
+    with zipfile.ZipFile(io.BytesIO(built.data)) as archive:
+        styles = archive.read("xl/styles.xml").decode("utf-8")
+    assert (
+        styles.index("<fonts") < styles.index(f'<name val="{FONT_NAME}"') < styles.index("</font>")
+    )
+    assert "Calibri" not in styles
 
 
 def test_summary_rows_are_formulas_over_the_data_rows() -> None:
