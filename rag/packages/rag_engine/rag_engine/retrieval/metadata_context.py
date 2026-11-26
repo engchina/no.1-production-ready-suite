@@ -51,18 +51,24 @@ def document_identity(record: Any) -> str:
 def document_context_key(record: Any) -> tuple[str, ...]:
     """同一文書でも有効開始日（改訂版）・解析・engine が異なる背景を共有しないためのキー。
 
-    先頭は文書の論理的な名前（``source_document_id``・表示名。改訂版の照合に使う）、2 つ目は有効開始日。
+    先頭は有効開始日のある改訂版では論理名、日付のない保存済み成果物では文書 ID。2 つ目は有効開始日。
     末尾の backend の文書 ID で、同じ名前の別文書の背景・根拠を区別する（#2603）。
     """
     metadata = getattr(record, "metadata", {}) or {}
     document = metadata.get("document") or {}
+    document_id = str(metadata.get("document_id") or "")
+    chunk_set = str(metadata.get("chunk_set_id") or getattr(record, "chunk_run_id", ""))
+    effective_from = str(document.get("effective_from") or "")
+    logical_name = str(document.get("source_document_id") or getattr(record, "source", "") or getattr(record, "id", ""))
+    # 有効日のある改訂版は論理名で比較する。日付のない保存済みの同一成果物では、
+    # 文書要約に論理名がなくても本文と同じ版付きのキーを使う（#5802）。
     return (
-        str(document.get("source_document_id") or getattr(record, "source", "") or getattr(record, "id", "")),
-        str(document.get("effective_from") or ""),
+        document_id if document_id and chunk_set and not effective_from else logical_name,
+        effective_from,
         str(getattr(record, "source_run_id", "")),
         str(getattr(record, "engine", "")),
-        str(metadata.get("chunk_set_id") or getattr(record, "chunk_run_id", "")),
-        str(metadata.get("document_id") or ""),
+        chunk_set,
+        document_id,
     )
 
 
