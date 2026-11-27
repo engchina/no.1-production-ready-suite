@@ -170,6 +170,7 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
   const positions = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
     const { width, height } = POINT_SIZE;
+    const availableRadiusX = canvasWidth * (canvasWidth < 480 ? .38 : .31);
     points.forEach((node, fallback) => {
       const index = slots.get(node.id) ?? fallback;
       if (index === 0) {
@@ -184,7 +185,7 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
       }
       const capacity = ring === 1 ? firstRingSize : 6 * ring;
       const theta = Math.PI * (1.1 - 2 * indexInRing / capacity);
-      const radiusX = Math.max(ring === 1 ? width * .6 : width * 1.5, Math.min(canvasWidth * .31, width * 2.5));
+      const radiusX = Math.max(ring === 1 ? width * .6 : width * 1.5, Math.min(availableRadiusX, width * 2.5));
       const radiusY = Math.max(height * 1.8, Math.min(canvasHeight * .27, height * 3));
       map.set(node.id, { x: Math.cos(theta) * ring * radiusX, y: Math.sin(theta) * ring * radiusY });
     });
@@ -233,7 +234,7 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
         ? {
             type: "parallel",
             data: {
-              parallelOffset: orientation === "vertical" ? 44 : 32,
+              parallelOffset: canvasWidth < 480 ? 20 : orientation === "vertical" ? 44 : 32,
             },
           }
         : {}),
