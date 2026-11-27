@@ -57,6 +57,8 @@ async function mockApi(page: Page, attachedImages: number, review = false, citat
             retrieval_strategy: "hybrid",
             answer: {
               outcome: "conditional",
+              // 資料を選び直す test では、元の回答の案内（引用の印が無い）を出す（回答し直した後に消えることを確かめる。#5930）。
+              ...(review ? { citation_missing: true } : {}),
               execution_steps: [],
               evidence_tree: [],
               models: {
@@ -202,8 +204,11 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   await expect(dialog.getByRole("checkbox",{name:"確認手順 C.pdf"})).not.toBeChecked();
   await dialog.getByRole("checkbox",{name:"確認手順 C.pdf"}).check();
   if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-search-candidates-"+testInfo.project.name+".png"});
+  await expect(page.getByTestId("answer-citation-missing")).toBeVisible();
   await dialog.getByRole("button",{name:"選んだ資料で再回答"}).click();
   await expect(page.getByText(nextAnswer,{exact:true})).toBeVisible();
+  // 元の回答の案内は、元の回答の本文・根拠と一緒に隠す（#5930）。
+  await expect(page.getByTestId("answer-citation-missing")).toHaveCount(0);
   await page.getByRole("button",{name:"解決した",exact:true}).click();
   expect(votes).toEqual(["not_helpful","helpful"]);
   if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-search-answer-"+testInfo.project.name+".png"});
