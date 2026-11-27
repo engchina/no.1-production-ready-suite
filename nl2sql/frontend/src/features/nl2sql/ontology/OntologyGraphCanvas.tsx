@@ -32,9 +32,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button, fieldControlClassName, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
+import { Button, fieldControlClassName, CollapsedListToggle, TabPanel, Tabs, useCollapsedList } from "@production-ready/ui";
 import { directedGraphBundles, applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasFrame, GraphCanvasProvider, GraphCanvasControls, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphPointNode, GraphParallelEdge, GraphSearchNavigation, normalizeGraphSearch, selectGraphEdgeHandles, useGraphReadableFit, type GraphEdgeHandleSelection, type GraphNodeDimensions } from "@production-ready/ui/graph";
-import { cn } from "@/lib/utils";
 import { useValuesChanged } from "@/lib/render-sync";
 
 import { t } from "@/lib/i18n";
@@ -311,44 +310,6 @@ function objectNodeStats(graph: OntologyGraph): Map<string, { columnCount: numbe
   return stats;
 }
 
-function GraphModeControl({
-  mode,
-  onChange,
-}: {
-  mode: OntologyGraphViewMode;
-  onChange: (mode: OntologyGraphViewMode) => void;
-}) {
-  return (
-    <div
-      className="pointer-events-auto flex min-h-[var(--control-height-lg)] min-w-0 max-w-full flex-wrap items-center gap-1 rounded-md border border-border bg-surface px-1 shadow-sm"
-      role="group"
-      aria-label={t("nl2sql.ontology.graphMode.label")}
-      data-testid="ontology-graph-view-mode"
-    >
-      {GRAPH_VIEW_MODES.map((item) => {
-        const Icon = item.icon;
-        const selected = item.id === mode;
-        return (
-          <button
-            key={item.id}
-            type="button"
-            aria-pressed={selected}
-            className={cn(
-              "inline-flex h-[36px] cursor-pointer items-center gap-1 rounded px-2 text-xs font-medium transition-colors motion-reduce:transition-none sm:h-[32px]",
-              selected ? "bg-accent-emphasis text-fg-on-accent" : "text-fg-muted hover:bg-surface-hover hover:text-fg"
-            )}
-            onClick={() => onChange(item.id)}
-            data-testid={`ontology-graph-mode-${item.id}`}
-          >
-            <Icon size={14} aria-hidden="true" />
-            <span>{t(item.labelKey)}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function LaneOverlays({ lanes }: { lanes: OntologyGraphSemanticLane[] }) {
   return (
     <ViewportPortal>
@@ -428,6 +389,7 @@ function OntologyFlow({
     defaultViewMode ?? "all"
   );
   const currentViewMode = viewMode ?? internalViewMode;
+  const viewTabsId = useId();
   const cameras = useRef(new Map<OntologyGraphViewMode, {
     viewport: Viewport;
     node?: string | null;
@@ -952,7 +914,15 @@ function OntologyFlow({
             </optgroup>)}
           </select>
         </label>
-        <GraphModeControl mode={currentViewMode} onChange={changeViewMode} />
+        {/* 同じグラフの別の見方の切り替えは共有の Tabs（RAG の Wiki の「関係図 / 一覧」と同じ部品。#5949）。 */}
+        <Tabs
+          idPrefix={viewTabsId}
+          ariaLabel={t("nl2sql.ontology.graphMode.label")}
+          value={currentViewMode}
+          onChange={(id) => changeViewMode(id as OntologyGraphViewMode)}
+          items={GRAPH_VIEW_MODES.map(({ id, labelKey, icon }) => ({ id, label: t(labelKey), icon }))}
+          className="min-w-0 max-w-full"
+        />
         <GraphSearchNavigation
           labels={{ search: t("nl2sql.ontology.graphSearch"), clear: t("common.clearSearch"), previous: t("nl2sql.ontology.graphSearchPrev"), next: t("nl2sql.ontology.graphSearchNext"), noMatch: t("nl2sql.ontology.graphSearchNoMatch"), scope: t("nl2sql.ontology.graphSearchScope") }}
           value={search} onChange={setSearch} count={orderedSearchMatches.length} cursor={searchCursor}
@@ -982,6 +952,7 @@ function OntologyFlow({
         />
       ) : null}
       <p className="text-xs text-fg-muted">{t("nl2sql.ontology.graphSearchScope")}</p>
+      <TabPanel id={currentViewMode} value={currentViewMode} idPrefix={viewTabsId}>
       {conceptView ? (
         <div data-testid="ontology-graph-canvas" data-graph-view="explorer">
           <OntologyConceptExplorer
@@ -1052,6 +1023,7 @@ function OntologyFlow({
       />
       </GraphCanvasFrame>
       )}
+      </TabPanel>
       {/* スクリーンリーダー向け: 選択されたノードを読み上げる(視覚は selected 枠で表現済み) */}
       <span
         className="sr-only"
