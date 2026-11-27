@@ -394,7 +394,7 @@ test.describe("Agent Runtime settings", () => {
       await page.goto("/settings/tool-policy");
 
       const errors = page.getByTestId("tool-policy-connection-errors");
-      await expect(errors).toContainText("一部の MCP 接続のツールを取得できませんでした");
+      await expect(errors).toContainText("一部の外部接続のツールを取得できませんでした");
       await expect(errors).toContainText("ナレッジ検索（RAG）: MCP 接続「ナレッジ検索（RAG）」に接続できません。");
       await expect(page.getByTestId("tool-policy-open-mcp-connections")).toHaveAttribute("href", /\/settings\/mcp-connections$/);
 
@@ -494,9 +494,9 @@ test.describe("Agent Runtime settings", () => {
   test("MCP 接続を API キーで追加し、ツールを取得して削除できる", { tag: "@responsive" }, async ({ page, mockApi }) => {
     await page.goto("/settings/mcp-connections");
 
-    await expect(page.getByRole("heading", { name: "MCP 接続", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "外部接続", level: 1 })).toBeVisible();
     // RAG / NL2SQL は標準の接続として、用途の分かる名前で最初から並ぶ（接続 ID は rag / nl2sql。#1325）。
-    const table = page.getByRole("table", { name: "MCP 接続" });
+    const table = page.getByRole("table", { name: "外部接続" });
     await expect(table.getByRole("link", { name: /ナレッジ検索（RAG） rag/ })).toBeVisible();
     await expect(table.getByRole("link", { name: /データ問い合わせ（NL2SQL） nl2sql/ })).toBeVisible();
     await expect(table.getByRole("row", { name: /ナレッジ検索（RAG）/ }).getByText("標準", { exact: true })).toBeVisible();
@@ -511,7 +511,7 @@ test.describe("Agent Runtime settings", () => {
     await chooseSelectFieldOption(page.locator("#mcp-server-auth-mode"), "api_key");
     await page.locator("#mcp-server-api-key").fill("crm-secret");
     await page.getByRole("button", { name: "作成" }).click();
-    await expect(page.getByText("MCP 接続を追加しました")).toBeVisible();
+    await expect(page.getByText("外部接続を追加しました")).toBeVisible();
     // 作成後は作成した対象のエディタへ移る。API キーの値は送るだけで、画面にも応答にも残らない。
     await expect(page).toHaveURL(/\?id=crm$/);
     await expect(page.getByRole("heading", { name: "CRM Gateway", level: 1 })).toBeVisible();
@@ -567,7 +567,7 @@ test.describe("Agent Runtime settings", () => {
     await page.getByTestId("editor-back").click();
     await chooseRowAction(page, "crm", "削除");
     await page.getByRole("button", { name: "削除", exact: true }).click();
-    await expect(page.getByText("MCP 接続を削除しました")).toBeVisible();
+    await expect(page.getByText("外部接続を削除しました")).toBeVisible();
     await expect(page.getByRole("button", { name: "crm の操作" })).toHaveCount(0);
   });
 
@@ -641,7 +641,7 @@ test.describe("Agent Runtime settings", () => {
     await page.getByRole("alertdialog").getByRole("button", { name: "信頼する" }).click();
     await expect(trust).toBeChecked();
     await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    await expect(page.getByText("外部接続を保存しました")).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/wiki")?.body).toMatchObject({
       trust_tool_annotations: true,
     });
@@ -693,7 +693,7 @@ test.describe("Agent Runtime settings", () => {
     // 新しい API キーを保存したら、前のキーでの失敗は消える（URL・認証方式は変わらない。messaging.md §10.4）。
     await page.locator("#mcp-server-api-key").fill("new-secret");
     await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    await expect(page.getByText("外部接続を保存しました")).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/crm")?.body).toMatchObject({ api_key: "new-secret" });
     await expect(toolsResult).toHaveCount(0);
     await expect(page.getByRole("button", { name: "ツールを取得" })).toBeEnabled();
@@ -728,7 +728,7 @@ test.describe("Agent Runtime settings", () => {
 
     await page.locator("#mcp-server-base-url").fill("http://rag-host/api/mcp");
     await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    await expect(page.getByText("外部接続を保存しました")).toBeVisible();
     await expect(notice).not.toContainText("MCP の URL が未設定です");
     await expect(notice).toContainText("PLATFORM_SERVICE_TOKEN_SECRET");
     // 標準の接続の名前は送らない（配備が決める）。
@@ -771,7 +771,7 @@ test.describe("Agent Runtime settings", () => {
     ]) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto("/settings/mcp-connections");
-      const table = page.getByRole("table", { name: "MCP 接続" });
+      const table = page.getByRole("table", { name: "外部接続" });
       const ragRow = table.getByRole("row", { name: /ナレッジ検索（RAG）/ });
       await expect(ragRow.getByText("標準", { exact: true })).toBeVisible();
       // 削除できないので、行の操作メニューは使えない。
@@ -804,7 +804,7 @@ test.describe("Agent Runtime settings", () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.locator("#mcp-server-timeout").fill("90");
     await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    await expect(page.getByText("外部接続を保存しました")).toBeVisible();
     expect(mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/rag")?.body).toEqual({ timeout_seconds: 90 });
   });
 

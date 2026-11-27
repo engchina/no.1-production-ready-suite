@@ -56,6 +56,27 @@ export interface MockAccount {
   user: CurrentUserPayload;
 }
 
+/** A2A の接続の Agent card の既定（合成。`GET /api/settings/mcp-connections/{id}/tools` の metadata。#5932）。 */
+const MOCK_A2A_AGENT_CARD = {
+  name: "合成の外部 Agent",
+  description: "合成の説明: 依頼の文を受け取り、結果の文を返す。",
+  protocol_version: "0.3.0",
+  version: "1.0.0",
+};
+
+/** A2A の接続の 1 つのツール（backend の `a2a.A2A_TOOL_NAME` と同じ名前。説明は Agent card から作る）。 */
+function a2aTool(card: Json): Json {
+  return {
+    name: "send_message",
+    title: card.name,
+    description: `外部の Agent「${card.name}」にテキストの依頼を 1 通送り、その応答の本文を返す。\nこの Agent の説明: ${card.description}`,
+    input_schema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },
+    output_schema: { type: "object" },
+    read_only: false,
+    metadata: {},
+  };
+}
+
 /** MCP 接続の tools/list 相当（`GET /api/settings/mcp-connections/{id}/tools`。#757）。 */
 const MOCK_MCP_TOOLS = [
   {
@@ -822,6 +843,12 @@ function createState() {
     mcpConnectionTools: {} as Record<string, Json[]>,
     // tools/list を取れない接続の理由（#1814）。
     mcpConnectionErrors: {} as Record<string, string>,
+    // 接続の追加の画面の既定値（AIDP を配備した構成だけ。既定は空。#5932）。
+    mcpConnectionPresets: [] as Json[],
+    // 「システム設定 › OCI 認証」の API キーを読めるか（OCI 署名の接続を追加したときの状態。#5932）。
+    ociSignatureConfigured: true,
+    // A2A の接続ごとの Agent card（未指定の接続は MOCK_A2A_AGENT_CARD。#5932）。
+    a2aAgentCards: {} as Record<string, Json>,
     modelSettings: d.modelSettings as Json,
     databaseSettings: d.databaseSettings as Json,
     adbInfo: d.adbInfo as Json,
@@ -1087,6 +1114,8 @@ function mcpConnection(payload: Json, current?: Json): Json {
   const merged: Json = {
     timeout_seconds: 10,
     label: null,
+    protocol: "mcp",
+    agent_card_url: null,
     auth_mode: "none",
     source: "runtime",
     removable: true,
@@ -1094,6 +1123,7 @@ function mcpConnection(payload: Json, current?: Json): Json {
     oauth_configured: false,
     session_configured: false,
     service_token_configured: false,
+    oci_signature_configured: false,
     ...current,
     ...payload,
   };
@@ -1107,11 +1137,14 @@ function mcpConnection(payload: Json, current?: Json): Json {
     mode === "none" ||
     (mode === "api_key" && apiKeyConfigured) ||
     (mode === "oauth_client_credentials" && oauthConfigured) ||
-    (mode === "service_token" && Boolean(merged.service_token_configured));
+    (mode === "service_token" && Boolean(merged.service_token_configured)) ||
+    (mode === "oci_signature" && Boolean(merged.oci_signature_configured));
   return {
     server_id: merged.server_id,
     label: merged.label ?? null,
+    protocol: merged.protocol === "a2a" ? "a2a" : "mcp",
     base_url: baseUrl,
+    agent_card_url: typeof merged.agent_card_url === "string" && merged.agent_card_url ? merged.agent_card_url : null,
     auth_mode: mode,
     service_audience: mode === "service_token" ? merged.service_audience || merged.server_id : null,
     timeout_seconds: merged.timeout_seconds,
@@ -1122,6 +1155,8 @@ function mcpConnection(payload: Json, current?: Json): Json {
     oauth_configured: oauthConfigured,
     session_configured: Boolean(payload.session_id) || Boolean(current?.session_configured),
     service_token_configured: Boolean(merged.service_token_configured),
+    // OCI 署名は「システム設定 › OCI 認証」の API キーを読めるか（接続ごとの値ではない。#5932）。
+    oci_signature_configured: mode === "oci_signature" && Boolean(merged.oci_signature_configured),
     // 標準の接続（RAG / NL2SQL）は注釈を常に使う。ほかは接続ごと（既定はオフ。#1875）。
     trust_tool_annotations: merged.source === "builtin" || merged.trust_tool_annotations === true,
   };
@@ -1148,6 +1183,44 @@ function validateMcpUrl(body: Json) {
     throw new HttpError(
       422,
       `${prefix}MCP の URL に資格情報のパラメータ（${problem.names.join("・")}）を含めないでください。${guide}`
+    );
+  }
+}
+
+/** プロトコルと認証方式の組み合わせの検証（backend の `_protocol_auth_error` と同じ 400。#5932）。 */
+function validateProtocolAuth(protocol: unknown, authMode: unknown) {
+  if (protocol !== "a2a" && authMode === "oci_signature") {
+    throw new HttpError(400, "OCI 署名の認証は、プロトコルが A2A の接続で使います（MCP の接続では使えません）。");
+  }
+  if (protocol === "a2a" && authMode === "service_token") {
+    throw new HttpError(400, "A2A の接続では、サービストークンの認証を使えません。");
+  }
+}
+
+/** 標準の接続 `aidp`（AI Data Platform の Agent）に変えられない変更（backend の `_aidp_patch_error` と同じ 400）。 */
+function validateAidpPatch(connection: Json, body: Json) {
+  if (
+    (body.protocol != null && body.protocol !== connection.protocol) ||
+    (body.auth_mode != null && body.auth_mode !== connection.auth_mode)
+  ) {
+    throw new HttpError(400, "AI Data Platform の Agent の接続のプロトコル（A2A）と認証（OCI 署名）は変えられません。");
+  }
+  if (body.label != null && (String(body.label).trim() || null) !== connection.label) {
+    throw new HttpError(400, "AI Data Platform の Agent の接続の名前は変えられません。");
+  }
+  if (body.trust_tool_annotations === false) {
+    throw new HttpError(
+      400,
+      "AI Data Platform の Agent の接続は、既定で承認なしに呼びます。承認を求めるときは「ツール権限」でそのツールを指定してください。"
+    );
+  }
+  if (body.agent_card_url) {
+    throw new HttpError(400, "AI Data Platform の Agent の接続の Agent card の URL は、endpoint から決まります。");
+  }
+  if (body.base_url && !/^https:\/\/gateway\.aidp\.[a-z0-9-]+\.oci\.oraclecloud\.com\//.test(String(body.base_url))) {
+    throw new HttpError(
+      400,
+      "URL は AI Data Platform の Agent の endpoint（https://gateway.aidp.<region>.oci.oraclecloud.com/agentendpoint/<agentId>/a2a）を入力してください。"
     );
   }
 }
@@ -1324,8 +1397,10 @@ function pageOfItems<T>(items: T[], page: { offset: number; limit: number }, tot
 function toolPolicyTools(state: MockApiState): Json {
   const policy = state.toolPolicy as { default_mode: string; allow: string[]; ask: string[]; deny: string[] };
   // backend の ToolPolicy.explain と同じ判定と理由（注釈は信頼した接続だけ使う。#1832）。
-  const explain = (level: string, sideEffects: boolean, trusted: boolean, standard = false) => {
+  const explain = (level: string, sideEffects: boolean, trusted: boolean, standard = false, trustedAgent = false) => {
     if (standard) return { default_decision: "allow", default_reason: "standard" };
+    // 信頼した A2A の接続の Agent は既定で承認なし（backend の `trusted_auto_approve`。#5932）。
+    if (trustedAgent) return { default_decision: "allow", default_reason: "trusted_connection" };
     const readOnly = level === "read" && !sideEffects;
     if (readOnly && trusted) return { default_decision: "allow", default_reason: "read_only" };
     return {
@@ -1347,8 +1422,13 @@ function toolPolicyTools(state: MockApiState): Json {
   for (const connection of state.mcpConnections.connections) {
     const serverId = String(connection.server_id);
     const label = String(connection.label || serverId);
+    const a2a = connection.protocol === "a2a";
     const listed =
-      connection.configured && !state.mcpConnectionErrors[serverId] ? (state.mcpConnectionTools[serverId] ?? MOCK_MCP_TOOLS) : [];
+      connection.configured && !state.mcpConnectionErrors[serverId]
+        ? a2a
+          ? [a2aTool(state.a2aAgentCards[serverId] ?? MOCK_A2A_AGENT_CARD)]
+          : (state.mcpConnectionTools[serverId] ?? MOCK_MCP_TOOLS)
+        : [];
     connections.push({
       server_id: serverId,
       label,
@@ -1372,7 +1452,8 @@ function toolPolicyTools(state: MockApiState): Json {
           readOnly ? "read" : "write",
           !readOnly,
           trusted,
-          connection.source === "builtin" && serverId === "nl2sql" && tool.name === "nl2sql_query"
+          connection.source === "builtin" && serverId === "nl2sql" && tool.name === "nl2sql_query",
+          a2a && trusted
         ),
         available: true,
       });
@@ -2889,18 +2970,34 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     if (second === "mcp-connections") {
       const store = state.mcpConnections;
-      const listData = () => ({ connections: store.connections.map(publicMcpConnection) });
+      const listData = () => ({
+        connections: store.connections.map(publicMcpConnection),
+        presets: state.mcpConnectionPresets,
+      });
       if (method === "GET" && at("settings", "mcp-connections")) return listData();
       if (method === "POST" && at("settings", "mcp-connections")) {
         const id = String(body.server_id ?? "").trim();
         if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(id) || id.includes("__")) {
           throw new HttpError(422, "接続 ID は英数字で始まる 40 文字以内の英数字・「-」・「_」で入力してください。");
         }
+        if (id === "aidp") {
+          // 組み込みの接続（AI Data Platform の Agent）の ID（backend と同じ 422。#5932）。
+          throw new HttpError(
+            422,
+            "接続 ID「aidp」は組み込みの接続（AI Data Platform の Agent）が使うため、使えません。"
+          );
+        }
         validateMcpUrl(body);
+        validateMcpUrl({ base_url: body.agent_card_url });
         if (store.connections.some((connection) => connection.server_id === id)) {
           throw new HttpError(409, "MCP 接続の ID はすでに使われています。");
         }
-        const connection = mcpConnection({ ...body, server_id: id });
+        validateProtocolAuth(body.protocol ?? "mcp", body.auth_mode);
+        const connection = mcpConnection({
+          ...body,
+          server_id: id,
+          oci_signature_configured: state.ociSignatureConfigured,
+        });
         store.connections.push(connection);
         store.connections.sort((left, right) => String(left.server_id).localeCompare(String(right.server_id)));
         return publicMcpConnection(connection);
@@ -2908,6 +3005,23 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (third && at("settings", "mcp-connections", "*", "tools") && method === "GET") {
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
         if (!connection.configured) throw new HttpError(400, "MCP 接続の URL が設定されていません。");
+        if (connection.protocol === "a2a") {
+          // A2A の接続は Agent card を読み、その Agent にメッセージを送る 1 つのツールを返す（#5932）。
+          const card = state.a2aAgentCards[third] ?? MOCK_A2A_AGENT_CARD;
+          const trusted = connection.source === "builtin" || connection.trust_tool_annotations === true;
+          const policy = state.toolPolicy as { default_mode: string };
+          return {
+            tools: [
+              {
+                ...a2aTool(card),
+                server_id: third,
+                function_name: `${third}__send_message`,
+                default_decision: trusted ? "allow" : policy.default_mode === "deny" ? "deny" : "ask",
+              },
+            ],
+            metadata: { server_id: third, protocol: "a2a", agent_card: card },
+          };
+        }
         return {
           tools: MOCK_MCP_TOOLS.map((tool) => ({
             ...tool,
@@ -2921,6 +3035,13 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
         const connection = findOr404(store.connections, "server_id", third, "MCP 接続");
         if (method === "PATCH") {
           validateMcpUrl(body);
+          validateMcpUrl({ base_url: body.agent_card_url });
+          if (connection.source === "builtin" && third === "aidp") {
+            validateAidpPatch(connection, body);
+          } else if (connection.source === "builtin" && body.protocol != null && body.protocol !== connection.protocol) {
+            throw new HttpError(400, "標準の接続（RAG / NL2SQL）のプロトコルは変えられません。");
+          }
+          validateProtocolAuth(body.protocol ?? connection.protocol, body.auth_mode ?? connection.auth_mode);
           // RAG / NL2SQL の認証方式・audience は変えられない（backend と同じ 400。#1014）。
           const builtinAuthChanged =
             connection.source === "builtin" &&

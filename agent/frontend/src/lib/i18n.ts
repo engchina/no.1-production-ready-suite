@@ -309,7 +309,7 @@ const agentJa = {
   "loading.evaluationSets": "評価セットを読み込んでいます",
   "loading.evaluationSet": "評価セットを読み込んでいます",
   "evaluation.sets.title": "評価セット",
-  "evaluation.sets.description": "業務 Agent ごとに、評価ケースの集まりを保存します。指示・スキル・MCP 接続を変えたら同じ評価セットで評価し、前回と比べます。",
+  "evaluation.sets.description": "業務 Agent ごとに、評価ケースの集まりを保存します。指示・スキル・外部接続を変えたら同じ評価セットで評価し、前回と比べます。",
   "evaluation.sets.label": "評価セットの一覧",
   "evaluation.sets.empty": "この業務 Agent の評価セットはまだありません",
   "evaluation.sets.emptyHint": "評価セットを作り、評価ケースを表で入力するか Excel から取り込みます。",
@@ -350,7 +350,7 @@ const agentJa = {
   "evaluation.set.expectedRequired": "期待する回答の要点を入力してください。",
   "evaluation.set.caseIdDuplicate": "ほかのケースと同じ ID です。",
   "evaluation.set.expectedTools": "期待するツール",
-  "evaluation.set.expectedToolsHelper": "任意。カンマ区切り（例: rag_search, nl2sql_query）。MCP 接続の名前は省けます。",
+  "evaluation.set.expectedToolsHelper": "任意。カンマ区切り（例: rag_search, nl2sql_query）。接続の名前は省けます。",
   "evaluation.clarification.legend": "問い返しへの答え",
   "evaluation.clarification.helper": "任意。業務 Agent が回答の前に確認（問い返し）をしたら、この答えを同じ会話の次の実行で送り、最後の回答を判定します（往復は 3 回まで）。",
   "evaluation.clarification.answerNumber": "答え {number}",
@@ -682,12 +682,12 @@ const agentJa = {
   "settings.database.systemTables.error.recovery":
     "状態を再取得し、Oracle のロック状態を確認して再試行してください。",
   "settings.database.systemTables.recreate.sectionDescription":
-    "Agent の実行履歴、保存済みの定義（業務 Agent・スキル・MCP 接続など）、利用状況の集計データ、ロールの権限と利用できる業務 Agent の割り当てを削除して再作成します。削除したデータは復元できません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
+    "Agent の実行履歴、保存済みの定義（業務 Agent・スキル・外部接続など）、利用状況の集計データ、ロールの権限と利用できる業務 Agent の割り当てを削除して再作成します。削除したデータは復元できません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
   "settings.database.systemTables.confirmation.helper":
     "この操作は取り消せません。{phrase} と正確に入力し、続く確認ダイアログでも承認してください。",
   "settings.database.systemTables.confirm.title": "Agent の実行履歴・保存済みの定義・権限の割り当てを削除しますか？",
   "settings.database.systemTables.confirm.description":
-    "管理対象の Agent のテーブルを削除して再作成します。実行履歴、保存済みの定義（業務 Agent・スキル・MCP 接続など）、利用状況の集計データ、ロールの権限と利用できる業務 Agent の割り当ては復元できません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
+    "管理対象の Agent のテーブルを削除して再作成します。実行履歴、保存済みの定義（業務 Agent・スキル・外部接続など）、利用状況の集計データ、ロールの権限と利用できる業務 Agent の割り当ては復元できません。3 製品共通のユーザー・ロール（PLATFORM_*）と、RAG / NL2SQL のテーブルは削除しません。",
   "nav.section.settings": "システム設定",
   "nav.settingsAppearance": "外観と証明書",
   "nav.settingsAnswerNotice": "回答の注意書き",
@@ -1046,7 +1046,7 @@ const agentJa = {
   "nav.approvals": "承認",
   "nav.audit": "監査ログ",
   "nav.tools": "ツール",
-  "nav.settingsMcpConnections": "MCP 接続",
+  "nav.settingsMcpConnections": "外部接続",
   // 閲覧者の範囲外か削除済みで、名前を取れない業務 Agent（ID だけでは何か分からないため）。
   "nav.settingsToolPolicy": "ツール権限",
 
@@ -1123,17 +1123,17 @@ const agentJa = {
   // 保存先（#839）。memory の構成では、作成・変更した内容がバックエンドの再起動で消える。
   "storage.notice.title": "作成・変更した内容は、バックエンドの再起動で消えます",
   "storage.notice.memoryBackend":
-    "データベースは設定済みですが、保存先がメモリのため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・品質評価などをデータベースに保存していません。",
+    "データベースは設定済みですが、保存先がメモリのため、業務 Agent・スキル・外部接続・実行の履歴・自動実行・品質評価などをデータベースに保存していません。",
   "storage.notice.restartRequired":
-    "データベースは設定済みですが、バックエンドの起動時には未設定だったため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・品質評価などを保存していません。",
+    "データベースは設定済みですが、バックエンドの起動時には未設定だったため、業務 Agent・スキル・外部接続・実行の履歴・自動実行・品質評価などを保存していません。",
   "storage.notice.databaseNotConfigured":
-    "データベースが未設定のため、業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・品質評価などを保存していません。",
+    "データベースが未設定のため、業務 Agent・スキル・外部接続・実行の履歴・自動実行・品質評価などを保存していません。",
   "storage.notice.checkpointInvalid":
-    "データベースは設定済みですが、保存済みの実行の記録（checkpoint）全体を読み込めなかったため、上書きしないよう業務 Agent・スキル・MCP 接続・実行の履歴などをデータベースに保存していません。",
+    "データベースは設定済みですが、保存済みの実行の記録（checkpoint）全体を読み込めなかったため、上書きしないよう業務 Agent・スキル・外部接続・実行の履歴などをデータベースに保存していません。",
   "storage.notice.openRuntime": "保存先を確認",
   "storage.notice.askAdmin": "保存先をデータベースに切り替えるよう、システム管理者に依頼してください。",
   "storage.card.title": "保存先",
-  "storage.card.description": "業務 Agent・スキル・MCP 接続・実行の履歴・自動実行・品質評価などを保存する場所です。",
+  "storage.card.description": "業務 Agent・スキル・外部接続・実行の履歴・自動実行・品質評価などを保存する場所です。",
   "storage.card.persistent": "保存しています",
   "storage.card.notPersistent": "再起動で消えます",
   "storage.card.backend": "保存先",
@@ -1171,9 +1171,9 @@ const agentJa = {
   "page.tools.subtitle": "登録済みツールの契約・権限・監査タグ",
   "page.settings.rag.subtitle": "業務 RAG は外部サービスとして接続する",
   "page.settings.nl2sql.subtitle": "構造化データ取得は外部 NL2SQL として接続する",
-  "page.settings.mcp.subtitle": "RAG・NL2SQL・外部の MCP の接続先と認証を管理する",
+  "page.settings.mcp.subtitle": "RAG・NL2SQL・外部の MCP と、外部の Agent（A2A）の接続先と認証を管理する",
   "page.settings.toolPolicy.subtitle":
-    "組み込みのツールと MCP 接続（RAG・NL2SQL・外部）のツールごとに、自動で実行するか・承認を求めるか・拒否するかと、既定の動作を管理する",
+    "組み込みのツールと外部接続（RAG・NL2SQL・外部の MCP・外部の Agent）のツールごとに、自動で実行するか・承認を求めるか・拒否するかと、既定の動作を管理する",
 
   "common.empty.title": "まだデータがありません",
   "common.skipToMain": "本文へスキップ",
@@ -1462,20 +1462,21 @@ const agentJa = {
   "settings.toolPolicy.reasonHeader": "判定の理由",
   "settings.toolPolicy.reason.policy": "ツール権限で指定",
   "settings.toolPolicy.reason.standard": "標準の接続で Agent が承認なしと決めたツール",
+  "settings.toolPolicy.reason.trusted_connection": "信頼した接続の外部の Agent",
   "settings.toolPolicy.reason.read_only": "読み取り専用のツール",
   "settings.toolPolicy.reason.annotation": "ツールの注釈（readOnlyHint）が読み取り専用",
   "settings.toolPolicy.reason.untrusted_annotation":
     "読み取り専用の注釈はあるが、接続が注釈を信頼していないため未指定ツールの既定動作（外部の接続は既定で信頼しない）",
   "settings.toolPolicy.reason.default_mode": "未指定ツールの既定動作",
-  // MCP 接続のツール（#1814）。
+  // 外部接続のツール（#1814）。
   "settings.toolPolicy.connection": "接続",
   "settings.toolPolicy.builtin": "組み込み",
   "settings.toolPolicy.unavailable": "一覧にありません",
-  "settings.toolPolicy.connectionErrorsTitle": "一部の MCP 接続のツールを取得できませんでした",
+  "settings.toolPolicy.connectionErrorsTitle": "一部の外部接続のツールを取得できませんでした",
   "settings.toolPolicy.connectionErrorsBody":
-    "取得できなかった接続のツールで保存したポリシーは、一覧に無い行として残り、そのまま使われます。接続の設定と状態は MCP 接続の画面で確かめてください。",
+    "取得できなかった接続のツールで保存したポリシーは、一覧に無い行として残り、そのまま使われます。接続の設定と状態は外部接続の画面で確かめてください。",
   "settings.toolPolicy.connectionError": "{label}: {error}",
-  "settings.toolPolicy.openMcpConnections": "MCP 接続を開く",
+  "settings.toolPolicy.openMcpConnections": "外部接続を開く",
   "settings.toolPolicy.allow": "自動実行",
   "settings.toolPolicy.ask": "承認を要求",
   "settings.toolPolicy.deny": "拒否",
@@ -1494,12 +1495,12 @@ const agentJa = {
   "settings.mcpServers.oauthClientId": "OAuth Client ID",
   "settings.mcpServers.oauthClientSecret": "OAuth Client Secret",
   "settings.mcpServers.oauthScope": "OAuth Scope",
-  "settings.mcpConnections.title": "MCP 接続",
+  "settings.mcpConnections.title": "外部接続",
   "settings.mcpConnections.description":
-    "業務 Agent がスキルから使う MCP の接続先です。RAG と NL2SQL は標準の接続で、実行を作った利用者として呼びます。",
+    "業務 Agent がスキルから使う接続先（MCP のサーバーと、A2A で呼ぶ外部の Agent）です。RAG と NL2SQL は標準の接続で、実行を作った利用者として呼びます。",
   "settings.mcpConnections.add": "接続を追加",
-  "settings.mcpConnections.addTitle": "MCP 接続を追加",
-  "settings.mcpConnections.empty": "MCP 接続はありません",
+  "settings.mcpConnections.addTitle": "外部接続を追加",
+  "settings.mcpConnections.empty": "外部接続はありません",
   "settings.mcpConnections.serverId": "接続 ID",
   "settings.mcpConnections.serverIdHint":
     "スキルから接続を指定する ID です。英数字・「-」・「_」で 40 文字以内。登録後は変更できません。",
@@ -1531,10 +1532,10 @@ const agentJa = {
     "署名鍵（PLATFORM_SERVICE_TOKEN_SECRET）が未設定か 32 文字未満です。3 製品の共通 .env に同じ値を設定してください。",
   "settings.mcpConnections.missingApiKey": "API キーが未設定です。認証の欄で入力して保存してください。",
   "settings.mcpConnections.missingOauth": "OAuth の Token URL・Client ID・Client Secret がそろっていません。",
-  "settings.mcpConnections.created": "MCP 接続を追加しました",
-  "settings.mcpConnections.updated": "MCP 接続を保存しました",
-  "settings.mcpConnections.deleted": "MCP 接続を削除しました",
-  "settings.mcpConnections.confirmDeleteTitle": "MCP 接続を削除しますか?",
+  "settings.mcpConnections.created": "外部接続を追加しました",
+  "settings.mcpConnections.updated": "外部接続を保存しました",
+  "settings.mcpConnections.deleted": "外部接続を削除しました",
+  "settings.mcpConnections.confirmDeleteTitle": "外部接続を削除しますか?",
   "settings.mcpConnections.tools": "ツール",
   "settings.mcpConnections.toolsDescription":
     "接続が公開しているツール（tools/list）です。ログイン中の利用者として取得するため、接続の確認にも使えます。",
@@ -1556,6 +1557,63 @@ const agentJa = {
   "settings.mcpConnections.trustAnnotationsBuiltin":
     "標準の接続（RAG / NL2SQL）は、ツールの性質を Agent が知っているため注釈を常に使います。",
   "settings.mcpConnections.needsApproval": "承認が必要",
+  // プロトコル（MCP / A2A）と、A2A の接続（外部の Agent）の項目（#5932）。
+  "settings.mcpConnections.protocol": "プロトコル",
+  "settings.mcpConnections.protocolMcp": "MCP",
+  "settings.mcpConnections.protocolA2a": "A2A（外部の Agent）",
+  "settings.mcpConnections.protocolA2aShort": "A2A",
+  "settings.mcpConnections.protocolHint":
+    "MCP は MCP のサーバーのツールを使います。A2A は、外部の Agent にメッセージを送る 1 つのツールになります。",
+  "settings.mcpConnections.protocolHintBuiltin": "標準の接続のプロトコルは変えられません。",
+  "settings.mcpConnections.urlA2a": "Agent の endpoint の URL",
+  "settings.mcpConnections.urlHintA2a":
+    "外部の Agent の A2A の endpoint（メッセージの送り先）の URL を http:// または https:// から入力します。",
+  "settings.mcpConnections.urlHintExample": "入力する形: {example}",
+  "settings.mcpConnections.urlHintBuiltinA2a":
+    "Oracle AI Data Platform の画面で Agent を配備すると分かる endpoint の URL を入力します。",
+  "settings.mcpConnections.urlExampleAidp": "https://gateway.aidp.<region>.oci.oraclecloud.com/agentendpoint/<agentId>/a2a",
+  "settings.mcpConnections.agentCardUrl": "Agent card の URL",
+  "settings.mcpConnections.agentCardUrlHint":
+    "空なら endpoint の URL から決まります。Agent card を別の場所に置いている Agent だけ入力します。",
+  "settings.mcpConnections.missingUrlA2a": "Agent の endpoint の URL が未設定です。下のフォームで入力して保存してください。",
+  "settings.mcpConnections.preset": "既定値",
+  "settings.mcpConnections.presetNone": "指定なし",
+  "settings.mcpConnections.presetHint": "選ぶと、プロトコル・認証・タイムアウトと URL の先頭が入ります。",
+  "settings.mcpConnections.preset.aidp_agent": "AI Data Platform の Agent",
+  "settings.mcpConnections.builtinA2a":
+    "Oracle AI Data Platform に配備した Agent を呼ぶ標準の接続です。削除と、名前・プロトコル・認証方式の変更はできません。Agent の endpoint の URL とタイムアウトは、ここで設定できます。",
+  "settings.mcpConnections.authOciSignature": "OCI 署名",
+  "settings.mcpConnections.authBuiltinHintA2a": "Oracle AI Data Platform の Agent は OCI 署名で呼びます。",
+  "settings.mcpConnections.ociSignatureHint":
+    "「システム設定 › OCI 認証」の API キーでリクエストに署名します。接続ごとの資格情報は持ちません。",
+  "settings.mcpConnections.ociSignatureStatus": "OCI 署名の状態",
+  "settings.mcpConnections.ociSignatureKey": "OCI 認証の API キー",
+  "settings.mcpConnections.ociSignatureKeyHint":
+    "「システム設定 › OCI 認証」で設定します。未設定のあいだ、呼び出しは失敗します。",
+  "settings.mcpConnections.missingOciSignature":
+    "OCI 認証の API キーが未設定か、読み込めません。「システム設定 › OCI 認証」で設定してください。",
+  "settings.mcpConnections.trustA2a": "この接続の Agent を承認なしで呼ぶ",
+  "settings.mcpConnections.trustA2aHelper":
+    "オフ（既定）では、ツール権限で指定しない限り、この接続の Agent を呼ぶ前に承認を求めます。オンにすると承認なしで呼びます。相手の Agent が書き込むことがあるため、オンでも送信後の失敗では送り直しません。接続先の Agent を確かめ、信頼できる接続だけオンにしてください。",
+  "settings.mcpConnections.trustA2aBuiltin":
+    "標準の接続（Oracle AI Data Platform の Agent）は、既定で承認なしで呼びます。承認を求めるときは、ツール権限でそのツールを指定します。相手の Agent が書き込むことがあるため、送信後の失敗では送り直しません。",
+  "settings.mcpConnections.trustA2aConfirmTitle": "この接続の Agent を承認なしで呼びますか？",
+  "settings.mcpConnections.trustA2aConfirmDescription":
+    "オンにすると、{name} の Agent は、ツール権限で指定しない限り承認なしで呼ばれます。相手の Agent が書き込むことがあります（送信後の失敗では送り直しません）。接続先の Agent が何をするかを確かめてから、オンにしてください。",
+  "settings.mcpConnections.trustA2aConfirm": "承認なしで呼ぶ",
+  "settings.mcpConnections.autoTrustedConnection": "承認なし（信頼した接続）",
+  "settings.mcpConnections.toolsDescriptionA2a":
+    "Agent card（名前・説明）を読み、この Agent にメッセージを送るツールを確かめます。接続の確認にも使えます。",
+  "settings.mcpConnections.fetchSucceededA2a": "{name} の Agent card を取得しました。",
+  "settings.mcpConnections.agentCard": "Agent card",
+  "settings.mcpConnections.agentCardName": "Agent の名前",
+  "settings.mcpConnections.agentCardDescription": "説明",
+  "settings.mcpConnections.agentCardProtocolVersion": "プロトコルの版",
+  "settings.mcpConnections.agentCardVersion": "Agent の版",
+  "settings.mcpConnections.fetchFailedHintUrlA2a":
+    "URL が A2A の endpoint を指しているか、Agent card の URL が正しいかを確かめてください。",
+  "settings.mcpConnections.fetchFailedHintAuthA2a":
+    "認証方式と、API キー・クライアントシークレット・OCI 認証の設定を確かめてください。",
   "settings.mcpConnections.functionName": "ツール名",
 
   "nav.skills": "スキル",
@@ -1705,7 +1763,8 @@ const agentJa = {
   "loading.runAudit": "この実行の監査を読み込んでいます",
   "loading.tools": "ツールを読み込んでいます",
   "loading.toolPolicy": "ツール権限を読み込んでいます",
-  "loading.mcpServers": "MCP 接続を読み込んでいます",
+  "loading.mcpServers": "外部接続を読み込んでいます",
+  "loading.a2aAgentCard": "Agent card を読み込んでいます",
   "loading.mcpTools": "MCP ツールを読み込んでいます",
   "audit.pagerLabel": "監査記録のページ送り",
   "audit.csvHint": "CSV は、入力中の条件に合う記録を最大 1,000 件まで出力します（表示中のページだけではありません）。",
@@ -1868,7 +1927,7 @@ const agentJa = {
   "skills.emptyHint": "「スキルを追加」から、業務 Agent に割り当てる指示と使うツールを登録します。",
   "skills.noMatch": "検索に一致するスキルがありません",
   "settings.mcpConnections.search": "名前・接続 ID・URL で絞り込み",
-  "settings.mcpConnections.noMatch": "検索に一致する MCP 接続がありません",
+  "settings.mcpConnections.noMatch": "検索に一致する外部接続がありません",
   "settings.mcpConnections.secretSaved": "保存済み",
   "settings.mcpConnections.secretNotSet": "未設定",
   "settings.mcpConnections.apiKeyShow": "API キーを表示",
