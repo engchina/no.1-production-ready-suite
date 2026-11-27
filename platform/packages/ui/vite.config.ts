@@ -12,6 +12,7 @@ export default defineConfig({
       entry: {
         index: resolve(import.meta.dirname, "src/index.ts"),
         graph: resolve(import.meta.dirname, "src/graph.ts"),
+        "graph-explorer": resolve(import.meta.dirname, "src/graph-explorer.ts"),
       },
       formats: ["es"],
       fileName: (_format, entryName) => `${entryName}.js`,
@@ -20,6 +21,8 @@ export default defineConfig({
       external: [
         "@tanstack/react-virtual",
         "@xyflow/react",
+        "cytoscape",
+        "cytoscape-fcose",
         "react",
         "react/jsx-runtime",
         "react-dom",
