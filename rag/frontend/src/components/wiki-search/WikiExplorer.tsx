@@ -423,14 +423,9 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
       loading={detailRequest.isPending
         ? (graphPending && !showSheet ? <Skeleton className="h-20 w-full" /> : <Busy name="detail" label={detailLabel} />)
         : detailRequest.isFetching && <Refresh name="detail" label={detailLabel} />}
-      error={
-        <>
-          {node.kind === "unit" && detail.isError && (
-            <Failed error={detail.error} retry={() => void detail.refetch()} />
-          )}
-          {section.isError && <Failed error={section.error} retry={() => void section.refetch()} />}
-        </>
-      }
+      error={detailRequest.isError && (
+        <Failed error={detailRequest.error} retry={() => void detailRequest.refetch()} />
+      )}
     />
   ) : null;
   const left = (

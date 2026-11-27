@@ -107,6 +107,8 @@ class WikiGraphStore:
                  AND last_node.parent_id=n.parent_id) AS total,
                 JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS section_path,
                 CASE WHEN n.path_depth=-1 THEN JSON_VALUE(p.page_json,'$.unit.title') END AS title,
+                CASE WHEN n.path_depth=-1 THEN DBMS_LOB.SUBSTR(c.chunk_text,160,1) END AS excerpt,
+                CASE WHEN n.path_depth=-1 THEN c.metadata_json END AS source_metadata,
                 CASE WHEN n.path_depth=-1 THEN JSON_VALUE(p.page_json,'$.navigation.context')
                 END AS summary
                 {WIKI_PAGE_FROM} JOIN rag_wiki_graph_nodes n ON n.page_id=p.page_id
@@ -123,8 +125,17 @@ class WikiGraphStore:
             path = _json_list(row["section_path"])
             if depth >= 0:
                 path = path[:depth]
+            metadata = _json_loads(row["source_metadata"]) if row.get("source_metadata") else {}
+            locator = metadata.get("source_locator")
+            if isinstance(locator, dict):
+                metadata.update(locator)
             items.append(
                 {
+                    "excerpt": row.get("excerpt") or "",
+                    "page": metadata.get("page_start") or metadata.get("page_number"),
+                    "line": metadata.get("source_line_start")
+                    or metadata.get("line_start")
+                    or metadata.get("row_start"),
                     "id": str(row["node_id"]),
                     "kind": "unit" if depth < 0 else "section",
                     "label": str(row.get("title") or "") if depth < 0 else path[-1],
@@ -259,28 +270,29 @@ class WikiGraphStore:
         別の文書への参照（#5784）は、参照先をこの KB の文書の名前で決める。決まった参照先は開ける
         単位を返し、決まらない参照（KB に無い文書）は原文の表記だけを返す（開けない）。
         """
-        found = await self.pages_by_unit(kb_id, [unit_id])
-        if unit_id not in found:
+        cte, binds = visible_pages_cte(kb_id)
+        selected = await self.oracle._fetch_one(
+            f"WITH {cte} SELECT page_id,document_id FROM visible WHERE unit_id=:graph_unit",
+            {**binds, "graph_unit": unit_id},
+        )
+        if not selected:
             return {
                 "has_more": False,
                 "items": [],
                 **({"total": 0, "counts": {}, "groups": [], "preview": []} if grouped else {}),
             }
-        page: WikiPage = found[unit_id]["page"]
-        document_id = page.unit.document_id
-        cte, binds = visible_pages_cte(kb_id)
+        document_id = str(selected["document_id"])
+        page_id = str(selected["page_id"])
         rows = await self.oracle._fetch_all(
-            f"""WITH {cte},
-            selected_page AS (SELECT * FROM visible WHERE unit_id=:graph_unit)
+            f"""WITH {cte}
             SELECT 'outgoing' AS direction,e.relation,other.page_id
-            FROM selected_page u JOIN rag_wiki_graph_deps e ON e.page_id=u.page_id
-            JOIN visible other ON other.document_id=u.document_id
-                AND other.unit_id=e.target_unit_id
+            FROM rag_wiki_graph_deps e JOIN visible other ON other.unit_id=e.target_unit_id
+            WHERE e.page_id=:graph_page AND other.document_id=:graph_doc
             UNION ALL
             SELECT 'incoming',e.relation,other.page_id
-            FROM selected_page u JOIN rag_wiki_graph_deps e ON e.target_unit_id=u.unit_id
-            JOIN visible other ON other.document_id=u.document_id AND other.page_id=e.page_id""",
-            {**binds, "graph_unit": unit_id},
+            FROM rag_wiki_graph_deps e JOIN visible other ON other.page_id=e.page_id
+            WHERE e.target_unit_id=:graph_unit AND other.document_id=:graph_doc""",
+            {**binds, "graph_page": page_id, "graph_doc": document_id, "graph_unit": unit_id},
         )
         items: list[dict[str, Any]] = [
             {
@@ -293,10 +305,9 @@ class WikiGraphStore:
         ]
         names = await self._document_names(kb_id)
         references = await self.oracle._fetch_all(
-            f"""WITH {cte}
-            SELECT r.target_name,r.target_section,r.relation FROM rag_wiki_references r
-            JOIN visible u ON u.page_id=r.page_id WHERE u.unit_id=:graph_unit ORDER BY r.ordinal""",
-            {**binds, "graph_unit": unit_id},
+            """SELECT target_name,target_section,relation FROM rag_wiki_references
+            WHERE page_id=:graph_page ORDER BY ordinal""",
+            {"graph_page": page_id},
         )
         outgoing = [
             (row, names.resolve(str(row["target_name"]), exclude=document_id)) for row in references
@@ -304,8 +315,34 @@ class WikiGraphStore:
         targets = {target for _, docs in outgoing for target in docs}
         keys = sorted(names.keys(document_id))
         aliases = sorted(names.aliases(document_id))
+        incoming = []
         if keys or aliases:
-            targets.add(document_id)
+            # 種類の呼び名で書いた参照も拾い、当たる文書は出る向きと同じ照合で決める（#5795）。
+            clauses: list[str] = []
+            extra: dict[str, object] = {}
+            if keys:
+                clause, extra = _oracle_in_predicate("r.target_key", "graph_ref_key", keys)
+                clauses.append(clause)
+            for index, alias in enumerate(aliases):
+                clauses.append(f"INSTR(:graph_ref_alias{index},r.target_key)>0")
+                extra[f"graph_ref_alias{index}"] = alias
+            candidates = await self.oracle._fetch_all(
+                f"""WITH {cte}
+                SELECT r.relation,r.target_key,r.target_section,v.page_id,v.document_id
+                FROM rag_wiki_references r
+                JOIN visible v ON v.page_id=r.page_id
+                WHERE ({" OR ".join(clauses)}) AND v.document_id<>:graph_doc
+                ORDER BY v.page_id,r.ordinal""",
+                {**binds, **extra, "graph_doc": document_id},
+            )
+            incoming = [
+                row
+                for row in candidates
+                if document_id
+                in names.resolve_key(str(row["target_key"]), exclude=str(row["document_id"]))
+            ]
+            if incoming:
+                targets.add(document_id)
         paths = await self._reference_targets(kb_id, sorted(targets))
         for row, docs in outgoing:
             section = str(row.get("target_section") or "")
@@ -321,33 +358,8 @@ class WikiGraphStore:
                         "target_section": section or None,
                     }
                 )
-        if keys or aliases:
-            # 種類の呼び名で書いた参照も拾い、当たる文書は出る向きと同じ照合で決める（#5795）。
-            clauses: list[str] = []
-            extra: dict[str, object] = {}
-            if keys:
-                clause, extra = _oracle_in_predicate("r.target_key", "graph_ref_key", keys)
-                clauses.append(clause)
-            for index, alias in enumerate(aliases):
-                clauses.append(f"INSTR(:graph_ref_alias{index},r.target_key)>0")
-                extra[f"graph_ref_alias{index}"] = alias
-            for row in await self.oracle._fetch_all(
-                f"""WITH {cte}
-                SELECT r.relation,r.target_key,r.target_section,v.page_id,v.document_id
-                FROM rag_wiki_references r
-                JOIN visible v ON v.page_id=r.page_id
-                WHERE ({" OR ".join(clauses)}) AND v.document_id<>:graph_doc
-                ORDER BY v.page_id,r.ordinal""",
-                {**binds, **extra, "graph_doc": document_id},
-            ):
-                source_document = str(row["document_id"])
-                if (
-                    document_id
-                    not in names.resolve_key(str(row["target_key"]), exclude=source_document)
-                    or paths.resolve(document_id, str(row.get("target_section") or ""))
-                    != found[unit_id]["page_id"]
-                ):
-                    continue
+        for row in incoming:
+            if paths.resolve(document_id, str(row.get("target_section") or "")) == page_id:
                 items.append(
                     {
                         "direction": "incoming",

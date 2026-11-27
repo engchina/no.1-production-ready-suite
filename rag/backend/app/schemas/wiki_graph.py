@@ -55,6 +55,9 @@ class WikiGraphTreeNode(BaseModel):
     outgoing: list[WikiGraphEdge] = Field(default_factory=list)
     # 単位の案内の要約（AI が作った検索用の文）。章節は空。
     summary: str = ""
+    excerpt: str = ""
+    page: int | str | None = None
+    line: int | str | None = None
 
 
 class WikiGraphTreePage(BaseModel):

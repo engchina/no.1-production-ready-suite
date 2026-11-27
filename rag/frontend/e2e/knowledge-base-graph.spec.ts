@@ -105,7 +105,7 @@ async function expectPagerInsets(page: Page) {
 function paged<T>(items: T[]) {
   return { items, total: items.length, offset: 0, limit: 50, has_next: false };
 }
-type Controls = { failDocs?: boolean; failUnit?: boolean; calls: URL[] };
+type Controls = { failDocs?: boolean; failRelations?: boolean; failUnit?: boolean; calls: URL[] };
 async function data(page: Page, controls: Controls = { calls: [] }) {
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (r) => r.fulfill({ json: ok(paged(profiles)) }));
@@ -174,6 +174,7 @@ async function data(page: Page, controls: Controls = { calls: [] }) {
       );
     }
     if (end === "relations") {
+      if (controls.failRelations) return r.fulfill({ status: 503, json: { detail: "一時的な失敗" } });
       const all = parts.at(-2) === hash(1) ? related : [];
       return finish({
         ...slice(all.filter((v) => !q.has("relation") || q.get("relation") === v.relation)),
@@ -290,11 +291,19 @@ test(
     if (process.env.WIKI_GRAPH_SHOTS) {
       await graph.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-kb-tree.png" });
     }
+    control.failRelations = true;
     await firstUnit.focus();
     await firstUnit.press("Enter");
     await expect(panel.getByText("照合済みの合成原文 1。")).toBeVisible();
     await panel.getByRole("tab", { name: "Wiki の案内" }).click();
     await expect(panel.getByText("公開済みの合成の案内。")).toBeVisible();
+    const retry = panel.getByRole("button", { name: /再試行|再読み込み/ });
+    await expect(retry).toHaveCount(0);
+    await panel.getByRole("tab", { name: "関係", exact: true }).click();
+    await expect(retry).toBeVisible();
+    control.failRelations = false;
+    await retry.click();
+    await expect(panel.getByRole("button", { name: /参照/ }).first()).toBeVisible();
     await expectNoPageOverflow(page);
   },
 );
@@ -592,6 +601,14 @@ test("関係図は円と残件を描き、方向別に読み進めて元の表�
     await expect(card.getByRole("heading", { name: "検索結果", exact: true })).toBeVisible();
     await rail.click();
     await expect(card.getByRole("heading", { name: "検索結果", exact: true })).toHaveCount(0);
+    const symbol = root.locator(".graph-point-symbol");
+    const before = await root.evaluate(el => el.style.transform);
+    await symbol.hover();
+    const bounds = (await symbol.boundingBox())!;
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width / 2 + 50, bounds.y + bounds.height / 2 + 30, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(() => root.evaluate(el => el.style.transform)).not.toBe(before);
   }
   if (process.env.WIKI_GRAPH_SHOTS) {
     await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-parity.png" });

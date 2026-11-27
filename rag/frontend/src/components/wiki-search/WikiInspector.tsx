@@ -216,13 +216,24 @@ export function WikiInspector({
             <ul>
               {unit
                 ? relations?.items.map(related)
-                : children?.items.map((n) => (
-                    <li key={n.id} className="border-b border-border">
-                      <Button variant="ghost" className="w-full justify-start" onClick={() => select(n)}>
-                        {n.label}
-                      </Button>
-                    </li>
-                  ))}
+                : children?.items.map((n, index) => {
+                    const heading = n.label === n.document_name ? "" : n.label;
+                    const position = [
+                      n.page && `p. ${n.page}`,
+                      n.line && t("wiki.search.lines", { range: String(n.line) }),
+                    ].filter(Boolean).join(" · ");
+                    const title = n.kind === "section" ? n.label : heading || position ||
+                      t("wiki.search.unitNumber", { number: offset + index + 1 });
+                    return (
+                      <li key={n.id} className="border-b border-border">
+                        <button type="button" className="grid min-h-11 w-full gap-1 px-3 py-2 text-left hover:bg-surface-hover focus-visible:outline-focus-ring" onClick={() => select(n)}>
+                            <span className="truncate">{title}</span>
+                            {heading && position && <span className="text-xs text-fg-muted">{position}</span>}
+                            {n.excerpt && <span className="line-clamp-2 whitespace-normal break-words text-sm font-normal text-fg-muted">{n.excerpt}</span>}
+                        </button>
+                      </li>
+                    );
+                  })}
             </ul>
             {typeof count === "number" && (
               <OffsetPagination

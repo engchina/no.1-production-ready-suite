@@ -29,6 +29,9 @@ export interface WikiNode {
   document_name: string;
   kind: NodeKind;
   path?: string[];
+  excerpt?: string;
+  page?: number | string | null;
+  line?: number | string | null;
 }
 export interface Connection {
   source: string;
@@ -87,7 +90,7 @@ const relationColors: Record<Connection["kind"], [string, string]> = {
   reference: ["--color-graph-metric", "--color-graph-line"],
   contains: ["--color-graph-term", "--color-graph-line"],
 };
-export const wikiGroupKey = (owner: string, relation: string, direction?: string) => JSON.stringify([owner, relation, direction ?? ""]);
+export const wikiGroupKey = (owner: string, relation: string, direction?: string) => `group:${encodeURIComponent(owner)}:${relation}:${direction ?? ""}`;
 
 export function remainingWikiGroups(scene: Scene, summaries: ReadonlyMap<string, WikiDirectedGroup[]>, batch: number): WikiGroupPoint[] {
   const shown = new Map<string, Set<string>>();
@@ -167,11 +170,17 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
     for (const n of added) next.set(n.id, next.size + 6 - firstRingSize);
     setSlots(next);
   }
+  const [moved, setMoved] = useState(new Map<string, { x: number; y: number }>());
   const positions = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
     const { width, height } = POINT_SIZE;
     const availableRadiusX = canvasWidth * (canvasWidth < 480 ? .38 : .31);
     points.forEach((node, fallback) => {
+      const position = moved.get(node.id);
+      if (position) {
+        map.set(node.id, position);
+        return;
+      }
       const index = slots.get(node.id) ?? fallback;
       if (index === 0) {
         map.set(node.id, { x: 0, y: 0 });
@@ -190,7 +199,7 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
       map.set(node.id, { x: Math.cos(theta) * ring * radiusX, y: Math.sin(theta) * ring * radiusY });
     });
     return map;
-  }, [canvasHeight, canvasWidth, firstRingSize, points, slots]);
+  }, [canvasHeight, canvasWidth, firstRingSize, moved, points, slots]);
   const colors = new Map<string, Connection["kind"]>();
   for (const e of links) {
     if (e.source !== root && !colors.has(e.source)) colors.set(e.source, e.kind);
@@ -279,7 +288,17 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
         overview
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        nodesDraggable={false}
+        onNodesChange={(changes) => {
+          const movement = changes.filter(change => change.type === "position" && change.position);
+          if (!movement.length) return;
+          setMoved(previous => {
+            const next = new Map(previous);
+            for (const change of movement) {
+              if (change.type === "position" && change.position) next.set(change.id, change.position);
+            }
+            return next;
+          });
+        }}
         miniMap={false}
         onSelectNode={pick}
         onSelectEdge={(id) => {
