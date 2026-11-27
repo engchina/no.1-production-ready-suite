@@ -32,18 +32,17 @@ from app.features.agent.chart_spec import (
     CHART_SCHEMA,
     CHART_TYPES,
     MAX_CHART_CATEGORIES,
-    ChartSpec,
 )
 from app.features.agent.file_tool_support import (
     FILE_LIMIT_CODE,
     FILE_OUTPUT_SCHEMA,
     MAX_FILES_PER_RUN,
     TEXT_COLUMN_SCHEMA,
-    check_file_count,
+    chart_spec,
+    create_run_file,
+    field_issues,
     invalid_content,
     run_data_index,
-    running_run,
-    save_run_file,
     source_schema,
     text_table,
 )
@@ -339,33 +338,6 @@ PPTX_CREATE_DEFINITION = ToolDefinition(
 )
 
 
-def _field_issues(at: str, raw: Mapping[str, Any]) -> list[SpecIssue]:
-    """スライドの種類に合わない項目（要る項目が無い・使わない項目に値がある）。"""
-    kind = str(raw.get("type"))
-    required, optional = _SLIDE_FIELDS[kind]
-    issues: list[SpecIssue] = []
-    for name, unused_value in _UNUSED_VALUES.items():
-        present = raw.get(name) not in (None, "", [])
-        if name in required and not present:
-            issues.append(
-                SpecIssue(
-                    f"{at}.{name}",
-                    "required",
-                    f"type が {kind} のスライドでは {name} を書いてください。",
-                )
-            )
-        elif name not in required and name not in optional and present:
-            issues.append(
-                SpecIssue(
-                    f"{at}.{name}",
-                    "conflict",
-                    f"type が {kind} のスライドでは {name} を{unused_value}にしてください"
-                    "（この項目の内容はスライドに入りません）。",
-                )
-            )
-    return issues
-
-
 def _items(raw: Sequence[Mapping[str, Any]]) -> list[BulletItem]:
     return [
         BulletItem(text=item["text"], children=tuple(item.get("children") or ())) for item in raw
@@ -383,9 +355,18 @@ def _content(arguments: Mapping[str, Any], run: Any) -> PresentationContent:
     slides: list[Slide] = []
     for slide_index, raw in enumerate(arguments.get("slides") or []):
         at = f"slides.{slide_index}"
-        field_issues = _field_issues(at, raw)
-        if field_issues:
-            issues.extend(field_issues)
+        required, optional = _SLIDE_FIELDS[str(raw.get("type"))]
+        wrong = field_issues(
+            at,
+            raw,
+            unit="スライド",
+            target="スライド",
+            required=required,
+            optional=optional,
+            unused_values=_UNUSED_VALUES,
+        )
+        if wrong:
+            issues.extend(wrong)
             continue
         kind, title, notes = raw["type"], raw["title"], raw.get("notes")
         if kind == "cover":
@@ -427,17 +408,12 @@ def _content(arguments: Mapping[str, Any], run: Any) -> PresentationContent:
             if kind == "table":
                 slides.append(TableSlide(title=title, columns=columns, rows=rows, notes=notes))
             else:
-                chart = raw["chart"]
                 slides.append(
                     ChartSlide(
                         title=title,
                         columns=columns,
                         rows=rows,
-                        chart=ChartSpec(
-                            type=chart["type"],
-                            category_column=chart["category_column"],
-                            series_columns=tuple(chart["series_columns"]),
-                        ),
+                        chart=chart_spec(raw["chart"]),
                         notes=notes,
                     )
                 )
@@ -447,29 +423,21 @@ def _content(arguments: Mapping[str, Any], run: Any) -> PresentationContent:
 
 
 def _create_pptx(arguments: dict[str, Any], context: ToolInvocationContext) -> dict[str, Any]:
-    run = running_run(context.run_id)
-    # 上限はこの module の値を呼ぶたびに読む（形式をまたいで同じ値。`file_tool_support`）。
-    check_file_count(run, MAX_FILES_PER_RUN)
-    content = _content(arguments, run)
-    try:
+    def build(run: Any) -> tuple[str, bytes, dict[str, Any]]:
+        content = _content(arguments, run)
         built = build_presentation(content)
-    except PptxSpecError as exc:
-        raise invalid_content(exc.issues) from exc
-    reference = save_run_file(
-        run.id,
-        MAX_FILES_PER_RUN,
-        file_name=content.title,
-        mime_type=PPTX_MIME_TYPE,
-        data=built.data,
+        summary = {
+            "slides": dict(built.slides),
+            "slide_count": built.slide_count,
+            "continued_slides": built.continued_slides,
+            "tables": list(built.tables),
+            "charts": list(built.charts),
+        }
+        return content.title, built.data, summary
+
+    return create_run_file(
+        context.run_id, mime_type=PPTX_MIME_TYPE, spec_errors=(PptxSpecError,), build=build
     )
-    return {
-        "file": reference,
-        "slides": dict(built.slides),
-        "slide_count": built.slide_count,
-        "continued_slides": built.continued_slides,
-        "tables": list(built.tables),
-        "charts": list(built.charts),
-    }
 
 
 def pptx_create_tool() -> tuple[ToolDefinition, ToolHandler]:

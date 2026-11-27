@@ -31,7 +31,7 @@ from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.text import PP_ALIGN
 from pytest import MonkeyPatch
 
-from app.features.agent import builtin_runtime, pptx_tool
+from app.features.agent import builtin_runtime, file_tool_support
 from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND, FILE_RUN_CLOSED
 from app.features.agent.builtin_runtime import UNDECLARED_CALL_NOT_DECLARED, ModelTarget
 from app.features.agent.chart_spec import MAX_CHART_CATEGORIES, MAX_PIE_CATEGORIES
@@ -757,7 +757,7 @@ def test_files_per_run_are_limited_together_with_other_formats(
     run_id: str, monkeypatch: MonkeyPatch
 ) -> None:
     assert MAX_FILES_PER_RUN == 10
-    monkeypatch.setattr(pptx_tool, "MAX_FILES_PER_RUN", 3)
+    monkeypatch.setattr(file_tool_support, "MAX_FILES_PER_RUN", 3)
     # 形式を問わず、その Run のファイルの成果物の数で数える。
     sheet = {
         "name": "合成の表",

@@ -1,6 +1,6 @@
 ---
 name: markdown-create
-description: "Production Ready Agent の業務 Agent が、ツール markdown_create で Markdown のファイル（.md）を新しく作る。利用者が Markdown・.md のファイルでの出力（報告・説明・手順の文書など）を求めたら、このスキルを使う。見出し・段落・箇条書き・表・コードブロック・脚注・Mermaid の図を GitHub Flavored Markdown で書く。Word・PowerPoint・Excel のファイルを求められたときは使わない。画像の埋め込みと既存のファイルの編集はできない。"
+description: "Production Ready Agent の業務 Agent が、ツール markdown_create で Markdown のファイル（.md）を新しく作る。利用者が Markdown・.md のファイルでの出力（報告・説明・手順の文書など）を求めたら、このスキルを使う。見出し・段落・箇条書き・表・コードブロック・脚注・Mermaid の図を GitHub Flavored Markdown で書く。Word・PowerPoint・Excel のファイルを求められたときは使わない。"
 compatibility: "Production Ready Agent の業務 Agent（組み込みの実行環境）で使う。ツール markdown_create は Agent の中にだけあり、MCP サーバーでは提供しないので、外部の Agent（Claude Code・Codex など）では使えない。"
 license: "Apache-2.0 と MIT（Apache-2.0 の全文は LICENSE.txt。MIT の全文と出典・変更点は NOTICE）"
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 - 題・章立て・見出しの文・内容の順に利用者の指定があれば、そのとおりにする。指定が無ければ、内容が分かる短い題と見出しを付ける。
 - ファイルに入れる内容は、この実行で確かめたもの（取得した表・資料の根拠・会話と添付の内容）だけにする。まだ無い内容は、先にほかのツールで取得する。
-- 画像・既存のファイルの編集のように `markdown_create` で作れないものを求められたら、作れないことを伝え、文と表と図の文書で足りるかを利用者に確かめる。
+- `markdown_create` で作れないもの（ツールの説明にある）を求められたら、作れないことを伝え、文と表と図の文書で足りるかを利用者に確かめる。
 
 ## Step 2: 見出しで文書の構成を決める
 
