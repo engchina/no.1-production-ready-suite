@@ -8,6 +8,7 @@ import { expectedSearchablePopoverWidth, findEscapedAbsoluteElements, measureSea
  */
 export const MENU_PERMISSION_CODES = [
   "menu.search",
+  "menu.wiki_search",
   "menu.chat",
   "menu.history",
   "menu.search_answer_profiles",

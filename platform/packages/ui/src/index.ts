@@ -185,6 +185,7 @@ export {
   type RadioOptionGroupSkeletonProps,
 } from "./components/ui/radio-option-group";
 export { Switch, type SwitchProps } from "./components/ui/switch";
+export { SelectedSources, type SelectedSource } from "./components/ui/selected-sources";
 export { ToggleChip } from "./components/ui/toggle-chip";
 export { FieldError } from "./components/ui/field-error";
 export { FormStatus } from "./components/ui/form-status";

@@ -8,6 +8,7 @@
  */
 export const MENU_PERMISSIONS = {
   search: "menu.search",
+  wikiSearch: "menu.wiki_search",
   chat: "menu.chat",
   // 実行履歴（チャット・RAG 検索の実行の一覧と詳細。#1890）。
   history: "menu.history",

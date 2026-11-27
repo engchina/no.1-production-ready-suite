@@ -54,6 +54,7 @@ def _menu_permission(code: str, group: str, label: str) -> PermissionDefinition:
 # ---- メニュー権限 ----
 
 MENU_SEARCH = "menu.search"
+MENU_WIKI_SEARCH = "menu.wiki_search"
 MENU_CHAT = "menu.chat"
 # 実行履歴（チャット・RAG 検索の実行の一覧と詳細。#1890）。
 MENU_HISTORY = "menu.history"
@@ -121,6 +122,7 @@ _GROUP_MANAGE = "管理権限"
 PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_CHAT, _GROUP_USE, "チャット"),
     _menu_permission(MENU_SEARCH, _GROUP_USE, "RAG 検索"),
+    _menu_permission(MENU_WIKI_SEARCH, _GROUP_USE, "Wiki 検索"),
     _permission(
         MENU_HISTORY,
         _GROUP_USE,
@@ -343,6 +345,23 @@ _BV = "/search-answer-profiles/{search_answer_profile_id}"
 
 # (METHOD, route template) → 許可する権限（いずれか）。`/api` は付けない。
 ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
+    ("GET", "/wiki-search/profiles-for-kb/{kb_id}"): _any(MENU_WIKI_SEARCH),
+    **{
+        ("GET", prefix + path): _any(permission)
+        for prefix, permission in (
+            ("/wiki-search/profiles/{scope_id}", MENU_WIKI_SEARCH),
+            ("/knowledge-bases/{scope_id}/wiki/explore", MENU_KNOWLEDGE_BASES),
+        )
+        for path in (
+            "/scope",
+            "/search",
+            "/documents",
+            "/document-count",
+            "/documents/{document_id}/tree",
+            "/units/{unit_id}",
+            "/units/{unit_id}/relations",
+        )
+    },
     # ---- ナレッジ構築: 文書（アップロード・文書インデックス） ----
     ("GET", "/documents/upload-policy"): _any(MENU_UPLOAD),
     ("POST", "/documents/upload"): _any(MENU_UPLOAD),
@@ -450,7 +469,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", f"{_KB}/documents"): _any(MENU_KNOWLEDGE_BASES),
     ("DELETE", f"{_KB}/documents/{{document_id}}"): _any(MENU_KNOWLEDGE_BASES),
     # ---- 検索・回答プロファイル ----
-    ("GET", "/search-answer-profiles"): _SEARCH_ANSWER_PROFILE_READ,
+    ("GET", "/search-answer-profiles"): _SEARCH_ANSWER_PROFILE_READ | _any(MENU_WIKI_SEARCH),
     ("POST", "/search-answer-profiles"): _any(SEARCH_ANSWER_PROFILES_MANAGE),
     # 実体の索引を持つ文書の数（拡張の開閉の案内。#1388）。
     # プロファイルとガイドが継承するシステム設定の窓口（読み取りだけ。#2683）。

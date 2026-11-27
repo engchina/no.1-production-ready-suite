@@ -55,6 +55,8 @@ export const FILE_REVIEW_JA = {
   "fileReview.replace": "今回の資料を外して探し直す",
   "fileReview.replaceNew": "前回の選択以外を入れ替える",
   "fileReview.given": "AI に渡した資料",
+  "fileReview.selected": "選択した資料",
+  "fileReview.remove": "{name}を外す",
   "fileReview.found": "候補ファイル",
   "fileReview.filename": "ファイル名で絞り込み",
   "fileReview.placeholder": "ファイル名の一部を入力",

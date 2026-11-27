@@ -217,6 +217,36 @@ class DocumentNames:
         return keys[0] if keys else frozenset()
 
 
+class ReferenceTargets:
+    """原文順の参照先候補。図と回答で同じ章節の単位を使う。"""
+
+    def __init__(self, rows: Sequence[dict[str, Any]]) -> None:
+        self.by_document: dict[str, list[tuple[str, list[str]]]] = {}
+        self.resolved: dict[tuple[str, str], str | None] = {}
+        for row in rows:
+            self.by_document.setdefault(str(row["document_id"]), []).append(
+                (str(row["unit_id"]), _json_list(row["target_path"]))
+            )
+
+    def resolve(self, doc: str, section: str) -> str | None:
+        key = (doc, section)
+        if key not in self.resolved:
+            wanted = title_key(section)
+            paths = self.by_document.get(doc, [])
+            first = min(paths, key=lambda item: _section_rank(item[1], wanted), default=None)
+            self.resolved[key] = first[0] if first else None
+        return self.resolved[key]
+
+
+def _section_rank(path: Sequence[str], wanted: str) -> int:
+    if len(wanted) < 2:
+        return 2
+    parts = [title_key(part) for part in path]
+    if parts and parts[-1] == wanted:
+        return 0
+    return 1 if any(wanted in part for part in parts) else 2
+
+
 def section_pages(pages: Sequence[Any], section: str) -> list[Any]:
     """章節の表記に当たる案内を先に並べる（見出しの完全一致 → 見出しが表記を含む → 残り）。
 
@@ -227,12 +257,7 @@ def section_pages(pages: Sequence[Any], section: str) -> list[Any]:
         return list(pages)
 
     def rank(page: Any) -> int:
-        parts = [title_key(part) for part in page.unit.section_path]
-        if parts and parts[-1] == wanted:
-            return 0
-        if any(wanted in part for part in parts):
-            return 1
-        return 2
+        return _section_rank(page.unit.section_path, wanted)
 
     ranked = sorted(pages, key=rank)
     best = rank(ranked[0]) if ranked else 2

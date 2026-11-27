@@ -1,10 +1,12 @@
 """KB 詳細の Wiki の図（文書 → 章節 → 原文単位と、依存・文書をまたぐ関連。#5502）。"""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
 from app.rag.wiki_models import WikiRelation
+from app.schemas.knowledge_base import KnowledgeBaseRef
+from app.schemas.search import RetrievedChunk
 
 WikiGraphScope = Literal["same_document", "cross_document"]
 
@@ -79,6 +81,22 @@ class WikiGraphSearchItem(BaseModel):
     document_name: str
 
 
+class WikiSearchHit(WikiGraphSearchItem):
+    knowledge_base_ids: list[str] = Field(default_factory=list)
+    vector_rank: int | None = None
+    keyword_rank: int | None = None
+
+
+class WikiSearchHits(BaseModel):
+    items: list[WikiSearchHit]
+    total: int
+    offset: int
+
+
+class WikiSearchScope(BaseModel):
+    knowledge_bases: list[KnowledgeBaseRef]
+
+
 class WikiGraphSearchPage(BaseModel):
     items: list[WikiGraphSearchItem] = Field(default_factory=list)
     total: int = 0
@@ -104,9 +122,20 @@ class WikiGraphRelation(BaseModel):
     target_section: str | None = None
 
 
+class WikiSourceRef(BaseModel):
+    unit_id: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    source_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+
+
 class WikiGraphRelations(BaseModel):
     items: list[WikiGraphRelation]
     has_more: bool
+
+
+class WikiRelationGroups(WikiGraphRelations):
+    preview: list[WikiGraphRelation] = Field(default_factory=list)
+    counts: dict[WikiRelation, int] = Field(default_factory=dict)
+    total: int = 0
 
 
 class WikiGraphSourceChunk(BaseModel):
@@ -127,3 +156,12 @@ class WikiGraphUnitDetail(BaseModel):
     unresolved: list[str] = Field(default_factory=list)
     source_chunks: list[WikiGraphSourceChunk] = Field(default_factory=list)
     relations: list[WikiGraphRelation] = Field(default_factory=list)
+
+
+class WikiOriginal(WikiGraphUnitRef):
+    parent_id: str | None = None
+    source: WikiSourceRef
+    chunks: list[RetrievedChunk]
+    context: str
+    possible_questions: list[str]
+    unresolved: list[str]

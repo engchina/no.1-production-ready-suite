@@ -20,6 +20,8 @@ export const EVIDENCE_LABELS = evidenceLabels();
 export function citationEvidenceItem(chunk: RetrievedChunk): EvidenceListItem {
   const recipeSlot = integerMetadataValue(chunk.metadata.recipe_slot_no);
   const tags: EvidenceTag[] = [];
+  const origin = chunk.metadata.wiki_handoff_origin;
+  if (origin === "selected" || origin === "additional") tags.push({ id: "wiki_handoff", value: t(origin === "selected" ? "wiki.search.selectedOrigin" : "wiki.search.additionalOrigin"), tone: "info" });
   if (recipeSlot) tags.push({ id: "recipe", value: t("documents.recipes.name", { slot: recipeSlot }), icon: Layers });
   if (chunk.category_name) tags.push({ id: "category", value: chunk.category_name, tone: "info" });
   // チャットの添付の根拠（#2517）。文書の表に無いので、原文のプレビューは開かない。

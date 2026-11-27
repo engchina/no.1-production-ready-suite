@@ -10,8 +10,8 @@
 from __future__ import annotations
 
 import unicodedata
+from collections import Counter
 from collections.abc import Sequence
-from types import SimpleNamespace
 from typing import Any
 
 from app.clients.oracle import (
@@ -24,7 +24,7 @@ from app.clients.oracle import (
     _oracle_retrieval_where,
 )
 from app.clients.wiki_graph_index import section_id as section_id
-from app.clients.wiki_reference_index import DocumentNames, section_pages
+from app.clients.wiki_reference_index import DocumentNames, ReferenceTargets
 from app.clients.wiki_store import WIKI_PAGE_FROM, WIKI_PUBLISHED_SQL
 from app.rag.wiki_models import WikiPage
 
@@ -176,6 +176,8 @@ class WikiGraphStore:
                 {WIKI_PAGE_FROM} WHERE {where}) matched
             WHERE LOWER(title) LIKE :graph_pattern ESCAPE '\\'
                OR LOWER(path_text) LIKE :graph_pattern ESCAPE '\\'
+               OR LOWER(file_name) LIKE :graph_pattern ESCAPE '\\'
+               OR LOWER(unit_id) LIKE :graph_pattern ESCAPE '\\'
                OR LOWER(context) LIKE :graph_pattern ESCAPE '\\'
             ORDER BY file_name,document_id,chunk_index,unit_id
             OFFSET :graph_skip ROWS FETCH NEXT :graph_take ROWS ONLY""",
@@ -202,18 +204,19 @@ class WikiGraphStore:
 
     # ---- 単位の案内 ----
 
-    async def _pages(self, kb_id: str, unit_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    async def pages_by_unit(self, kb_id: str, unit_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
         if not unit_ids:
             return {}
         where, binds = graph_scope(kb_id)
         clause, extra = _oracle_in_predicate("p.unit_id", "graph_units", list(unit_ids))
         rows = await self.oracle._fetch_all(
-            f"""SELECT p.unit_id,p.document_id,d.file_name,p.page_json
+            f"""SELECT p.page_id,p.unit_id,p.document_id,d.file_name,p.page_json
             {WIKI_PAGE_FROM} WHERE {where} AND {clause}""",
             {**binds, **extra},
         )
         return {
             str(row["unit_id"]): {
+                "page_id": str(row["page_id"]),
                 "page": WikiPage.model_validate(_json_loads(row["page_json"])),
                 "document_name": str(row.get("file_name") or ""),
             }
@@ -222,7 +225,7 @@ class WikiGraphStore:
 
     async def unit(self, kb_id: str, unit_id: str) -> dict[str, Any]:
         """単位の案内（要約・想定の質問・本文に無いこと）と、原文の位置と、出る・入る関係。"""
-        found = await self._pages(kb_id, [unit_id])
+        found = await self.pages_by_unit(kb_id, [unit_id])
         if unit_id not in found:
             raise KeyError(unit_id)
         page: WikiPage = found[unit_id]["page"]
@@ -240,15 +243,28 @@ class WikiGraphStore:
             "source_chunks": chunks,
         }
 
-    async def relations(self, kb_id: str, unit_id: str, offset: int, limit: int) -> dict[str, Any]:
+    async def relations(
+        self,
+        kb_id: str,
+        unit_id: str,
+        offset: int,
+        limit: int,
+        *,
+        relation: str | None = None,
+        grouped: bool = False,
+    ) -> dict[str, Any]:
         """現在の単位の関係を一画面だけ返す（同じ文書の依存と、別の文書への参照の両方の向き）。
 
         別の文書への参照（#5784）は、参照先をこの KB の文書の名前で決める。決まった参照先は開ける
         単位を返し、決まらない参照（KB に無い文書）は原文の表記だけを返す（開けない）。
         """
-        found = await self._pages(kb_id, [unit_id])
+        found = await self.pages_by_unit(kb_id, [unit_id])
         if unit_id not in found:
-            return {"has_more": False, "items": []}
+            return {
+                "has_more": False,
+                "items": [],
+                **({"total": 0, "counts": {}, "preview": []} if grouped else {}),
+            }
         page: WikiPage = found[unit_id]["page"]
         document_id = page.unit.document_id
         cte, binds = visible_pages_cte(kb_id)
@@ -281,24 +297,29 @@ class WikiGraphStore:
             JOIN visible u ON u.page_id=r.page_id WHERE u.unit_id=:graph_unit ORDER BY r.ordinal""",
             {**binds, "graph_unit": unit_id},
         )
-        for row in references:
-            name, section = str(row["target_name"]), str(row.get("target_section") or "")
-            targets: list[str | None] = [*names.resolve(name, exclude=document_id)] or [None]
-            for target in targets:
+        outgoing = [
+            (row, names.resolve(str(row["target_name"]), exclude=document_id)) for row in references
+        ]
+        targets = {target for _, docs in outgoing for target in docs}
+        keys = sorted(names.keys(document_id))
+        aliases = sorted(names.aliases(document_id))
+        if keys or aliases:
+            targets.add(document_id)
+        paths = await self._reference_targets(kb_id, sorted(targets))
+        for row, docs in outgoing:
+            section = str(row.get("target_section") or "")
+            matches: list[str | None] = [*docs] or [None]
+            for target in matches:
                 items.append(
                     {
                         "direction": "outgoing",
                         "scope": "cross_document",
                         "relation": row["relation"],
-                        "page_id": (
-                            await self._reference_page(kb_id, target, section) if target else None
-                        ),
-                        "target_name": name,
+                        "page_id": paths.resolve(target, section) if target else None,
+                        "target_name": str(row["target_name"]),
                         "target_section": section or None,
                     }
                 )
-        keys = sorted(names.keys(document_id))
-        aliases = sorted(names.aliases(document_id))
         if keys or aliases:
             # 種類の呼び名で書いた参照も拾い、当たる文書は出る向きと同じ照合で決める（#5795）。
             clauses: list[str] = []
@@ -311,15 +332,19 @@ class WikiGraphStore:
                 extra[f"graph_ref_alias{index}"] = alias
             for row in await self.oracle._fetch_all(
                 f"""WITH {cte}
-                SELECT r.relation,r.target_key,v.page_id,v.document_id FROM rag_wiki_references r
+                SELECT r.relation,r.target_key,r.target_section,v.page_id,v.document_id
+                FROM rag_wiki_references r
                 JOIN visible v ON v.page_id=r.page_id
                 WHERE ({" OR ".join(clauses)}) AND v.document_id<>:graph_doc
                 ORDER BY v.page_id,r.ordinal""",
                 {**binds, **extra, "graph_doc": document_id},
             ):
                 source_document = str(row["document_id"])
-                if document_id not in names.resolve_key(
-                    str(row["target_key"]), exclude=source_document
+                if (
+                    document_id
+                    not in names.resolve_key(str(row["target_key"]), exclude=source_document)
+                    or paths.resolve(document_id, str(row.get("target_section") or ""))
+                    != found[unit_id]["page_id"]
                 ):
                     continue
                 items.append(
@@ -330,7 +355,9 @@ class WikiGraphStore:
                         "page_id": row["page_id"],
                     }
                 )
-        units = await self._unit_refs([item["page_id"] for item in items if item["page_id"]])
+        counts = Counter(item["relation"] for item in items)
+        if relation is not None:
+            items = [item for item in items if item["relation"] == relation]
         ordered = sorted(
             items,
             key=lambda item: (
@@ -342,19 +369,41 @@ class WikiGraphStore:
             ),
         )
         page_items = ordered[offset : offset + limit]
+        representatives: dict[str, dict[str, Any]] = {}
+        if grouped and offset == 0 and not relation:
+            for item in ordered:
+                if item["page_id"]:
+                    representatives.setdefault(item["relation"], item)
+        units = await self._unit_refs(
+            [
+                item["page_id"]
+                for item in [*page_items, *representatives.values()]
+                if item["page_id"]
+            ]
+        )
+
+        def entry(item: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "direction": item["direction"],
+                "scope": item["scope"],
+                "relation": item["relation"],
+                "unit": units.get(item["page_id"]),
+                "target_name": item.get("target_name"),
+                "target_section": item.get("target_section"),
+            }
+
         return {
-            "has_more": len(ordered) > offset + limit,
-            "items": [
+            **(
                 {
-                    "direction": item["direction"],
-                    "scope": item["scope"],
-                    "relation": item["relation"],
-                    "unit": units.get(item["page_id"]) if item["page_id"] else None,
-                    "target_name": item.get("target_name"),
-                    "target_section": item.get("target_section"),
+                    "counts": dict(counts),
+                    "total": len(ordered),
+                    "preview": [entry(item) for item in representatives.values()],
                 }
-                for item in page_items
-            ],
+                if grouped
+                else {}
+            ),
+            "has_more": len(ordered) > offset + limit,
+            "items": [entry(item) for item in page_items],
         }
 
     async def _document_names(self, kb_id: str) -> DocumentNames:
@@ -375,25 +424,19 @@ class WikiGraphStore:
                 headings.setdefault(did, []).append(str(row["heading"]))
         return DocumentNames(list(catalog.values()), headings)
 
-    async def _reference_page(self, kb_id: str, document_id: str, section: str) -> str | None:
-        """参照先の文書の開く単位（章節の表記に当たる最初の単位、無ければ文書の最初の単位）。"""
+    async def _reference_targets(self, kb_id: str, documents: list[str]) -> ReferenceTargets:
+        if not documents:
+            return ReferenceTargets([])
         where, binds = graph_scope(kb_id)
+        clause, extra = _oracle_in_predicate("p.document_id", "graph_target", documents)
         rows = await self.oracle._fetch_all(
-            f"""SELECT p.page_id,
-            JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS path
-            {WIKI_PAGE_FROM} WHERE {where} AND p.document_id=:graph_target
-            ORDER BY c.chunk_index,p.unit_id FETCH FIRST 500 ROWS ONLY""",
-            {**binds, "graph_target": document_id},
+            f"""SELECT p.page_id AS unit_id,p.document_id,
+            JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS target_path
+            {WIKI_PAGE_FROM} WHERE {where} AND {clause}
+            ORDER BY p.document_id,c.chunk_index,p.unit_id""",
+            {**binds, **extra},
         )
-        pages = [
-            SimpleNamespace(
-                page_id=str(row["page_id"]),
-                unit=SimpleNamespace(section_path=[str(part) for part in _json_list(row["path"])]),
-            )
-            for row in rows
-        ]
-        ranked = section_pages(pages, section)
-        return ranked[0].page_id if ranked else None
+        return ReferenceTargets(rows)
 
     async def _unit_refs(self, page_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
         if not page_ids:

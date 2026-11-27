@@ -147,9 +147,10 @@ class FakeOracle:
                     "relation": relation,
                     "page_id": source,
                     "target_key": reference_name_key(name),
+                    "target_section": section,
                     "document_id": by_id[source].unit.document_id,
                 }
-                for source, name, _, relation in REFERENCES
+                for source, name, section, relation in REFERENCES
                 if source in by_id
                 and (
                     reference_name_key(name) in keys
@@ -157,11 +158,16 @@ class FakeOracle:
                 )
                 and by_id[source].unit.document_id != binds["graph_doc"]
             ]
-        if "p.document_id=:graph_target" in statement:
+        if "AS target_path" in statement:
+            wanted = {v for k, v in binds.items() if k.startswith("graph_target")}
             return [
-                {"page_id": page.unit.unit_id, "path": json.dumps(page.unit.section_path)}
-                for page in by_id.values()
-                if page.unit.document_id == binds["graph_target"]
+                {
+                    "unit_id": p.unit.unit_id,
+                    "document_id": p.unit.document_id,
+                    "target_path": p.unit.section_path,
+                }
+                for p in by_id.values()
+                if p.unit.document_id in wanted
             ]
         if "p.page_id IN" in statement or "graph_pages" in "".join(binds):
             wanted = {value for key, value in binds.items() if key.startswith("graph_pages")}
@@ -236,6 +242,7 @@ class FakeOracle:
                     "unit_id": page.unit.unit_id,
                     "document_id": page.unit.document_id,
                     "file_name": DOC_NAMES[page.unit.document_id],
+                    "page_id": page.unit.unit_id,
                     "page_json": page.model_dump_json(),
                 }
                 for _, page in pages
@@ -328,10 +335,11 @@ async def test_unit_detail_separates_directions_and_hides_relations_outside_scop
         ("outgoing", "same_document", "exception", U["a2"]),
         ("incoming", "same_document", "prerequisite", U["a3"]),
         # 別の文書への参照（#5784）: 出る向きは参照先の章節の単位、
-        # 入る向きは文書を名前で参照する単位。
+        # 入る向きは実際に指す章節でのみ表示する。
         ("outgoing", "cross_document", "exception", U["b1"]),
-        ("incoming", "cross_document", "prerequisite", U["b1"]),
     }
+    incoming = (await store.relations(KB, U["a3"], 0, 25))["items"]
+    assert any(i["unit"]["id"] == U["b1"] and i["direction"] == "incoming" for i in incoming)
     cross = next(
         item
         for item in items

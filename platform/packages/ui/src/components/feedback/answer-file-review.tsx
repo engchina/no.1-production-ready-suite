@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import { Button } from "../ui/button";
 import { RadioOptionGroup } from "../ui/radio-option-group";
 import { SearchField } from "../ui/search-field";
+import { SelectedSources } from "../ui/selected-sources";
 import { SideSheet } from "../ui/side-sheet";
 import {
   cited,
@@ -303,6 +304,16 @@ export function AnswerFileReview({
                     })}
                   </span>
                 </p>
+              )}
+              {task && !selectedFile && !manage && !reset && (
+                <SelectedSources
+                  label={t("fileReview.selected")}
+                  removeLabel={(name) => t("fileReview.remove", { name })}
+                  items={groups.filter((file) => checked.includes(file.id))}
+                  onRemove={(id) => setChecked((previous) => previous.filter((key) => key !== id))}
+                  focusAfterLast={() => document.getElementById(selectionId + "-search")?.focus()}
+                  disabled={busy}
+                />
               )}
               <div className="flex flex-wrap items-center gap-2">
                 {task && !selectedFile && !manage && !reset && (

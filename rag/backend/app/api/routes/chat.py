@@ -123,6 +123,7 @@ from app.rag.support_guide_runtime import (
 )
 from app.rag.trace_bodies import capture_trace_bodies, read_saved_trace_body
 from app.rag.trace_store import AnswerTrace, TraceSnapshot, TraceTerminal, trace_snapshot
+from app.rag.wiki_explorer import WikiExplorer, WikiHandoff, WikiHandoffOptions
 from app.schemas.chat import (
     ChatAnswerCancelResult,
     ChatClarificationRecord,
@@ -139,6 +140,7 @@ from app.schemas.chat import (
 from app.schemas.common import ApiResponse, Page
 from app.schemas.search import RetrievedChunk, SearchRequest, SearchResponse
 from app.security.dependencies import current_principal
+from app.security.permissions import MENU_WIKI_SEARCH
 from app.security.user_names import display_names_by_user_hash
 
 router = APIRouter()
@@ -514,6 +516,12 @@ async def stream_message(
     ensure_answer_models_registered(request.model_ids, settings)
     oracle = OracleClient()
     conversation = await _load_sendable_conversation(oracle, conversation_id)
+    if request.wiki_sources and not current_principal(http_request).has_permission(
+        MENU_WIKI_SEARCH
+    ):
+        raise HTTPException(403, "Wiki 検索を利用する権限がありません。")
+    if request.wiki_sources and request.approved_faq_id:
+        raise HTTPException(422, "選んだ原文を使う場合は登録済み Q&A を同時に指定できません。")
     context = current_audit_request_context()
     try:
         get_chat_answer_run_service().ensure_capacity(
@@ -852,6 +860,7 @@ class PreparedChatTurn:
     query_guardrail: GuardrailResult
     history: list[ChatTurn]
     user_message: StoredMessage
+    wiki_handoff: WikiHandoff | None = None
     # 利用者が確認の質問で選んだ条件と対象範囲(#717)。
     scope: AnswerScope | None = None
     history_question_prepared: bool = False
@@ -1061,6 +1070,13 @@ async def _prepare_chat_turn(
             for turn in history
         ]
     now = datetime.now(UTC)
+    wiki_handoff = None
+    if request.wiki_sources and query_guardrail.allowed:
+        explorer = await WikiExplorer.for_profile(oracle, search_answer_profile_id)
+        chunks = await explorer.selected(request.wiki_sources, effective_request.filters)
+        wiki_handoff = WikiHandoff(
+            search_answer_profile_id, tuple(request.wiki_sources), tuple(chunks)
+        )
     user_message = await oracle.append_message(
         StoredMessage(
             # 画面が決めた id（#1175）。送信の直後の停止をこの id で取り消せる。
@@ -1087,6 +1103,7 @@ async def _prepare_chat_turn(
         query_guardrail=query_guardrail,
         history=history,
         user_message=user_message,
+        wiki_handoff=wiki_handoff,
         # 補完は送信の準備で済ませる（#5100）。回答の工程では補完し直さない。
         history_question_prepared=True,
         prepared_history_rewrite=prepared_history_rewrite,
@@ -1142,6 +1159,9 @@ async def _generate_chat_answer(
         llm = OciEnterpriseAiClient(settings=turn.settings, model_id=model_id or None)
         # llm は会話履歴による質問の書き換えに使う。回答は回答エンジンが自分でモデルを呼ぶので、
         # 列のモデルを別に渡す(#593)。
+        handoff: WikiHandoffOptions = (
+            {"wiki_handoff": turn.wiki_handoff} if turn.wiki_handoff else {}
+        )
         pipeline = RagPipeline(
             settings=turn.settings,
             llm=llm,
@@ -1152,6 +1172,7 @@ async def _generate_chat_answer(
             answer_notice=current_answer_notice,
             # 会話の添付（#2517）の節・行を根拠の候補に足す。
             attachment_conversation_id=turn.conversation_id,
+            **handoff,
             history_question_prepared=turn.history_question_prepared,
             prepared_history_rewrite=turn.prepared_history_rewrite,
             flow=EXPANDED_FLOW,

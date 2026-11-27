@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from time import perf_counter, time
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pr_backend_core.chat_history import (
     ChatHistoryBudget,
@@ -124,6 +124,9 @@ from app.schemas.search import (
     StorageFailure,
     StorageFailureStep,
 )
+
+if TYPE_CHECKING:
+    from app.rag.wiki_explorer import WikiHandoff, WikiHandoffOptions
 
 logger = logging.getLogger(__name__)
 
@@ -440,6 +443,7 @@ class RagPipeline:
         run_recorder: RunRecorder | None = None,
         answer_notice: AnswerNoticeSource | None = None,
         attachment_conversation_id: str | None = None,
+        wiki_handoff: "WikiHandoff | None" = None,
         staged_answer: dict[str, object] | None = None,
         history_question_prepared: bool = False,
         prepared_history_rewrite: PreparedHistoryRewrite | None = None,
@@ -469,6 +473,7 @@ class RagPipeline:
         self._answer_notice = answer_notice
         # チャットの会話（#2517）。会話の添付の節・行を、質問の根拠の候補として検索の結果に足す。
         self._staged_answer = staged_answer
+        self._wiki_handoff = wiki_handoff
         self._attachment_conversation_id = attachment_conversation_id
         self._history_question_prepared = history_question_prepared
         self._prepared_history_rewrite = (
@@ -735,7 +740,7 @@ class RagPipeline:
         # 生成を通さず、FAQ の回答を原文のまま返す（モデルを呼ばない）。
         faq_outcome: AnswerOutcome | None = None
         selected_faq = self._settings.rag_approved_faq_selected
-        if selected_faq and request.generate_answer:
+        if selected_faq and request.generate_answer and not self._wiki_handoff:
             faq_outcome = await _observe_stage(
                 trace_id,
                 APPROVED_FAQ_ANSWER_STAGE,
@@ -755,6 +760,7 @@ class RagPipeline:
             and history is not None
             and request.generate_answer
             and self._scope is None
+            and not self._wiki_handoff
             and skips_retrieval(self._history_intent)
         ):
             intent = self._history_intent
@@ -827,6 +833,9 @@ class RagPipeline:
         effective_scope = scope_with_history_confirmations(
             self._scope, self._selected_history_facts
         )
+        handoff: WikiHandoffOptions = (
+            {"wiki_handoff": self._wiki_handoff} if self._wiki_handoff else {}
+        )
         engine = AnswerEngine(
             self._settings,
             oracle=self._oracle,
@@ -835,6 +844,7 @@ class RagPipeline:
             answer_model_id=self._answer_model_id,
             scope=effective_scope,
             attachment_chunks=attachment_chunks,
+            **handoff,
             degraded=degraded,
             materialize_images=self._materialize_images,
             expand=self._flow == EXPANDED_FLOW,

@@ -1392,8 +1392,9 @@ export function useSearchAnswerProfiles(params: {
 }
 
 /** 単一選択の候補。後続ページも揃えてから、名前・参照 KB・選択中の対象を解決する。 */
-export function useAllSearchAnswerProfiles(params: { status?: SearchAnswerProfileStatus }) {
+export function useAllSearchAnswerProfiles(params: { status?: SearchAnswerProfileStatus }, enabled = true) {
   return useQuery({
+    enabled,
     queryKey: ["search-answer-profiles", { ...params, scope: "all-choices" }],
     queryFn: async () => {
       const first = await api.listSearchAnswerProfiles({ ...params, limit: 50, offset: 0 });
