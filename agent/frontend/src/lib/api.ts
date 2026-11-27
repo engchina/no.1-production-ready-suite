@@ -1061,7 +1061,7 @@ export interface AgentProfile {
   clarification_policy?: ClarificationPolicy;
   /** 確認の上限（往復。0 は既定の 3 回、2〜6。NL2SQL の業務プロファイルと同じ）。 */
   clarification_max_rounds?: number;
-  /** 資料・データで確かめていない回答の扱い（#5859。既定はそのまま出して注意を付ける）。 */
+  /** 資料・データで確かめていない回答の扱い（#5859。既定は注意を付けて表示する）。 */
   ungrounded_answer_policy?: UngroundedAnswerPolicy;
   enabled: boolean;
   created_at: string;
@@ -1088,7 +1088,7 @@ export type ClarificationPolicy = "confirm" | "assume";
 
 /**
  * 資料・データで確かめていない回答の扱い（#5859）。資料・業務データのツールを 1 つも呼ばずに作った回答を、
- * `annotate` = そのまま出して注意を付ける（既定）、`refuse` = 出さずに「お答えできません」と返す。
+ * `annotate` = 注意を付けて表示する（既定）、`refuse` = 表示せず「お答えできません」と返す。
  */
 export type UngroundedAnswerPolicy = "annotate" | "refuse";
 
@@ -1230,6 +1230,16 @@ export interface AgentSkill {
    * このスキルを選んだ業務 Agent は RAG の回答をそのまま返す（業務 Agent の指示で回答の書き方は変わらない）。
    */
   final_answer_tools?: { server_id: string; tool_name: string }[];
+  /**
+   * 資料・業務データのツール（RAG・NL2SQL・登録した MCP 接続。一覧・推薦を除く）を宣言したスキルか（スキルの一覧だけが返す。#5859）。
+   * 業務 Agent の編集は、これを選んだときだけ「資料・データで確かめていない回答」の設定を出す。
+   */
+  grounding?: boolean;
+  /**
+   * このスキルを選ぶと、RAG の回答をそのまま返さずにモデルが回答を書くか（スキルの一覧だけが返す。backend の
+   * `model_writes_answer`。#5867）。回答のツールを宣言せずにツールを使うスキル（データつき・ファイルを作るスキルなど）。
+   */
+  model_writes_answer?: boolean;
   /** SKILL.md と同じディレクトリの references/ の参照文書（パスと文字数。本文は返さない。#1803）。 */
   references: { path: string; characters: number }[];
   enabled: boolean;
@@ -1695,6 +1705,8 @@ export interface BuiltinRuntimeStatus {
   error_code?: string | null;
   message?: string | null;
   models: BuiltinRuntimeModel[];
+  /** 資料・データで確かめていない回答に付ける注意の文（#5859。業務 Agent の編集の案内に差し込む）。 */
+  ungrounded_notice?: string;
 }
 
 /**

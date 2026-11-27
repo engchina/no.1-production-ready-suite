@@ -35,7 +35,7 @@ from pydantic import ValidationError
 from pytest import MonkeyPatch
 from trace_support import run_progress_events
 
-from app.features.agent import builtin_runtime, router
+from app.features.agent import builtin_runtime, router, tool_grounding
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.confirmation import (
     CONFIRMATION_TOOL,
@@ -72,6 +72,7 @@ from app.features.agent.runtime import (
     RunState,
     RunStatus,
     reserved_run_metadata_keys,
+    run_answer_text,
     run_support_task,
     runtime_repository,
 )
@@ -224,12 +225,6 @@ def _set_policy(policy: str, max_rounds: int = 2) -> None:
         AGENT_ID,
         AgentProfilePatch(clarification_policy=policy, clarification_max_rounds=max_rounds),
     )
-    runtime_repository.publish_agent(AGENT_ID)
-
-
-def _refuse_ungrounded_answers() -> None:
-    """業務 Agent を拒答の設定にする（差し戻すのはこの設定だけ。#5859。既定は差し戻さない）。"""
-    runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(ungrounded_answer_policy="refuse"))
     runtime_repository.publish_agent(AGENT_ID)
 
 
@@ -579,6 +574,38 @@ def test_agent_confirmation_skip_never_shows_a_tool_card(
     assert [(item.source, item.status) for item in resumed.confirmations] == [("agent", "skipped")]
     state = run_support_task(resumed)
     assert state is not None and state["pending_clarifications"] == []
+
+
+def test_agent_confirmation_skip_sends_back_a_text_clarification_by_default(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """「確認せずに回答」を選んだ Run の本文の聞き返しは、既定の設定でも 1 回差し戻す（#1903）。
+
+    本文の確認の質問の差し戻しは回答前の確認の方針で決まり、確かめていない回答の設定（#5859）とは
+    別。差し戻しの文は「確認の質問はせず、ツールで調べ、前提を示して答える」。
+    """
+    del mcp
+    monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
+    model = _script(
+        monkeypatch,
+        _ask("call-ask"),
+        [assistant_message("どの期間の売上を見ますか？")],
+        [assistant_message("前提: 全期間で集計する想定です。")],
+    )
+    run = _run()
+    assert run.status == RunStatus.WAITING_CONFIRMATION
+    runtime_repository.decide_confirmation(run.id, run.confirmations[0].id, action="skip")
+    resumed = _resume(run.id)
+    assert resumed.status == RunStatus.COMPLETED
+    assert len(model.calls) == 3
+    assert model.calls[2].input[-1]["content"].startswith(tool_grounding.RETRY_MESSAGE_ASSUME)
+    actions = [
+        event.payload["tool_grounding"]["action"]
+        for event in resumed.events
+        if "tool_grounding" in event.payload
+    ]
+    assert actions == ["retry"]
+    assert run_answer_text(resumed) == "前提: 全期間で集計する想定です。"
 
 
 def test_agent_confirmation_answer_keeps_the_nl2sql_card(
@@ -1457,7 +1484,6 @@ def test_confirmation_after_the_grounding_retry_waits_for_the_user(
     呼んだ後に「確認の答えを待っている」だけの本文で完了した。
     """
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
-    _refuse_ungrounded_answers()
     model = _script(
         monkeypatch,
         [assistant_message("対象の資料を教えてください。")],
@@ -1505,7 +1531,6 @@ def test_mcp_chat_returns_the_confirmation_after_the_grounding_retry(
 
     monkeypatch.setattr(mcp_server, "wait_poll_seconds", 0.01)
     monkeypatch.setattr(get_settings(), "agent_tool_grounding_required", True)
-    _refuse_ungrounded_answers()
     _script(
         monkeypatch,
         [assistant_message("対象の資料を教えてください。")],

@@ -23,13 +23,7 @@ from app.features.agent.run_facts import (
     fact_from_run,
 )
 from app.features.agent.run_facts_store import (
-    ANSWER_BASIS_BINDS,
-    LEGACY_MERGE_SQL,
     MERGE_SQL,
-    MERGE_SQL_012,
-    MERGE_SQL_014,
-    MERGE_SQL_019,
-    SIGNAL_BINDS,
     MemoryRunFactsStore,
     OracleRunFactsStore,
     RunFactsUnavailableError,
@@ -466,64 +460,15 @@ def test_upsert_writes_the_answer_basis() -> None:
     assert "target.ANSWER_BASIS = source.ANSWER_BASIS" in MERGE_SQL
 
 
-def test_upsert_keeps_writing_the_answer_basis_before_the_review_column_exists() -> None:
+def test_upsert_does_not_fall_back_to_older_tables() -> None:
+    """古いテーブル（列が無い）向けの書き方は持たない。列が無ければ失敗にする（呼ぶ側が記録する）。"""
     connection = _Connection()
     connection.missing_columns = {MERGE_SQL}
-    _oracle(connection).upsert([_fact("r1", basis="ungrounded_answer")])
-    [(sql, rows)] = connection.executed
-    assert sql == MERGE_SQL_019
-    assert rows[0]["answer_basis"] == "ungrounded_answer"
-    assert "file_review_outcome" not in rows[0]
-    assert (connection.rollbacks, connection.commits) == (1, 1)
 
+    with pytest.raises(RuntimeError, match="ORA-00904"):
+        _oracle(connection).upsert([_fact("r1", basis="ungrounded_answer")])
 
-def test_upsert_keeps_writing_signals_before_the_answer_basis_column_exists() -> None:
-    """migration 019 の前は、回答の対応の手がかりの列だけを除いて書く（#5859）。"""
-    connection = _Connection()
-    connection.missing_columns = {MERGE_SQL, MERGE_SQL_019}
-
-    _oracle(connection).upsert(
-        [_fact("r1", outcome="answered", basis="ungrounded_answer", data_tool_calls=3)]
-    )
-
-    [(sql, rows)] = connection.executed
-    assert sql == MERGE_SQL_014
-    assert ANSWER_BASIS_BINDS.isdisjoint(rows[0]) and rows[0]["data_tool_calls"] == 3
-    assert all(f":{name}" in MERGE_SQL_014 for name in rows[0])
-    assert "ANSWER_BASIS" not in MERGE_SQL_014 and "DATA_TOOL_CALLS" in MERGE_SQL_014
-    assert (connection.rollbacks, connection.commits) == (2, 1)
-
-
-def test_upsert_keeps_writing_signals_before_the_data_tool_column_exists() -> None:
-    """migration 014 の前は、業務データの道具の列（と、その後に足した列）を除いて書く（#1834）。"""
-    connection = _Connection()
-    connection.missing_columns = {MERGE_SQL, MERGE_SQL_019, MERGE_SQL_014}
-
-    _oracle(connection).upsert([_fact("r1", tool_failures=1, data_tool_calls=3)])
-
-    [(sql, rows)] = connection.executed
-    assert sql == MERGE_SQL_012
-    assert "data_tool_calls" not in rows[0] and rows[0]["tool_failures"] == 1
-    assert "answer_basis" not in rows[0]
-    assert "data_tool_calls" not in connection.input_sizes[-1]
-    assert all(f":{name}" in MERGE_SQL_012 for name in rows[0])
-    assert "DATA_TOOL_CALLS" not in MERGE_SQL_012 and "ANSWER_OUTCOME" in MERGE_SQL_012
-    assert (connection.rollbacks, connection.commits) == (3, 1)
-
-
-def test_upsert_keeps_writing_facts_before_the_signal_columns_exist() -> None:
-    """システムテーブルを更新する（migration 012）までは、シグナルの列を除いて書く。"""
-    connection = _Connection()
-    connection.missing_columns = {MERGE_SQL, MERGE_SQL_019, MERGE_SQL_014, MERGE_SQL_012}
-
-    _oracle(connection).upsert([_fact("r1", tool_failures=1)])
-
-    [(sql, rows)] = connection.executed
-    assert sql == LEGACY_MERGE_SQL
-    assert SIGNAL_BINDS.isdisjoint(rows[0]) and SIGNAL_BINDS.isdisjoint(connection.input_sizes[-1])
-    assert all(f":{name}" in LEGACY_MERGE_SQL for name in rows[0])
-    assert "ANSWER_OUTCOME" not in LEGACY_MERGE_SQL
-    assert (connection.rollbacks, connection.commits) == (4, 1)
+    assert connection.executed == [] and connection.commits == 0
 
 
 def test_signal_report_is_aggregated_and_paged_in_sql() -> None:

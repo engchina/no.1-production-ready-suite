@@ -99,6 +99,9 @@ describe("起動時の認証の確認の失敗（#1061）", () => {
     );
     expect(host.textContent).toContain("一時的に利用できません。");
     expect(onIdentityChange).not.toHaveBeenCalledWith(null);
+    // AppShell の外で画面にこの失敗しか無いので、領域の帯ではなく画面全体の形で出す（#5929）。
+    const alert = host.querySelector('[data-testid="auth-session-error"] [role="alert"]');
+    expect(alert?.getAttribute("data-failure-layout")).toBe("page");
 
     const retry = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("再試行"));
     await act(async () => {
@@ -123,6 +126,10 @@ describe("起動時の認証の確認の失敗（#1061）", () => {
     expect(host.textContent).not.toContain("ログイン画面");
     expect(host.querySelector('[data-testid="auth-session-error"]')).not.toBeNull();
     expect(onIdentityChange).not.toHaveBeenCalled();
+    // 技術的な詳細（ブラウザの英語の文）は閉じた「詳細」の中。利用者が開く（#5929）。
+    const details = host.querySelector('[data-testid="auth-session-error"] [role="alert"] details');
+    expect(details?.textContent).toContain("Failed to fetch");
+    expect(details?.hasAttribute("open")).toBe(false);
   });
 
   it("401 は今までどおり未認証にしてログイン画面へ移す", async () => {

@@ -12,13 +12,16 @@ Run に依らず、ここは Run を読む（ツールの層 `tools.py` から�
 - 内容の誤りの返し方（`tool.invalid_arguments` と `argument_errors`。値を含まない）。
 - 値を文字として入れる表（Word・PowerPoint）の、列の引数の schema と、引数から列の定義と行の値を
   決める所（`TEXT_COLUMN_SCHEMA`・`text_table`）。
+- 種類で使う項目が決まる引数（Word のブロック・PowerPoint のスライド）の、要る項目の欠け・使わない
+  項目の値の誤り（`field_issues`）と、グラフの指定（`chart_spec`）。
+- ツールの handler の流れ（Run の確認・数の上限・内容の生成・保存。`create_run_file`）。
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from threading import Lock
-from typing import Any
+from typing import Any, Protocol, cast
 
 from app.features.agent.answer_data import DataIndex, DataReferenceError, data_index
 from app.features.agent.answer_data_projection import TableProjectionError, selected_positions
@@ -27,6 +30,7 @@ from app.features.agent.artifact_file_store import (
     FILE_RUN_CLOSED,
     save_tool_file,
 )
+from app.features.agent.chart_spec import ChartSpec
 from app.features.agent.table_columns import DATE_FORMATS, NUMBER_FORMATS, SpecIssue
 from app.features.agent.table_text import Column
 from app.features.agent.tool_arguments import INVALID_ARGUMENTS_CODE
@@ -302,6 +306,54 @@ def text_table(
     return columns, rows
 
 
+def chart_spec(raw: Mapping[str, Any]) -> ChartSpec:
+    """グラフの引数（種類・項目の列・系列の列）を、形式に依らないグラフの指定にする。"""
+    return ChartSpec(
+        type=raw["type"],
+        category_column=raw["category_column"],
+        series_columns=tuple(raw["series_columns"]),
+    )
+
+
+def field_issues(
+    at: str,
+    raw: Mapping[str, Any],
+    *,
+    unit: str,
+    target: str,
+    required: Sequence[str],
+    optional: Sequence[str],
+    unused_values: Mapping[str, str],
+) -> list[SpecIssue]:
+    """種類に合わない項目（要る項目が無い・使わない項目に値がある）。
+
+    `unit` は種類で分かれる単位（「ブロック」「スライド」）、`target` は作るもの（「文書」）。
+    `unused_values` は種類で分かれる項目と、使わないときの値の書き方。
+    """
+    kind = str(raw.get("type"))
+    issues: list[SpecIssue] = []
+    for name, unused_value in unused_values.items():
+        present = raw.get(name) not in (None, "", [])
+        if name in required and not present:
+            issues.append(
+                SpecIssue(
+                    f"{at}.{name}",
+                    "required",
+                    f"type が {kind} の{unit}では {name} を書いてください。",
+                )
+            )
+        elif name not in required and name not in optional and present:
+            issues.append(
+                SpecIssue(
+                    f"{at}.{name}",
+                    "conflict",
+                    f"type が {kind} の{unit}では {name} を{unused_value}にしてください"
+                    f"（この項目の内容は{target}に入りません）。",
+                )
+            )
+    return issues
+
+
 def check_file_count(run: Any, limit: int) -> None:
     """その Run のファイルの成果物が `limit` 個に達していたら `ExternalToolError`。"""
     count = sum(1 for artifact in run.artifacts if artifact.kind == FILE_ARTIFACT_KIND)
@@ -324,6 +376,35 @@ def save_run_file(
         return save_tool_file(run_id, file_name=file_name, mime_type=mime_type, data=data)
 
 
+class _SpecError(Protocol):
+    issues: Sequence[SpecIssue]
+
+
+def create_run_file(
+    run_id: str | None,
+    *,
+    mime_type: str,
+    build: Callable[[Any], tuple[str, bytes, dict[str, Any]]],
+    spec_errors: tuple[type[Exception], ...] = (),
+) -> dict[str, Any]:
+    """ファイルを作るツールの handler の流れ（Run の確認 → 数の上限 → 生成 → 保存）。
+
+    `build(run)` はファイル名・中身・結果の要約を返す。`spec_errors`（生成の本体の内容の誤り。
+    `issues` を持つ）は引数の誤りにする。上限は呼ぶたびに `MAX_FILES_PER_RUN` を読む（形式を
+    またいで同じ値）。結果は成果物の参照 `file` と要約。
+    """
+    run = running_run(run_id)
+    limit = MAX_FILES_PER_RUN
+    check_file_count(run, limit)
+    try:
+        file_name, data, summary = build(run)
+    except spec_errors as exc:
+        error = cast(_SpecError, exc)
+        raise invalid_content(error.issues) from exc
+    reference = save_run_file(run.id, limit, file_name=file_name, mime_type=mime_type, data=data)
+    return {"file": reference, **summary}
+
+
 __all__ = [
     "FILE_LIMIT_CODE",
     "FILE_OUTPUT_SCHEMA",
@@ -334,8 +415,11 @@ __all__ = [
     "SELECTOR_HELP",
     "TEXT_COLUMN_SCHEMA",
     "TEXT_FORMAT_HELP",
+    "chart_spec",
     "check_file_count",
     "column_header",
+    "create_run_file",
+    "field_issues",
     "invalid_content",
     "run_data_index",
     "running_run",

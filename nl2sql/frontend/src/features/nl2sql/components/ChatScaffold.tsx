@@ -137,7 +137,7 @@ export function Nl2SqlChatHistoryList<T extends Nl2SqlConversationItem>({
         list: t("chat.history"),
         loading: t("chat.historyLoading"),
         error: t("chat.historyLoadFailed"),
-        retry: t("chat.retry"),
+        retry: t("common.action.retry"),
         // 期間で絞った一覧の 0 件は期間を含めた文（3 製品共通。#2340）。
         empty: chatHistoryWindowLabels(page?.history_days)?.empty ?? t("chat.historyEmpty"),
       }}

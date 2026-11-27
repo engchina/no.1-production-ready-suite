@@ -183,3 +183,34 @@ class WikiOriginal(WikiGraphUnitRef):
     context: str
     possible_questions: list[str]
     unresolved: list[str]
+
+
+class WikiDocumentGraphNode(WikiGraphDocument):
+    """図の見本の文書。``reference_count`` は別の文書との参照の件数（出る・入るの合計）。"""
+
+    reference_count: int = 0
+
+
+class WikiDocumentLink(BaseModel):
+    """文書の間の参照（向き・種類ごとの件数）。"""
+
+    source_id: str
+    target_id: str
+    relation: WikiRelation
+    count: int
+
+
+class WikiDocumentGraph(BaseModel):
+    documents: list[WikiDocumentGraphNode] = Field(default_factory=list)
+    links: list[WikiDocumentLink] = Field(default_factory=list)
+    total: int = 0
+    offset: int = 0
+    has_more: bool = False
+
+
+class WikiUnitConnection(WikiNeighborConnection):
+    scope: WikiGraphScope
+
+
+class WikiUnitConnections(BaseModel):
+    connections: list[WikiUnitConnection] = Field(default_factory=list)

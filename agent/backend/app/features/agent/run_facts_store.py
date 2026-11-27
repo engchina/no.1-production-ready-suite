@@ -275,9 +275,6 @@ _SIGNAL_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (
 _DATA_TOOL_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (("data_tool_calls", "DATA_TOOL_CALLS"),)
 # 回答の対応を決めた手がかり（#5859。migration 019 で足した。「根拠を使わずに答えた」のシグナル）。
 _ANSWER_BASIS_MERGE_COLUMNS: tuple[tuple[str, str], ...] = (("answer_basis", "ANSWER_BASIS"),)
-ANSWER_BASIS_BINDS = frozenset(name for name, _column in _ANSWER_BASIS_MERGE_COLUMNS)
-DATA_TOOL_BINDS = frozenset(name for name, _column in _DATA_TOOL_MERGE_COLUMNS) | ANSWER_BASIS_BINDS
-SIGNAL_BINDS = frozenset(name for name, _column in _SIGNAL_MERGE_COLUMNS) | DATA_TOOL_BINDS
 
 
 def merge_sql(columns: Sequence[tuple[str, str]]) -> str:
@@ -299,14 +296,6 @@ def merge_sql(columns: Sequence[tuple[str, str]]) -> str:
     )
 
 
-MERGE_SQL_019 = merge_sql(
-    (
-        *_MERGE_COLUMNS,
-        *_SIGNAL_MERGE_COLUMNS,
-        *_DATA_TOOL_MERGE_COLUMNS,
-        *_ANSWER_BASIS_MERGE_COLUMNS,
-    )
-)
 MERGE_SQL = merge_sql(
     (
         *_MERGE_COLUMNS,
@@ -315,23 +304,6 @@ MERGE_SQL = merge_sql(
         *_ANSWER_BASIS_MERGE_COLUMNS,
         ("file_review_outcome", "FILE_REVIEW_OUTCOME"),
     )
-)
-# システムテーブルを更新するまでの古いテーブルへの MERGE（ORA-00904 のときだけ、新しい方から
-# 順に試す）。
-# 更新するまでの間も、利用状況・フィードバックと、あるだけのシグナルの事実を書き続ける。
-# migration 019 の前（回答の対応の手がかりの列が無い）。
-MERGE_SQL_014 = merge_sql((*_MERGE_COLUMNS, *_SIGNAL_MERGE_COLUMNS, *_DATA_TOOL_MERGE_COLUMNS))
-# migration 014 の前（業務データの道具の列が無い）。
-MERGE_SQL_012 = merge_sql((*_MERGE_COLUMNS, *_SIGNAL_MERGE_COLUMNS))
-# migration 012 の前（シグナルの列が無い）。
-LEGACY_MERGE_SQL = merge_sql(_MERGE_COLUMNS)
-# (SQL, 除く bind)。最新の形から古い形の順。
-MERGE_FALLBACKS: tuple[tuple[str, frozenset[str]], ...] = (
-    (MERGE_SQL, frozenset()),
-    (MERGE_SQL_019, frozenset({"file_review_outcome"})),
-    (MERGE_SQL_014, ANSWER_BASIS_BINDS | {"file_review_outcome"}),
-    (MERGE_SQL_012, DATA_TOOL_BINDS | {"file_review_outcome"}),
-    (LEGACY_MERGE_SQL, SIGNAL_BINDS | {"file_review_outcome"}),
 )
 
 # 利用量の集計の測度（Run 数・利用量を記録した Run 数・各量の合計）。
@@ -682,7 +654,7 @@ def _is_table_missing(exc: Exception) -> bool:
 
 
 def _is_column_missing(exc: Exception) -> bool:
-    """列が無い（ORA-00904。列を足す migration 012 / 014 / 019 の前のテーブル）。"""
+    """列が無い（ORA-00904。システムテーブルを更新する前のテーブル）。"""
     text = str(exc)
     return "ORA-00904" in text or "invalid identifier" in text
 
@@ -723,26 +695,9 @@ class OracleRunFactsStore:
         rows = [fact_binds(fact) for fact in facts]
         sizes = _merge_input_sizes()
         with self._connect() as connection:
-            for index, (sql, excluded) in enumerate(MERGE_FALLBACKS):
-                try:
-                    with connection.cursor() as cursor:
-                        cursor.setinputsizes(
-                            **{key: value for key, value in sizes.items() if key not in excluded}
-                        )
-                        cursor.executemany(
-                            sql,
-                            [
-                                {key: value for key, value in row.items() if key not in excluded}
-                                for row in rows
-                            ],
-                        )
-                    break
-                except Exception as exc:
-                    # システムテーブルの更新（migration 012 / 014 / 019 / 020）の前: 無い列を除いて
-                    # 書き直す。
-                    if index == len(MERGE_FALLBACKS) - 1 or not _is_column_missing(exc):
-                        raise
-                    connection.rollback()
+            with connection.cursor() as cursor:
+                cursor.setinputsizes(**sizes)
+                cursor.executemany(MERGE_SQL, rows)
             connection.commit()
 
     def _query(self, statements: Sequence[tuple[str, dict[str, Any]]]) -> list[list[Any]]:
@@ -766,7 +721,7 @@ class OracleRunFactsStore:
                         [tuple(_lob_text(v) if hasattr(v, "read") else v for v in r) for r in rows]
                     )
         except Exception as exc:
-            # システムテーブルの作成・更新（migration 012 / 014）の前は、保存した事実では集計
+            # システムテーブルの作成・更新の前は、保存した事実では集計
             # できない。
             if _is_table_missing(exc) or _is_column_missing(exc):
                 raise RunFactsUnavailableError(RUN_FACTS_TABLE) from exc
@@ -1133,12 +1088,7 @@ def flush(timeout: float = 5.0) -> bool:
 
 
 __all__ = [
-    "LEGACY_MERGE_SQL",
-    "MERGE_FALLBACKS",
     "MERGE_SQL",
-    "MERGE_SQL_012",
-    "MERGE_SQL_014",
-    "MERGE_SQL_019",
     "RUN_FACTS_TABLE",
     "USAGE_DIMENSIONS",
     "MemoryRunFactsStore",

@@ -2,7 +2,7 @@
 （#5837・#5867）。
 
 - 形式・大きさ・ファイル名の検査と、合わないファイルを保存しないこと（zip の署名は OOXML の
-  3 つだけ、Markdown は UTF-8 の文字）。
+  3 つだけ）。
 - 中身（バイト列・base64）が Run の JSON・一覧・イベント・ツールの結果・MCP の結果に載らないこと。
 - MCP の Run の結果に、ファイルの一覧（名前・形式・大きさ）と受け取り方が載ること。
 - ダウンロードの API は Run を見られる利用者だけ（ほかの利用者は Run の詳細と同じ 404）。
@@ -147,20 +147,19 @@ def test_too_large_and_invalid_content_are_rejected() -> None:
         assert invalid.value.code == "artifact.file_invalid"
 
 
-def test_markdown_is_checked_as_utf8_text_not_as_zip() -> None:
-    """Markdown は zip の署名を見ず、UTF-8 の文字か（と大きさ）だけを確かめる（#5867）。"""
+def test_markdown_is_not_checked_as_zip() -> None:
+    """Markdown は zip の署名を見ず、大きさだけを確かめる（#5867）。
+
+    UTF-8 にできない本文は、`markdown_create` が引数の誤りにする（`test_markdown_tool.py`）。
+    """
     text = "# 合成の題\n\n- 項目\n".encode()
     saved = checked_file("合成", MARKDOWN, text, max_bytes=len(text))
     assert (saved.file_name, saved.data) == ("合成.md", text)
-    # zip の署名で始まる中身も、UTF-8 の文字なら Markdown として保存できる。
+    # zip の署名で始まる中身も Markdown として保存できる。
     assert checked_file("a", MARKDOWN, b"PK\x03\x04 text", max_bytes=1_000).file_name == "a.md"
     with pytest.raises(ArtifactFileError) as too_large:
         checked_file("a", MARKDOWN, text, max_bytes=len(text) - 1)
     assert too_large.value.code == "artifact.file_too_large"
-    for data in (b"\xff\xfe", "合成".encode("shift_jis"), b"\xed\xa0\x80"):
-        with pytest.raises(ArtifactFileError) as invalid:
-            checked_file("a", MARKDOWN, data, max_bytes=1_000)
-        assert invalid.value.code == "artifact.file_invalid"
 
 
 def test_attachment_disposition_encodes_non_ascii_names() -> None:
