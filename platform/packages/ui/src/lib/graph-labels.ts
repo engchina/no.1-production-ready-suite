@@ -15,8 +15,3 @@ export const GRAPH_CANVAS_JA = {
   "minimap.ariaLabel": "グラフの小地図",
   "handle.ariaLabel": "接続点",
 };
-
-export const GRAPH_EXPLORATION_JA = {
-  focus: "選択を中心に表示",
-  previous: "前の表示に戻る",
-};

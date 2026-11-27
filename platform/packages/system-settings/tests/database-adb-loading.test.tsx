@@ -81,6 +81,7 @@ function apiWith(updateAdbSettings: DatabaseSettingsApi["updateAdbSettings"]): D
     updateAdbSettings,
     startAdb: never,
     stopAdb: never,
+    getAidpIntegration: never,
   };
 }
 

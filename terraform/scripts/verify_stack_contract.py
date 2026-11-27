@@ -1791,7 +1791,12 @@ def _verify_aidp(schema: str, variables: str, aidp: str, locals_source: str, out
     block = re.search(r"(?ms)^%\{if var\.deploy_aidp~\}\n(.*?)^%\{endif~\}\n", platform_env)
     if block is None:
         raise AssertionError("PLATFORM_AIDP_* must be written only when deploy_aidp is true")
-    if _env_keys(block.group(1)) != ["PLATFORM_AIDP_OCID", "PLATFORM_AIDP_REGION", "PLATFORM_AIDP_URL"]:
+    if _env_keys(block.group(1)) != [
+        "PLATFORM_AIDP_OCID",
+        "PLATFORM_AIDP_REGION",
+        "PLATFORM_AIDP_URL",
+        "PLATFORM_AIDP_DB_USER",
+    ]:
         raise AssertionError(f"platform/.env AIDP keys: {_env_keys(block.group(1))}")
     if "PLATFORM_AIDP_" in platform_env.replace(block.group(0), ""):
         raise AssertionError("PLATFORM_AIDP_* must stay inside the deploy_aidp block")

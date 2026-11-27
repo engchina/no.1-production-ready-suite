@@ -130,6 +130,9 @@ class AidpRenderingTests(unittest.TestCase):
         # 条件の block は heredoc の末尾で、外すと AIDP の行が残らない。
         self.assertTrue(body.endswith(block.group(0)))
         self.assertNotIn("AIDP", body.replace(block.group(0), ""))
+        # AIDP 用の DB ユーザーは名前だけを書く（システム設定 › データベースに出す。#5931）。パスワードは書かない。
+        self.assertIn("PLATFORM_AIDP_DB_USER=${local.aidp_db_user}\n", block.group(0))
+        self.assertNotIn("aidp_db_user_password", body)
 
     def test_props_file_is_written_only_with_aidp(self) -> None:
         bootstrap = (STACK / "cloud_init/bootstrap.template.yaml").read_text(encoding="utf-8")
