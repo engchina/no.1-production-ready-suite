@@ -980,9 +980,8 @@ export function AgentEditorView({
                       <FormGrid data-testid="agent-ungrounded-answer">
                         <SelectField
                           id={`${fieldId}-agent-ungrounded-answer-policy`}
-                          // 区画の見出しと同じ名前（見せるラベルは置かない）。
-                          label={t("agent.ungroundedAnswer.title")}
-                          labelHidden
+                          // フォームの欄なので見えるラベルを置く（区画の見出しの語は繰り返さない。#5948）。
+                          label={t("agent.ungroundedAnswer.policy")}
                           helper={ungroundedNotice ? t("agent.ungroundedAnswer.policyHint", { notice: ungroundedNotice }) : undefined}
                           width="lg"
                           value={ungroundedAnswerPolicy}

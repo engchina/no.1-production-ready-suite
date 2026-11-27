@@ -7,7 +7,9 @@ import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/sele
 // #5859: 業務 Agent の「資料・データで確かめていない回答」（資料・業務データのツールを 1 つも呼ばずに作った回答の扱い）。
 // - 設定の欄は「回答前の確認」の次の区画。資料・業務データのツールを宣言したスキル（スキルの一覧の `grounding`）を
 //   選んだときだけ出す。既定は「注意を付けて表示する」、もう 1 つは「表示せず「お答えできません」と返す」。
-//   版の項目なので、保存すると公開していない変更になる。欄の名前は区画の見出しと同じ（見せるラベルは置かない）。
+//   版の項目なので、保存すると公開していない変更になる。欄には見えるラベル（「利用者への表示」）を置く（フォームの欄の
+//   ラベルは隠さない。区画の見出しの語は繰り返さない。#5948）。
+//   拒答の設定は、回答に加えて、その実行で作成したファイルも表示しない（#5912）。案内の文にも書く。
 // - 案内の注意の文は backend の `GET /api/runtime/status` の `ungrounded_notice` を差し込む（文は backend だけが持つ）。
 // - 既定で出した回答は、本文はモデルのまま、回答の注意書きの先頭に注意を出す（backend が成果物の `notice` に足す）。
 // 内容はすべて合成のデータ。
@@ -60,12 +62,20 @@ test("業務 Agent の「資料・データで確かめていない回答」の�
   await expect(heading).toBeVisible();
 
   const policy = page.locator(`#${AGENT_ID}-agent-ungrounded-answer-policy`);
-  // 欄の名前は区画の見出しと同じ。汎用のラベル（「回答の扱い」）は置かない。
-  await expect(page.getByRole("combobox", { name: "資料・データで確かめていない回答" })).toBeVisible();
-  await expect(page.getByText("回答の扱い", { exact: true })).toHaveCount(0);
+  // 欄には見えるラベルを置く（区画の見出しと同じ文にしない。#5948）。
+  await expect(page.getByRole("combobox", { name: "利用者への表示", exact: true })).toBeVisible();
+  const label = page.locator(`label[for="${AGENT_ID}-agent-ungrounded-answer-policy"]`);
+  await expect(label).toHaveText("利用者への表示");
+  // 読み上げだけ（sr-only の 1px の箱）にしない。
+  await expect(label).not.toHaveClass(/sr-only/);
+  expect((await label.boundingBox())!.height).toBeGreaterThan(10);
   // 案内は backend の注意の文を差し込む。
   await expect(page.getByTestId("agent-ungrounded-answer")).toContainText(
     `注意を付ける: 回答の下に「${UNGROUNDED_NOTICE}」を表示します。`,
+  );
+  // 拒答は、回答と一緒に、その実行で作成したファイルも表示しない（#5912）。
+  await expect(page.getByTestId("agent-ungrounded-answer")).toContainText(
+    "お答えできません: 資料・データを調べずに作った回答と、作成したファイルは表示しません。",
   );
   // 項目の無い業務 Agent は既定（注意を付けて表示する）。
   await expectSelectFieldValue(policy, "annotate");
@@ -217,6 +227,10 @@ for (const viewport of VIEWPORTS) {
         "cardPaddingBottom",
         "controlLeft",
         "controlHeight",
+        // 見えるラベル（#5948）。隠したラベル（sr-only）は位置・間隔がそろわない。
+        "labelLeft",
+        "labelFont",
+        "labelToControl",
         "helperFont",
         "helperLeft",
         "controlToHelper",

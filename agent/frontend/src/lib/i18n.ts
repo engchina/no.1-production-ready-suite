@@ -1824,11 +1824,12 @@ const agentJa = {
   "agent.ungroundedAnswer.title": "資料・データで確かめていない回答",
   "agent.ungroundedAnswer.description":
     "資料・業務データのツールを 1 つも呼ばずに作った回答を、利用者に出すかを決めます。チャット・品質評価・自動実行の回答に使います。",
+  "agent.ungroundedAnswer.policy": "利用者への表示",
   "agent.ungroundedAnswer.policy.annotate": "注意を付けて表示する",
   "agent.ungroundedAnswer.policy.refuse": "表示せず「お答えできません」と返す",
   // {notice} は backend の注意の文（GET /api/runtime/status の ungrounded_notice）。
   "agent.ungroundedAnswer.policyHint":
-    "注意を付ける: 回答の下に「{notice}」を表示します。／お答えできません: 資料・データを調べずに作った回答は表示しません。",
+    "注意を付ける: 回答の下に「{notice}」を表示します。／お答えできません: 資料・データを調べずに作った回答と、作成したファイルは表示しません。",
   "agent.dataScope.description":
     "この業務 Agent が使えるプロファイルを決めます。選んだ範囲の外は実行時に使えません（利用者が使えないプロファイルは、範囲に入れても使えません）。",
   "agent.dataScope.nl2sql.title": "データ問い合わせ（NL2SQL）",
