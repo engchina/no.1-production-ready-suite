@@ -6,6 +6,9 @@ platform/deploy/suite-init.sh が、製品の配備（各製品の system schema
   python suite-db-user.py apply --admin-env <props/adb_admin.env> --app-env <props/platform.env> \
       --wallet-dir <Wallet を展開した directory> [--current-env <repository の platform/.env>]
   python suite-db-user.py plan [--app-user ADB_APP_USER]   # 実行する SQL を表示する（パスワードは出さない。DB に繋がない）
+  python suite-db-user.py apply-aidp --aidp-env <props/adb_aidp_user.env> --app-env <props/platform.env> \
+      --wallet-dir <Wallet を展開した directory>            # Oracle AI Data Platform 用の DB ユーザー（#5917）
+  python suite-db-user.py plan-aidp [--aidp-user ADB_AIDP_USER] [--read-only]
 
 - 冪等: ユーザーが無ければ CREATE USER、あれば profile・quota を合わせ、アプリのパスワードで接続できなければ
   パスワードを合わせて lock を外す。grant は毎回付け直す（付いていれば何も変わらない）。
@@ -13,6 +16,10 @@ platform/deploy/suite-init.sh が、製品の配備（各製品の system schema
   Autonomous AI Database では ADMIN が DBA を持たず、GRANT DBA は PDB_DBA に読み替えられるため、PDB_DBA を付ける。
   PDB_DBA に無い Deep Data Security の 3 つの system privilege（Data Grant の作成・DATA ROLE の付与・
   USE DATA GRANTS ONLY）を足す。表領域は QUOTA UNLIMITED ON DATA。
+- Oracle AI Data Platform（AIDP）用のユーザー（#5917）は、AIDP の External Catalog が ADB に接続するためのユーザー。
+  アプリ用のユーザー（PDB_DBA）を AIDP に渡さないために分ける。付ける権限は AIDP_USER_GRANTS（公式文書の
+  External Catalog の最小の権限）と、書き込みを許すときの DWROLE・表領域の quota（自分の schema にだけ書ける）。
+  ほかの schema・3 製品のシステムの表への権限は付けない。
 - パスワードは環境変数・引数で受け取らず、root だけが読める props のファイルから読む（process の一覧に出さない）。
   SQL の log・失敗の表示にはパスワードを出さない。
 - 失敗したら ORA の番号と手がかりを出して 1 で終わる（suite-init.sh が配備を失敗にする）。
@@ -24,6 +31,8 @@ import argparse
 import re
 import sys
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +65,14 @@ REQUIRED_SESSION_PRIVS = (
     "ADMINISTER ANY DATA GRANT",
     "SET USE DATA GRANTS ONLY",
 )
+# Oracle AI Data Platform の External Catalog の接続のユーザーに付ける権限（#5917。公式文書「External Catalogs」の
+# 最小の権限。対象の SELECT は自分の schema だけなので足さない）。
+AIDP_USER_GRANTS = (
+    "GRANT CREATE SESSION TO {user}",
+    "GRANT READ, WRITE ON DIRECTORY DATA_PUMP_DIR TO {user}",
+)
+# 書き込み（INSERT・表の作成）に要る role（公式文書）。書き込みを許さないときは外す。
+AIDP_WRITE_ROLE = "DWROLE"
 # 1 回の接続の TCP の接続の上限（秒）。DB の停止中・届かないときに長く待たない（#1779）。待てば直りうる失敗は
 # connect_admin が connect_wait_seconds の間隔で試し直す。
 CONNECT_TCP_TIMEOUT_SECONDS = 10.0
@@ -69,9 +86,9 @@ HINTS = {
     "ORA-01017": "ADMIN のパスワード（新規の ADB は adb_password、既存の ADB は existing_adb_admin_password）が違います。",
     "ORA-28000": "ADMIN が lock されています。OCI のコンソールで ADMIN のパスワードを設定し直してください。",
     "ORA-01031": "権限が足りません。ADMIN で接続しているか確かめてください。",
-    "ORA-01920": "同じ名前の role があります。adb_app_user_name を変えてください。",
+    "ORA-01920": "同じ名前の role があります。ユーザーの名前（adb_app_user_name / aidp_db_user_name）を変えてください。",
     "ORA-28003": "パスワードが ADB の規則（12〜30 文字・大文字・小文字・数字を含む・ユーザー名を含まない）を満たしていません。",
-    "ORA-28007": "以前に使ったパスワードは使えません。adb_app_user_password を変えてください。",
+    "ORA-28007": "以前に使ったパスワードは使えません。パスワード（adb_app_user_password / aidp_db_user_password）を変えてください。",
     "ORA-01950": "表領域 DATA の quota がありません。",
     "ORA-00959": "表領域 DATA がありません（Autonomous AI Database ではない DB です）。",
     "DPY-6005": "ADB に接続できません。ADB が起動しているか、ACL・プライベート・エンドポイント（TCP 1522）で Compute から到達できるか確かめてください。",
@@ -201,6 +218,36 @@ def plan_statements(user: str, *, create: bool, profile: str = APP_PROFILE) -> l
     return statements
 
 
+def plan_aidp_statements(user: str, *, create: bool, write: bool, profile: str = APP_PROFILE) -> list[str]:
+    """AIDP 用のユーザーの DDL / GRANT（パスワードは <password>）。書き込みを許さなければ quota 0・DWROLE なし。"""
+    quota = "UNLIMITED" if write else "0"
+    head = (
+        f'CREATE USER {user} IDENTIFIED BY "<password>" DEFAULT TABLESPACE {APP_TABLESPACE} '
+        if create
+        else f"ALTER USER {user} DEFAULT TABLESPACE {APP_TABLESPACE} "
+    )
+    statements = [f"{head}QUOTA {quota} ON {APP_TABLESPACE} PROFILE {profile}"]
+    statements.extend(grant.format(user=user) for grant in AIDP_USER_GRANTS)
+    if write:
+        statements.append(f"GRANT {AIDP_WRITE_ROLE} TO {user}")
+    return statements
+
+
+@dataclass(frozen=True)
+class UserSpec:
+    """作るユーザーの 1 つ分（アプリ用 / AIDP 用）。違いは権限と、log・失敗の案内に出す入力の名前だけ。"""
+
+    user: str
+    password: str
+    kind: str  # log に出す種類（「アプリ用のユーザー」など）
+    name_input: str  # 名前を変えるときの stack の入力
+    password_source: str  # パスワードの出どころ（log 用）
+    statements: Callable[[bool, str], list[str]]  # (無ければ作るか, profile) -> DDL / GRANT
+    required_privs: tuple[str, ...]  # 付けた後に、そのユーザーの session で効いていることを確かめる権限
+    summary: str  # OK の行の括弧の中（profile の後）
+    revoke_roles: tuple[str, ...] = ()  # 付いていれば外す role（設定を変えて要らなくなった権限）
+
+
 class Provisioner:
     def __init__(
         self,
@@ -311,8 +358,6 @@ def apply(args: argparse.Namespace, oracledb: Any) -> int:
     dsn = app_env.get("PLATFORM_ORACLE_DSN", "").strip()
     if not dsn:
         raise SuiteDbUserError(f"{args.app_env} に PLATFORM_ORACLE_DSN がありません。")
-    secrets = (admin_password, app_password)
-
     provisioner = Provisioner(
         oracledb,
         dsn=dsn,
@@ -321,7 +366,66 @@ def apply(args: argparse.Namespace, oracledb: Any) -> int:
         connect_attempts=args.connect_attempts,
         connect_wait_seconds=args.connect_wait_seconds,
     )
-    log(f"{admin_user} で接続し、アプリ用のユーザー {app_user} を準備します（DSN {dsn}）。")
+    spec = UserSpec(
+        user=app_user,
+        password=app_password,
+        kind="アプリ用のユーザー",
+        name_input="adb_app_user_name",
+        password_source="PLATFORM_ORACLE_PASSWORD",
+        statements=lambda create, profile: plan_statements(app_user, create=create, profile=profile),
+        required_privs=REQUIRED_SESSION_PRIVS,
+        summary=f"quota UNLIMITED ON {APP_TABLESPACE}",
+    )
+    return provision(provisioner, admin_user, admin_password, spec)
+
+
+def apply_aidp(args: argparse.Namespace, oracledb: Any) -> int:
+    """Oracle AI Data Platform の External Catalog の接続のユーザーを作る（#5917）。"""
+    aidp_env = read_env_file(Path(args.aidp_env))
+    app_env = read_env_file(Path(args.app_env))
+    admin_user = normalize_admin(aidp_env.get("SUITE_DB_ADMIN_USER", "ADMIN"))
+    admin_password = aidp_env.get("SUITE_DB_ADMIN_PASSWORD", "")
+    check_password(admin_password, label="ADMIN のパスワード（SUITE_DB_ADMIN_PASSWORD）")
+    aidp_user = normalize_user(aidp_env.get("SUITE_DB_AIDP_USER", ""), label="AIDP 用のユーザー（SUITE_DB_AIDP_USER）")
+    # 3 製品の接続のユーザー（システムの表の schema）を AIDP に渡さない。
+    if aidp_user == app_env.get("PLATFORM_ORACLE_USER", "").strip().upper():
+        raise SuiteDbUserError(
+            f"AIDP 用のユーザー（{aidp_user}）が 3 製品の接続のユーザー（PLATFORM_ORACLE_USER）と同じです。"
+            "aidp_db_user_name を変えてください。"
+        )
+    aidp_password = aidp_env.get("SUITE_DB_AIDP_PASSWORD", "")
+    check_password(aidp_password, label="AIDP 用のユーザーのパスワード（SUITE_DB_AIDP_PASSWORD）", user=aidp_user)
+    write = aidp_env.get("SUITE_DB_AIDP_WRITE", "true").strip().lower() == "true"
+    dsn = app_env.get("PLATFORM_ORACLE_DSN", "").strip()
+    if not dsn:
+        raise SuiteDbUserError(f"{args.app_env} に PLATFORM_ORACLE_DSN がありません。")
+    provisioner = Provisioner(
+        oracledb,
+        dsn=dsn,
+        wallet_dir=args.wallet_dir,
+        wallet_password=app_env.get("PLATFORM_ORACLE_WALLET_PASSWORD", "") or app_env.get("PLATFORM_ORACLE_PASSWORD", ""),
+        connect_attempts=args.connect_attempts,
+        connect_wait_seconds=args.connect_wait_seconds,
+    )
+    spec = UserSpec(
+        user=aidp_user,
+        password=aidp_password,
+        kind="AIDP 用のユーザー",
+        name_input="aidp_db_user_name",
+        password_source="SUITE_DB_AIDP_PASSWORD",
+        statements=lambda create, profile: plan_aidp_statements(aidp_user, create=create, write=write, profile=profile),
+        required_privs=("CREATE SESSION", "CREATE TABLE") if write else ("CREATE SESSION",),
+        summary=f"自分の schema への書き込み {'あり' if write else 'なし'}",
+        revoke_roles=() if write else (AIDP_WRITE_ROLE,),
+    )
+    return provision(provisioner, admin_user, admin_password, spec)
+
+
+def provision(provisioner: Provisioner, admin_user: str, admin_password: str, spec: UserSpec) -> int:
+    """ADMIN で接続してユーザーを作り（あれば合わせ）、権限を付け、そのユーザーで接続して確かめる。"""
+    user, password = spec.user, spec.password
+    secrets = (admin_password, password)
+    log(f"{admin_user} で接続し、{spec.kind} {user} を準備します（DSN {provisioner.dsn}）。")
     connection = provisioner.connect_admin(admin_user, admin_password)
     try:
         cursor = connection.cursor()
@@ -337,46 +441,56 @@ def apply(args: argparse.Namespace, oracledb: Any) -> int:
         existing = fetch_one(
             cursor,
             "SELECT ACCOUNT_STATUS, ORACLE_MAINTAINED FROM DBA_USERS WHERE USERNAME = :username",
-            {"username": app_user},
+            {"username": user},
         )
         if existing and str(existing[1]).upper() == "Y":
-            raise SuiteDbUserError(f"{app_user} は Oracle の管理のユーザーです。adb_app_user_name を変えてください。")
-        statements = plan_statements(app_user, create=existing is None, profile=profile)
-        first = statements[0].replace('"<password>"', f'"{app_password}"')
+            raise SuiteDbUserError(f"{user} は Oracle の管理のユーザーです。{spec.name_input} を変えてください。")
+        statements = spec.statements(existing is None, profile)
+        first = statements[0].replace('"<password>"', f'"{password}"')
         execute(cursor, first, *secrets)
         log(mask(first, *secrets) + "（" + ("作成" if existing is None else f"既存。状態 {existing[0]}") + "）")
         if existing is not None:
-            failure = provisioner.try_login(app_user, app_password)
+            failure = provisioner.try_login(user, password)
             if failure in LOGIN_REPAIRABLE_ERRORS:
-                execute(cursor, f'ALTER USER {app_user} IDENTIFIED BY "{app_password}" ACCOUNT UNLOCK', *secrets)
+                execute(cursor, f'ALTER USER {user} IDENTIFIED BY "{password}" ACCOUNT UNLOCK', *secrets)
                 # ORA_APP_PROFILE は PASSWORD_ROLLOVER_TIME（既定 90 日）のあいだ古いパスワードでも接続できる。
                 # 合わせた後は新しいパスワードだけにする（古い値が漏れて変えた場合に備える）。
                 if profile == APP_PROFILE:
-                    execute(cursor, f"ALTER USER {app_user} EXPIRE PASSWORD ROLLOVER PERIOD", *secrets)
-                log(f"{app_user} のパスワードを PLATFORM_ORACLE_PASSWORD に合わせ、lock を外しました（{failure}）。")
+                    execute(cursor, f"ALTER USER {user} EXPIRE PASSWORD ROLLOVER PERIOD", *secrets)
+                log(f"{user} のパスワードを {spec.password_source} に合わせ、lock を外しました（{failure}）。")
             elif failure:
-                raise SuiteDbUserError(f"{app_user} の接続の確認が失敗しました（{failure}）。", code=failure)
+                raise SuiteDbUserError(f"{user} の接続の確認が失敗しました（{failure}）。", code=failure)
         for statement in statements[1:]:
             execute(cursor, statement, *secrets)
             log(statement)
+        # 設定を変えて要らなくなった role は、付いていれば外す（付いたままにしない）。
+        for role in spec.revoke_roles:
+            granted_role = fetch_one(
+                cursor,
+                "SELECT COUNT(*) FROM DBA_ROLE_PRIVS WHERE GRANTEE = :username AND GRANTED_ROLE = :role",
+                {"username": user, "role": role},
+            )
+            if granted_role and int(granted_role[0]) > 0:
+                execute(cursor, f"REVOKE {role} FROM {user}", *secrets)
+                log(f"REVOKE {role} FROM {user}")
     finally:
         connection.close()
 
-    # アプリのパスワードで接続でき、権限が効いていることを確かめる（3 製品と同じ接続）。
-    failure = provisioner.try_login(app_user, app_password)
+    # そのユーザーのパスワードで接続でき、権限が効いていることを確かめる（利用する側と同じ接続）。
+    failure = provisioner.try_login(user, password)
     if failure:
-        raise SuiteDbUserError(f"{app_user} で接続できません（{failure}）。{HINTS.get(failure, '')}", code=failure)
-    check = provisioner.connect(app_user, app_password)
+        raise SuiteDbUserError(f"{user} で接続できません（{failure}）。{HINTS.get(failure, '')}", code=failure)
+    check = provisioner.connect(user, password)
     try:
         cursor = check.cursor()
         cursor.execute("SELECT PRIVILEGE FROM SESSION_PRIVS", {})
         granted = {str(row[0]) for row in cursor.fetchall()}
     finally:
         check.close()
-    missing = sorted(set(REQUIRED_SESSION_PRIVS) - granted)
+    missing = sorted(set(spec.required_privs) - granted)
     if missing:
-        raise SuiteDbUserError(f"{app_user} に権限が付いていません: {', '.join(missing)}。")
-    log(f"OK: {app_user} で接続でき、権限が付いています（profile {profile}、quota UNLIMITED ON {APP_TABLESPACE}）。")
+        raise SuiteDbUserError(f"{user} に権限が付いていません: {', '.join(missing)}。")
+    log(f"OK: {user} で接続でき、権限が付いています（profile {profile}、{spec.summary}）。")
     return 0
 
 
@@ -400,6 +514,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     plan_parser = sub.add_parser("plan", help="実行する SQL を表示する（DB に繋がない）")
     plan_parser.add_argument("--app-user", default="ADB_APP_USER")
     plan_parser.add_argument("--existing", action="store_true", help="既にユーザーがあるときの SQL")
+    aidp_parser = sub.add_parser("apply-aidp", help="ADMIN で接続し、Oracle AI Data Platform 用のユーザーを作る")
+    aidp_parser.add_argument(
+        "--aidp-env", required=True, help="SUITE_DB_ADMIN_USER / _PASSWORD / SUITE_DB_AIDP_USER / _PASSWORD / _WRITE"
+    )
+    aidp_parser.add_argument("--app-env", required=True, help="PLATFORM_ORACLE_*（cloud-init の platform.env）")
+    aidp_parser.add_argument("--wallet-dir", default="", help="Wallet（tnsnames.ora・ewallet.pem）の directory")
+    aidp_parser.add_argument("--connect-attempts", type=int, default=5)
+    aidp_parser.add_argument("--connect-wait-seconds", type=float, default=20.0)
+    plan_aidp_parser = sub.add_parser("plan-aidp", help="AIDP 用のユーザーの SQL を表示する（DB に繋がない）")
+    plan_aidp_parser.add_argument("--aidp-user", default="ADB_AIDP_USER")
+    plan_aidp_parser.add_argument("--existing", action="store_true", help="既にユーザーがあるときの SQL")
+    plan_aidp_parser.add_argument("--read-only", action="store_true", help="書き込みを許さないときの SQL")
     return parser.parse_args(argv)
 
 
@@ -411,9 +537,14 @@ def main(argv: list[str] | None = None) -> int:
             for statement in plan_statements(user, create=not args.existing):
                 print(statement + ";")
             return 0
+        if args.command == "plan-aidp":
+            user = normalize_user(args.aidp_user, label="--aidp-user")
+            for statement in plan_aidp_statements(user, create=not args.existing, write=not args.read_only):
+                print(statement + ";")
+            return 0
         import oracledb  # noqa: PLC0415 - plan では要らない（uv run --with oracledb で渡す）
 
-        return apply(args, oracledb)
+        return apply_aidp(args, oracledb) if args.command == "apply-aidp" else apply(args, oracledb)
     except SuiteDbUserError as exc:
         log(f"NG{'（' + exc.code + '）' if exc.code else ''}: {exc}")
         return 1

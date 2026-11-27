@@ -17,6 +17,8 @@
 #   assign_public_ip.txt（true / false）
 #   platform.env（3 製品で共通の platform/.env）・<製品>.backend.env（各製品の backend/.env）・rag_services.txt・wallet.zip など
 #   adb_admin.env（アプリ用の DB ユーザーを使うときだけ。ADMIN のパスワードとアプリ用のユーザーの名前。root の 0600。#1668）
+#   adb_aidp_user.env（Oracle AI Data Platform を配備するときだけ。ADMIN のパスワードと AIDP 用の DB ユーザーの名前・
+#     パスワード・書き込みの可否。root の 0600。#5917）
 #
 # アプリ用の DB ユーザー（#1668）: adb_admin.env があれば、製品の配備（各製品の system schema の初期化）の前に、
 # この Compute から ADMIN で ADB に接続し、アプリ用のユーザーを作って権限を付ける（platform/deploy/suite-db-user.py）。
@@ -392,12 +394,41 @@ suite_install_uv() {
 # main は製品の配備と起動を続ける（#1756。ユーザーが無ければ製品は DB に接続できないが、画面は開ける）。
 # log の最後の行（[suite-db-user] OK / NG）が結果。
 provision_db_app_user() {
-  local admin_env="${PROPS_DIR}/adb_admin.env" wallet_dir status=0
+  local admin_env="${PROPS_DIR}/adb_admin.env" status=0
   if [ ! -f "${admin_env}" ]; then
     log "db user: ${admin_env} がありません。アプリ用の DB ユーザーは作りません（platform/.env の PLATFORM_ORACLE_USER で接続します）。"
     return 0
   fi
   chmod 0600 "${admin_env}"
+  run_suite_db_user apply --admin-env "${admin_env}" --current-env "${SUITE_REPO_DIR}/platform/.env" || status=$?
+  if [ "${status}" -ne 0 ]; then
+    log "check: db user NG（ADMIN でアプリ用の DB ユーザーを作れませんでした。上の [suite-db-user] NG の行を見てください）。"
+    return "${status}"
+  fi
+  log "check: db user OK"
+}
+
+# Oracle AI Data Platform 用の DB ユーザー（#5917）。props の adb_aidp_user.env が無ければ（deploy_aidp=false）何もしない。
+# AIDP の External Catalog が ADB に接続するためのユーザーで、3 製品は使わない（platform/.env に書かない）。
+# 失敗しても製品の配備と起動は続ける（アプリ用の DB ユーザーと同じ。#1756）。
+provision_db_aidp_user() {
+  local aidp_env="${PROPS_DIR}/adb_aidp_user.env" status=0
+  if [ ! -f "${aidp_env}" ]; then
+    return 0
+  fi
+  chmod 0600 "${aidp_env}"
+  run_suite_db_user apply-aidp --aidp-env "${aidp_env}" || status=$?
+  if [ "${status}" -ne 0 ]; then
+    log "check: aidp db user NG（ADMIN で Oracle AI Data Platform 用の DB ユーザーを作れませんでした。上の [suite-db-user] NG の行を見てください）。"
+    return "${status}"
+  fi
+  log "check: aidp db user OK"
+}
+
+# suite-db-user.py を、props の Wallet を root だけが読める一時の directory に展開して実行する。
+# $@: subcommand とその引数（接続先の --app-env と --wallet-dir はここで付ける）。
+run_suite_db_user() {
+  local wallet_dir status=0
   suite_install_uv
   wallet_dir="$(mktemp -d "${PROPS_DIR}/.db-user-wallet.XXXXXX")"
   chmod 0700 "${wallet_dir}"
@@ -406,17 +437,11 @@ provision_db_app_user() {
   fi
   UV_PYTHON_INSTALL_DIR="${SUITE_UV_PYTHON_INSTALL_DIR}" uv run --no-project --python "${SUITE_DB_USER_PYTHON_VERSION}" \
     --with "oracledb==${SUITE_DB_USER_ORACLEDB_VERSION}" \
-    python "${SUITE_DEPLOY_DIR}/suite-db-user.py" apply \
-    --admin-env "${admin_env}" \
+    python "${SUITE_DEPLOY_DIR}/suite-db-user.py" "$@" \
     --app-env "${PROPS_DIR}/platform.env" \
-    --current-env "${SUITE_REPO_DIR}/platform/.env" \
     --wallet-dir "${wallet_dir}" || status=$?
   rm -rf -- "${wallet_dir}"
-  if [ "${status}" -ne 0 ]; then
-    log "check: db user NG（ADMIN でアプリ用の DB ユーザーを作れませんでした。上の [suite-db-user] NG の行を見てください）。"
-    return "${status}"
-  fi
-  log "check: db user OK"
+  return "${status}"
 }
 
 # 製品の init_script.sh に渡す環境変数（1 行に 1 つ）。
@@ -626,6 +651,14 @@ report_urls() {
   if https_enabled; then
     log "  CA certificate: ${base}/platform/ca.crt (import it as a trusted root CA on client PCs)"
   fi
+  # Oracle AI Data Platform（任意。#5917）。共通の設定に URL があるときだけ出す。
+  local file aidp_url=""
+  for file in "${SUITE_REPO_DIR}/platform/.env" "${PROPS_DIR}/platform.env"; do
+    if aidp_url="$(suite_env_value "${file}" PLATFORM_AIDP_URL)" && [ -n "${aidp_url}" ]; then
+      log "  Oracle AI Data Platform: ${aidp_url} (External Catalog の登録に要る値は stack の output の aidp_external_catalog_info)"
+      break
+    fi
+  done
 }
 
 main() {
@@ -643,6 +676,11 @@ main() {
   if ! provision_db_app_user; then
     SUITE_DB_USER_FAILED=true
     log "WARNING: アプリ用の DB ユーザーを準備できませんでした。製品の配備と起動は続けます（DB に接続できるようになったら sudo ${SUITE_DEPLOY_DIR}/suite-restart.sh を実行してください）。"
+  fi
+  # Oracle AI Data Platform 用の DB ユーザー（#5917）。3 製品は使わないが、失敗は配備の失敗として返す。
+  if ! provision_db_aidp_user; then
+    SUITE_DB_USER_FAILED=true
+    log "WARNING: Oracle AI Data Platform 用の DB ユーザーを準備できませんでした。製品の配備と起動は続けます。"
   fi
   # 公開の URL（API キーの画面の接続先。#1870）は backend の起動（製品の配備）の前に platform/.env へ書く。
   configure_public_base_url
