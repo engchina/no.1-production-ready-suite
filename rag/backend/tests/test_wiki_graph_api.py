@@ -122,7 +122,14 @@ class FakeOracle:
                 and src != dep.unit_id
                 and page.unit.document_id == by_id[dep.unit_id].unit.document_id
             ]
-        if "selected_page AS" in statement:
+        if "SELECT page_id,document_id FROM visible WHERE unit_id=" in statement:
+            uid = binds["graph_unit"]
+            return (
+                [{"page_id": uid, "document_id": by_id[uid].unit.document_id}]
+                if uid in by_id
+                else []
+            )
+        if "SELECT 'outgoing' AS direction" in statement:
             uid = binds["graph_unit"]
             result = []
             for page in by_id.values():
@@ -147,11 +154,11 @@ class FakeOracle:
                 }
                 for page in by_id.values()
             ]
-        if "u.unit_id=:graph_unit" in statement:
+        if "WHERE page_id=:graph_page ORDER BY ordinal" in statement:
             return [
                 {"target_name": name, "target_section": section, "relation": relation}
                 for source, name, section, relation in REFERENCES
-                if source == binds["graph_unit"] and source in by_id
+                if source == binds["graph_page"] and source in by_id
             ]
         if "r.target_key" in statement:
             keys = {value for key, value in binds.items() if key.startswith("graph_ref_key")}

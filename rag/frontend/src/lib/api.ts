@@ -1297,6 +1297,9 @@ export interface WikiGraphTreeNode {
   outgoing: WikiGraphEdge[];
   /** 単位の案内の要約（AI が作った検索用の文）。章節は空。 */
   summary: string;
+  excerpt?: string;
+  page?: number | string | null;
+  line?: number | string | null;
 }
 export interface WikiGraphTreePage {
   items: WikiGraphTreeNode[];

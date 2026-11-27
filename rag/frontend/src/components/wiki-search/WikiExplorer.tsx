@@ -25,11 +25,9 @@ import {
   OffsetPagination,
   ListSkeleton,
   ProcessingIndicator,
-  REFRESH_REVEAL_DELAY_MS,
   staleContentClass,
   SideSheet,
   Skeleton,
-  TimedLoadingState,
   useMediaQuery,
 } from "@production-ready/ui";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
@@ -74,16 +72,6 @@ interface Props {
 const RESULT_PAGE = 5;
 // 一覧と詳細を左右に並べても図の操作領域を保てる幅。サイドバーを除いた実寸で判定する。
 const SPLIT_MIN_WIDTH = 768;
-function Busy({ name, label, large = false }: { name: string; label: string; large?: boolean }) {
-  return (
-    <TimedLoadingState label={label} operationKey={name} testId={"wiki-wait-" + name}>
-      {large ? <div className="min-h-80"><ListSkeleton rows={{ base: 5, md: 5 }} /></div> : <Skeleton className="h-20 w-full" />}
-    </TimedLoadingState>
-  );
-}
-function Refresh({ name, label }: { name: string; label: string }) {
-  return <ProcessingIndicator active label={label} operationKey={name} revealDelayMs={REFRESH_REVEAL_DELAY_MS} reserveSlowLine={false} testId={"wiki-refresh-" + name} />;
-}
 function Failed({ error, retry }: { error: unknown; retry: () => void }) {
   return <ApiErrorState error={error} fallback={t("wiki.graph.error")} onRetry={retry} />;
 }
@@ -380,12 +368,23 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   const section = node?.kind === "unit" ? relationQuery : childQuery;
   const showSheet = small && sheet;
   const needsGraph = view === "graph" && root?.kind === "unit";
-  const graphPending = needsGraph && (rootOriginal.isPending || firstRing.isPending);
-  const graphError = needsGraph && (rootOriginal.isError || firstRing.isError);
+  const graphPending = needsGraph && (
+    (rootOriginal.isPending && !rootOriginal.isFetched) || (firstRing.isPending && !firstRing.isFetched)
+  );
   const detailRequest = node?.kind === "unit" && tab !== "relations" ? detail : section;
   const detailLabel = t(node?.kind === "unit" && tab !== "relations" ? "wiki.search.loadingSource" : "wiki.search.loadingRelations");
   const listLabel = t(search ? "wiki.search.loadingHits" : "wiki.search.loadingDocs");
   const reloadList = mainResult.isFetching && !!mainResult.data;
+  const detailVisible = !edge && !!node && (small ? sheet : inspector);
+  const panelError = detailVisible ? detailRequest.error : null;
+  const graphFailure = [firstRing, rootOriginal].find(q => needsGraph && q.isError && q.error !== panelError);
+  const workingLabel = mainResult.isFetching ? listLabel
+    : loadingWhole || (needsGraph && (firstRing.isFetching || rootOriginal.isFetching)) ? t("wiki.search.loadingRelations")
+    : detailVisible && detailRequest.isFetching ? detailLabel : undefined;
+  const progress = workingLabel && (
+    <ProcessingIndicator active label={workingLabel} testId="wiki-wait-results"
+      reserveSlowLine={false} />
+  );
   let columns = "grid-cols-1";
   if (!small && view === "graph") {
     columns = search && !showResults
@@ -420,17 +419,10 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
       collapse={activeBranches.some((b) => b.owner === node.id) ? collapse : undefined}
       picks={picks}
       toggle={toggle}
-      loading={detailRequest.isPending
-        ? (graphPending && !showSheet ? <Skeleton className="h-20 w-full" /> : <Busy name="detail" label={detailLabel} />)
-        : detailRequest.isFetching && <Refresh name="detail" label={detailLabel} />}
-      error={
-        <>
-          {node.kind === "unit" && detail.isError && (
-            <Failed error={detail.error} retry={() => void detail.refetch()} />
-          )}
-          {section.isError && <Failed error={section.error} retry={() => void section.refetch()} />}
-        </>
-      }
+      loading={detailRequest.isPending && <Skeleton className="h-20 w-full" />}
+      error={detailRequest.isError && (
+        <Failed error={detailRequest.error} retry={() => void detailRequest.refetch()} />
+      )}
     />
   ) : null;
   const left = (
@@ -605,10 +597,10 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
             </div>
           </Disclosure>
         )}
-        {reloadList && <Refresh name="results" label={listLabel} />}
+        {!showSheet && progress}
         {mainResult.isError && mainResult.data && <Failed error={mainResult.error} retry={() => void mainResult.refetch()} />}
         {mainResult.isPending ? (
-          <Busy name="results" label={listLabel} large />
+          <div className="min-h-80 p-3"><ListSkeleton rows={{ base: 5, md: 5 }} /></div>
         ) : mainResult.isError && !mainResult.data ? (
           <Failed error={mainResult.error} retry={() => void mainResult.refetch()} />
         ) : !rows.length && offset > 0 ? (
@@ -623,12 +615,10 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
             {listVisible && left}
             {view === "graph" && (
               <div ref={graphPane} className="flex min-h-0 min-w-0 flex-col">
-                {loadingWhole && <Refresh name="all-neighbors" label={t("wiki.search.loadingRelations")} />}
+                {graphFailure && <Failed error={graphFailure.error} retry={() => void graphFailure.refetch()} />}
                 {failedWhole && <Failed error={failedWhole.error} retry={() => void failedWhole.refetch()} />}
                 <div className="min-h-0 flex-1">
-                  {graphPending ? (showSheet ? <Skeleton className="h-full w-full" /> : <Busy name="graph" label={t("wiki.search.loadingRelations")} large />) : graphError ? (
-                    <Failed error={firstRing.error ?? rootOriginal.error} retry={() => { if (firstRing.isError) void firstRing.refetch(); if (rootOriginal.isError) void rootOriginal.refetch(); }} />
-                  ) : <WikiScene
+                  {graphPending ? <div className="p-3"><ListSkeleton rows={{ base: 5, md: 5 }} /></div> : <WikiScene
                     root={key(root)}
                     matches={new Set(search ? rows.map((n) => n.id) : [])}
                     scene={scene}
@@ -670,7 +660,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
             )}
           </div>
         )}
-        {view === "graph" && !!rows.length && !graphPending && !graphError && (
+        {view === "graph" && !!rows.length && !graphPending && (
           <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 text-xs text-fg-muted">
             <span>{t("wiki.search.displayedItems", { count: scene.nodes.length })}{points.length > 0 && ` · ${t("wiki.search.groupLeft", { count: points.reduce((sum, g) => sum + g.remaining, 0) })} · ${t("wiki.search.remainingGroups", { count: points.length })}`}</span>
             <span className="tabular-nums">{t("wiki.search.zoomPercent", { percent: zoom })}</span>
@@ -686,6 +676,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
             closeLabel={t("wiki.graph.clearSelection")}
             bodyClassName="p-0"
           >
+            {sheet && progress}
             {sheet && panel}
           </SideSheet>
         )}
