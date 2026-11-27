@@ -304,7 +304,7 @@ test("候補がなくても経過時間を示し、今回の選択に戻れる",
   await mockApi(page, 0, true);
   const states = reviewSnapshots("trace-model", "question");
   const prior = { ...states.unresolved, excluded: { "doc-b": "一覧 B.txt" } };
-  let current = prior;
+  let current: typeof states.initial = prior;
   let voted = false;
   let release: (() => void) | undefined;
   const gate = () => new Promise<void>((done) => { release = done; });
@@ -325,7 +325,7 @@ test("候補がなくても経過時間を示し、今回の選択に戻れる",
       } else {
         expect(action.action).toBe("reset");
         await gate();
-        current = { ...states.unresolved, excluded: prior.excluded, revision: 4 };
+        current = { ...states.unresolved, revision: 4 };
       }
     } else if (voted) {
       await gate();
