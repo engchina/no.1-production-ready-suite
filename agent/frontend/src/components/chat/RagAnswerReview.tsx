@@ -78,7 +78,7 @@ export function RagAnswerReview({
               ),
             );
           } catch (error) {
-            throw new Error(apiErrorMessage(error, t("chat.feedback.saveFailed")));
+            throw new Error(apiErrorMessage(error, t("chat.feedback.saveFailed")), { cause: error });
           }
           toast.success(t("chat.feedback.saved"));
         },

@@ -131,7 +131,9 @@ export function FeedbackControls({
                 content_snapshot: id === traceId && sourceSurface === "search" ? contentSnapshot : undefined,
               });
             } catch (error) {
-              throw new Error(error instanceof ApiError ? error.message : t("feedback.controls.saveError"));
+              throw new Error(error instanceof ApiError ? error.message : t("feedback.controls.saveError"), {
+                cause: error,
+              });
             }
             toast.success(t("feedback.controls.savedToast"));
           },
