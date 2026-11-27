@@ -19,7 +19,7 @@ from uuid import uuid4
 import pytest
 from pytest import MonkeyPatch
 
-from app.features.agent import builtin_runtime, markdown_tool
+from app.features.agent import builtin_runtime, file_tool_support
 from app.features.agent.artifact_file_store import (
     FILE_RUN_CLOSED,
     FILE_TOO_LARGE,
@@ -158,7 +158,7 @@ def test_schema_rejects_empty_content_and_missing_arguments(run_id: str) -> None
 def test_files_per_run_are_counted_with_the_other_formats(
     run_id: str, monkeypatch: MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(markdown_tool, "MAX_FILES_PER_RUN", 2)
+    monkeypatch.setattr(file_tool_support, "MAX_FILES_PER_RUN", 2)
     docx = tool_registry.invoke(
         ToolCall(
             name=DOCX_CREATE_TOOL,

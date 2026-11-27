@@ -390,7 +390,7 @@ export function DbAdminChatPage() {
                 icon={RefreshCw}
                 onClick={() => void conversation.refetch()}
               >
-                {t("chat.retry")}
+                {t("common.action.retry")}
               </Button>
             }
           />

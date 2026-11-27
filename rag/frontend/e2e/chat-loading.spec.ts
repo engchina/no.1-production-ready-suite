@@ -193,9 +193,14 @@ test("検索・回答プロファイルの一覧を読めなかったときは�
   // 会話の領域（空の状態・入力欄）は出さない。
   await expect(page.getByRole("textbox", { name: COMPOSER, exact: true })).toHaveCount(0);
   await expect(page.getByText(EMPTY_TEXT, { exact: true })).toHaveCount(0);
+  // 3 製品で同じ領域の失敗の表示（帯・「詳細」は閉じる・「再試行」。messaging.md §11.7。#5929）。
+  const error = page.getByTestId("chat-search-answer-profiles-error");
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
 
   fail = false;
-  await page.getByRole("button", { name: "再試行" }).click();
+  await error.getByRole("button", { name: "再試行" }).click();
   await selectSearchAnswerProfile(page, /経理アシスタント/);
   await expect(page.getByText(EMPTY_TEXT, { exact: true })).toBeVisible();
 });

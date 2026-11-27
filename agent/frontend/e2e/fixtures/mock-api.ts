@@ -200,6 +200,8 @@ export const BUILTIN_RUNTIME_STATUS = {
     { model_id: "xai.grok-4", display_name: "Grok 4" },
     { model_id: "openai.gpt-oss-120b", display_name: "gpt-oss-120b" },
   ],
+  // backend の `tool_grounding.UNGROUNDED_NOTICE`（#5859）。
+  ungrounded_notice: "この回答は、資料・業務データで確かめていません。",
 };
 
 /** 業種テンプレートの既定（backend の `AGENT_TEMPLATES` の一部と、使えない Skill を含む例）。 */

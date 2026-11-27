@@ -2335,11 +2335,14 @@ const load = dataLoadView(query, { isEmpty: page?.total === 0 });
 API の失敗を、**利用者向けの要約（何が起きたか）・次の操作・「詳細」（技術的な情報）**に分けて出す部品と関数（UX 契約 messaging.md §10.3.1）。NL2SQL の #900 の仕組みを platform に移し、3 製品で使う。
 
 ```tsx
-// 失敗の面（Banner）。要約・次の操作・開いた「詳細」（要求・待ち時間の上限・エラー種別・元の文・HTTP ステータス・request ID）
-<ApiErrorBanner error={query.error} fallback={t("…loadError")} testId="…-error" />
+// 処理・操作の失敗の面（Banner）。要約・次の操作・開いた「詳細」（要求・待ち時間の上限・エラー種別・元の文・HTTP ステータス・request ID）
+<ApiErrorBanner error={mutation.error} fallback={t("…failed")} testId="…-error" />
 
-// 領域の取得の失敗（ErrorState + 「詳細」。再試行付き）
-<ApiErrorState error={query.error} fallback={t("…loadError")} onRetry={() => void query.refetch()} retryLabel={t("common.retry")} />
+// 領域の取得の失敗（ErrorState + 閉じた「詳細」。再試行付き。左揃えの帯）
+<ApiErrorState error={query.error} fallback={t("…loadError")} onRetry={() => void query.refetch()} retrying={query.isFetching} retryLabel={t("common.retry")} testId="…-error" />
+
+// 画面全体の失敗（AppShell の外で、画面にその失敗しか無いとき。中央寄せの大きい形）
+<ApiErrorState error={auth.error} fallback={t("…sessionCheckError")} onRetry={retry} layout="page" />
 
 // 1 つの文しか出せない所（Toast・FormStatus・SaveErrorBanner）
 toast.error(apiErrorMessage(error, t("…failed")));
@@ -2353,7 +2356,9 @@ toast.error(apiErrorMessage(error, t("…failed")));
 | `presentApiError(error, fallback)` | 要約・次の操作・詳細を返す。組み込みの例外（英語の文）は既定の文にし、元の文は詳細へ |
 | `apiErrorMessage(error, fallback)` | 1 つの文。timeout・通信断は要約 + 次の操作、組み込みの例外は既定の文、それ以外は `message` のまま |
 
-- 既定の文言（`DEFAULT_API_TRANSPORT_MESSAGES` / `DEFAULT_API_ERROR_DETAIL_LABELS`）は日本語。`ApiErrorDetailList` は「詳細」の折りたたみ（`Disclosure`）だけを出す。`ErrorState` は `details` で同じ折りたたみを本文の下に置ける。
+- 既定の文言（`DEFAULT_API_TRANSPORT_MESSAGES` / `DEFAULT_API_ERROR_DETAIL_LABELS`）は日本語。`ApiErrorDetailList` は「詳細」の折りたたみ（`Disclosure`）だけを出す（`defaultOpen` の既定は開く。処理・操作の失敗の面が使う）。`ErrorState` は `details` で同じ折りたたみを回復操作の後に置ける。
+- **「詳細」の既定**（messaging.md §10.3）: `ApiErrorBanner` は開く（処理・操作の失敗）。`ApiErrorState` と `DataLoadFailureState` は閉じる（読み取りの失敗。利用者が開く）。同じ場所に処理の結果の失敗を出す `ApiErrorState` だけ `detailsDefaultOpen` を渡す。
+- **`ErrorState` / `ApiErrorState` の `layout`**（messaging.md §3.6。#5904・#5929）: `region`（既定）はカード・一覧・パネル・`PageBody` の中の失敗の左揃えの帯（16px のアイコン。本文の隣に回復操作と「詳細」、狭い幅で折り返す）。`page` は画面全体を占める失敗（`AppShell` の外。`RequireAuth` のログインの状態の確認の失敗）の中央寄せの大きい形（24px のアイコン・`p-8`）。並び（本文 → 回復操作 → 「詳細」）・`role="alert"`・`focusRetry` は同じ。根の要素に `data-failure-layout`（`region` / `page`）と `testId` を出す。
 - 単体テストは `packages/ui/tests/api-error.test.tsx`。製品の確認は各製品の API のラッパーのテストと e2e（`route.abort` で通信断）。
 
 ---

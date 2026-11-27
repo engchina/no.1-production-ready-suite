@@ -1,4 +1,4 @@
-"""組み込みの業務 Agent（10 個。#1573・#5342・#5837・#5867）と、組み込みのスキルの形。"""
+"""組み込みの業務 Agent（6 個。#1573・#5342・#5837）と、組み込みのスキルの形。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from app.features.agent.runtime import (
     AgentRuntimeSnapshot,
     AgentVersion,
     RunCreateRequest,
-    agent_for_run,
 )
 from app.features.agent.skills import (
     DOCX_CREATE_SKILL_ID,
@@ -38,7 +37,6 @@ from app.features.agent.skills import (
     STRUCTURED_DATA_QUERY_SKILL_ID,
     XLSX_CREATE_SKILL_ID,
     FinalAnswerTool,
-    pin_skill,
     skill_registry,
 )
 from app.features.agent.templates import AGENT_TEMPLATES
@@ -81,9 +79,12 @@ def _builtin(agent_id: str, content: Mapping[str, Any]) -> AgentProfile:
     )
 
 
-# #5837 のファイルを作るスキル（#5867 より前に保存した組み込みの業務 Agent が持つ）。
-PREVIOUS_FILE_CREATE_SKILL_IDS = [XLSX_CREATE_SKILL_ID, DOCX_CREATE_SKILL_ID, PPTX_CREATE_SKILL_ID]
-FILE_CREATE_SKILL_IDS = [*PREVIOUS_FILE_CREATE_SKILL_IDS, MARKDOWN_CREATE_SKILL_ID]
+FILE_CREATE_SKILL_IDS = [
+    XLSX_CREATE_SKILL_ID,
+    DOCX_CREATE_SKILL_ID,
+    PPTX_CREATE_SKILL_ID,
+    MARKDOWN_CREATE_SKILL_ID,
+]
 FILE_CREATE_TOOLS = [XLSX_CREATE_TOOL, DOCX_CREATE_TOOL, PPTX_CREATE_TOOL, MARKDOWN_CREATE_TOOL]
 SOURCE_CHOICE_STEP = (
     "## Step 1: 必要な情報源を選ぶ\n"
@@ -139,32 +140,10 @@ ORIGINAL_BUILTIN: dict[str, dict[str, Any]] = {
         "skill_ids": [STRUCTURED_DATA_QUERY_SKILL_ID],
     },
 }
-# ファイルを作る 5 つ（#5837・#5867）。名前とスキルは決めたもの（説明・指示の文は固定しない）。
+# ファイルを作る 1 つ（#5837・#5867）。名前とスキルは決めたもの（説明・指示の文は固定しない）。
+# 調べるスキルとファイルを作るスキルの組み合わせは組み込みにしない（利用者がスキルを選ぶ）。
 FILE_BUILTIN: dict[str, tuple[str, list[str]]] = {
-    "doc-create": ("文書作成アシスタント", FILE_CREATE_SKILL_IDS),
-    "rag-search-data-doc-create": (
-        "RAG 検索＋データ＋文書作成アシスタント",
-        [RAG_SEARCH_AND_DATA_SKILL_ID, *FILE_CREATE_SKILL_IDS],
-    ),
-    "rag-chat-data-doc-create": (
-        "RAG チャット＋データ＋文書作成アシスタント",
-        [RAG_CHAT_AND_DATA_SKILL_ID, *FILE_CREATE_SKILL_IDS],
-    ),
-    # RAG だけ＋文書作成（#5867。データつきの 2 つから NL2SQL を除いた構成）。
-    "rag-search-doc-create": (
-        "RAG 検索＋文書作成アシスタント",
-        [RAG_SEARCH_SKILL_ID, *FILE_CREATE_SKILL_IDS],
-    ),
-    "rag-chat-doc-create": (
-        "RAG チャット＋文書作成アシスタント",
-        [RAG_CHAT_SKILL_ID, *FILE_CREATE_SKILL_IDS],
-    ),
-}
-# #5837 で足した 3 つの、#5867 より前の内容（スキルはファイルを作る 3 つ）。
-PREVIOUS_FILE_BUILTIN: dict[str, list[str]] = {
-    "doc-create": PREVIOUS_FILE_CREATE_SKILL_IDS,
-    "rag-search-data-doc-create": [RAG_SEARCH_AND_DATA_SKILL_ID, *PREVIOUS_FILE_CREATE_SKILL_IDS],
-    "rag-chat-data-doc-create": [RAG_CHAT_AND_DATA_SKILL_ID, *PREVIOUS_FILE_CREATE_SKILL_IDS],
+    "file-create": ("ファイル作成アシスタント", FILE_CREATE_SKILL_IDS),
 }
 
 
@@ -177,7 +156,7 @@ def _content(agent: AgentProfile | AgentVersion) -> dict[str, Any]:
     }
 
 
-def test_new_environment_has_ten_builtin_agents() -> None:
+def test_new_environment_has_six_builtin_agents() -> None:
     repository = AgentRuntimeRepository()
 
     agents = repository.list_agents()
@@ -227,54 +206,20 @@ def test_builtin_agents_use_mcp_connections_of_their_skills() -> None:
         assert set(combined) == {"rag", "nl2sql"}
         assert tool in (combined["rag"] or set())
         assert {"nl2sql_query", "nl2sql_get_job"} <= (combined["nl2sql"] or set())
-    # ファイルを作るツールは、ファイルを作る 5 つの業務 Agent にだけ渡る（#5837・#5867）。
+    # ファイルを作るツールは、ファイル作成アシスタントにだけ渡る（#5837・#5867）。
     for agent_id in ORIGINAL_BUILTIN:
         assert control_plane_tools(agent_id) == [], agent_id
-    for agent_id in FILE_BUILTIN:
-        assert control_plane_tools(agent_id) == FILE_CREATE_TOOLS, agent_id
-    # 文書作成アシスタントは MCP 接続（RAG・NL2SQL）を使わない。
-    assert requirements("doc-create") == {}
-    # 調べるスキルは対応する業務 Agent と同じ（使う接続とツールが同じ）。
-    for agent_id, base in (
-        ("rag-search-data-doc-create", "rag-search-data"),
-        ("rag-chat-data-doc-create", "default"),
-        ("rag-search-doc-create", "rag-search"),
-        ("rag-chat-doc-create", "rag-chat"),
-    ):
-        assert requirements(agent_id) == requirements(base), agent_id
-    # RAG だけ＋文書作成は NL2SQL を使わない（#5867）。
-    assert set(requirements("rag-search-doc-create")) == {"rag"}
-    assert set(requirements("rag-chat-doc-create")) == {"rag"}
+    assert control_plane_tools("file-create") == FILE_CREATE_TOOLS
+    # ファイル作成アシスタントは MCP 接続（RAG・NL2SQL）を使わない。
+    assert requirements("file-create") == {}
 
 
 def test_file_builtin_agent_instructions_are_step_markdown() -> None:
-    """ファイルを作る 5 つの指示は Step 形式で、調べてからファイルにする順が分かる（#5837）。"""
-    repository = AgentRuntimeRepository()
-    steps = {
-        agent_id: re.findall(
-            r"^## Step (\d+): (\S.*)$", _agent(repository, agent_id).instructions, re.M
-        )
-        for agent_id in FILE_BUILTIN
-    }
-    for agent_id, found in steps.items():
-        headings = re.findall(r"^#+ .*$", _agent(repository, agent_id).instructions, re.M)
-        assert len(found) == len(headings), (agent_id, headings)
-        assert [int(number) for number, _ in found] == list(range(1, len(found) + 1)), agent_id
-    assert len(steps["doc-create"]) == 1
-    for agent_id, base in (
-        ("rag-search-data-doc-create", "rag-search-data"),
-        ("rag-chat-data-doc-create", "default"),
-        ("rag-search-doc-create", "rag-search"),
-        ("rag-chat-doc-create", "rag-chat"),
-    ):
-        instructions = _agent(repository, agent_id).instructions
-        # 調べる Step は対応する業務 Agent の指示と同じで、ファイルの Step がその後に続く。
-        assert instructions.startswith(ORIGINAL_BUILTIN[base]["instructions"] + "\n\n## Step 2: ")
-        assert len(steps[agent_id]) == 2
-    assert (
-        _agent(repository, "rag-search-data-doc-create").instructions
-        == _agent(repository, "rag-chat-data-doc-create").instructions
-    )
+    """ファイル作成アシスタントの指示は Step 形式（#5837）。"""
+    instructions = _agent(AgentRuntimeRepository(), "file-create").instructions
+    found = re.findall(r"^## Step (\d+): (\S.*)$", instructions, re.M)
+    headings = re.findall(r"^#+ .*$", instructions, re.M)
+    assert len(found) == len(headings) == 1
 
 
 def _saved_original_builtin() -> list[AgentProfile]:
@@ -282,8 +227,8 @@ def _saved_original_builtin() -> list[AgentProfile]:
     return [_builtin(agent_id, content) for agent_id, content in ORIGINAL_BUILTIN.items()]
 
 
-def test_environment_with_five_saved_builtin_agents_gets_the_missing_file_agents() -> None:
-    """前の 5 つだけを保存した環境の読み込みで、足りないファイルを作る 5 つが入る（#5837・#5867）。
+def test_environment_with_five_saved_builtin_agents_gets_the_missing_file_agent() -> None:
+    """前の 5 つだけを保存した環境の読み込みで、足りないファイル作成アシスタントが入る（#5837）。
 
     保存済みの 5 つ（利用者が変えた内容・モデル・データの範囲）と、利用者が作った業務 Agent は
     変えない。
@@ -330,7 +275,7 @@ def test_environment_with_five_saved_builtin_agents_gets_the_missing_file_agents
 def test_missing_builtin_agents_are_added_on_storage_load_and_keep_user_changes() -> None:
     """保存先（1 件 = 1 行）に前の 5 つだけがある環境の起動（#5837）。
 
-    起動は保存先を書き換えずに足りない 5 つをメモリに足し、利用者が変えたものだけを保存する。
+    起動は保存先を書き換えずに足りない 1 つをメモリに足し、利用者が変えたものだけを保存する。
     次の起動は保存した内容を使う（組み込みの内容で上書きしない）。
     """
     custom = AgentProfile(id="agent_custom", name="利用者が作った業務 Agent")
@@ -345,18 +290,18 @@ def test_missing_builtin_agents_are_added_on_storage_load_and_keep_user_changes(
     assert table.entities == stored_before and table.version() == 0
 
     first.patch_agent(
-        "doc-create",
+        "file-create",
         AgentProfilePatch(instructions="利用者が変えた指示。", model_id="synthetic-model"),
     )
     first.flush_writes()
 
     # 変えた 1 件だけを書く（ほかの行は変えない）。
-    assert set(table.entities) - set(stored_before) == {(KEY, "agent", "doc-create")}
+    assert set(table.entities) - set(stored_before) == {(KEY, "agent", "file-create")}
     assert {key: table.entities[key] for key in stored_before} == stored_before
     second = AgentRuntimeOracleCheckpointRepository(connect_factory=table.connect)
     agents = {agent.id: agent for agent in second.list_agents()}
     assert set(agents) == {*BUILTIN_AGENT_IDS, "agent_custom"}
-    kept = agents["doc-create"]
+    kept = agents["file-create"]
     assert (kept.instructions, kept.model_id) == ("利用者が変えた指示。", "synthetic-model")
     assert kept.source == "builtin" and kept.skill_ids == FILE_CREATE_SKILL_IDS
     # 下書きを変えただけなので、公開中の版は組み込みの内容のまま。
@@ -563,131 +508,3 @@ def test_builtin_agents_cannot_be_deleted(agent_id: str) -> None:
 
 
 # ---- 保存済みのファイルを作る組み込みの業務 Agent に、後から足したスキルを足す（#5867） -------
-
-
-def _saved_file_builtin(agent_id: str, published: list[str], **draft: Any) -> AgentProfile:
-    """#5867 より前に保存したファイルを作る組み込みの業務 Agent（v1 を公開。下書きは `draft`）。
-
-    `published` は v1（と、`draft` で変えなければ下書き）のスキル。
-    """
-    repository = AgentRuntimeRepository()
-    base = _agent(repository, agent_id)
-    content = {
-        "name": base.name,
-        "description": "保存したときの説明。",
-        "instructions": base.instructions,
-        "skill_ids": published,
-    }
-    saved = _builtin(agent_id, content)
-    return saved.model_copy(deep=True, update=draft)
-
-
-@pytest.mark.parametrize("agent_id", list(PREVIOUS_FILE_BUILTIN))
-def test_saved_file_agents_get_only_the_added_skill_and_keep_other_settings(
-    agent_id: str,
-) -> None:
-    """足りないスキル（Markdown 作成）だけを下書きと次の公開の版に足し、ほかは変えない。"""
-    previous = PREVIOUS_FILE_BUILTIN[agent_id]
-    saved = _saved_file_builtin(agent_id, previous)
-    # 利用者が変えた公開中の版（指示・モデル・データの範囲）と、未公開の下書き。
-    saved.versions[0] = saved.versions[0].model_copy(
-        update={
-            "instructions": "利用者が公開した指示。",
-            "model_id": "synthetic-model",
-            "data_scopes": {"rag": AgentDataScope(profile_ids=["profile-a"])},
-        }
-    )
-    saved = saved.model_copy(update={"instructions": "利用者が書いた下書きの指示。"})
-    repository = AgentRuntimeRepository()
-    load_state(repository, AgentRuntimeSnapshot(agents=[saved]))
-
-    agent = _agent(repository, agent_id)
-    assert agent.skill_ids == [*previous, MARKDOWN_CREATE_SKILL_ID]
-    assert (agent.instructions, agent.description) == (
-        "利用者が書いた下書きの指示。",
-        "保存したときの説明。",
-    )
-    # 公開中の版の内容にスキルだけを足した次の版を公開する（前の版は残す）。
-    assert [item.version for item in agent.versions] == [1, 2]
-    assert agent.published_version == 2
-    v1, v2 = agent.versions
-    assert v1.skill_ids == previous
-    assert v2.skill_ids == [*previous, MARKDOWN_CREATE_SKILL_ID]
-    assert (v2.instructions, v2.model_id, v2.data_scopes) == (
-        v1.instructions,
-        v1.model_id,
-        v1.data_scopes,
-    )
-    assert (v2.name, v2.description) == (v1.name, v1.description)
-    assert agent.unavailable_skill_ids == []
-    # 保存し直して読み込んでも、版もスキルも増えない（冪等）。
-    exported = export_state(repository)
-    load_state(repository, exported)
-    assert export_state(repository).agents == exported.agents
-
-
-def test_added_skill_is_pinned_when_the_published_version_pins_skills() -> None:
-    """公開中の版がスキルを固定していれば、足すスキルも固定して Run で使える。"""
-    previous = PREVIOUS_FILE_BUILTIN["doc-create"]
-    saved = _saved_file_builtin("doc-create", previous)
-    pins = [pin_skill(skill) for skill_id in previous if (skill := skill_registry.get(skill_id))]
-    saved.versions[0] = saved.versions[0].model_copy(update={"skills": pins})
-    repository = AgentRuntimeRepository()
-    load_state(repository, AgentRuntimeSnapshot(agents=[saved]))
-
-    agent = _agent(repository, "doc-create")
-    published = agent.published()
-    assert published is not None and published.skills is not None
-    assert [item.id for item in published.skills] == FILE_CREATE_SKILL_IDS
-    run = repository.create_builtin_run(RunCreateRequest(goal="質問", agent_id="doc-create"))
-    used = agent_for_run(agent, run)
-    assert used.skill_ids == FILE_CREATE_SKILL_IDS
-    assert [item.id for item in used.pinned_skills or []] == FILE_CREATE_SKILL_IDS
-
-
-@pytest.mark.parametrize(
-    ("draft", "published"),
-    [
-        # 利用者が Excel 作成を外していた（足すのは Markdown 作成だけ。外したものは戻さない）。
-        ([DOCX_CREATE_SKILL_ID, PPTX_CREATE_SKILL_ID], [DOCX_CREATE_SKILL_ID]),
-        # 足した後に利用者が Markdown 作成を外して公開した（前の版に残っているので戻さない）。
-        (PREVIOUS_FILE_CREATE_SKILL_IDS, PREVIOUS_FILE_CREATE_SKILL_IDS),
-    ],
-    ids=["removed_before", "removed_after"],
-)
-def test_skills_removed_by_the_user_are_not_added_back(
-    draft: list[str], published: list[str]
-) -> None:
-    saved = _saved_file_builtin("doc-create", published, skill_ids=draft)
-    if draft == published:
-        # 足した版（v2）の後に、外した版（v3）を公開した。
-        versions = [
-            saved.versions[0],
-            saved.versions[0].model_copy(update={"version": 2, "skill_ids": FILE_CREATE_SKILL_IDS}),
-            saved.versions[0].model_copy(update={"version": 3}),
-        ]
-        saved = saved.model_copy(update={"versions": versions, "published_version": 3})
-    repository = AgentRuntimeRepository()
-    load_state(repository, AgentRuntimeSnapshot(agents=[saved]))
-
-    agent = _agent(repository, "doc-create")
-    if draft == published:
-        assert agent.skill_ids == draft
-        assert agent.published_version == 3 and len(agent.versions) == 3
-    else:
-        assert agent.skill_ids == [*draft, MARKDOWN_CREATE_SKILL_ID]
-        assert agent.versions[-1].skill_ids == [*published, MARKDOWN_CREATE_SKILL_ID]
-        assert XLSX_CREATE_SKILL_ID not in agent.skill_ids
-
-
-def test_skills_are_added_only_to_the_builtin_file_agents() -> None:
-    """利用者の業務 Agent と、ファイルを作らない組み込みの業務 Agent には足さない。"""
-    custom = AgentProfile(
-        id="agent_custom", name="利用者の業務 Agent", skill_ids=PREVIOUS_FILE_CREATE_SKILL_IDS
-    )
-    repository = AgentRuntimeRepository()
-    load_state(repository, AgentRuntimeSnapshot(agents=[custom, *_saved_original_builtin()]))
-
-    assert _agent(repository, "agent_custom").skill_ids == PREVIOUS_FILE_CREATE_SKILL_IDS
-    for agent_id, content in ORIGINAL_BUILTIN.items():
-        assert _agent(repository, agent_id).skill_ids == content["skill_ids"], agent_id

@@ -1,13 +1,23 @@
-import { BookOpen, RotateCcw, Search, ThumbsDown, ThumbsUp } from "lucide-react";
+import { BookOpen, CheckCircle2, ListPlus, MessageSquareText, PencilLine, RotateCcw, Search, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { ListSkeleton, Skeleton } from "../ui/skeleton";
 import { ProcessingIndicator, TimedLoadingState, staleContentClass, REFRESH_REVEAL_DELAY_MS } from "./processing-state";
+import { Banner } from "../ui/banner";
 import { Button } from "../ui/button";
+import { Disclosure } from "../ui/disclosure";
+import { useConfirm } from "../ui/confirm-dialog";
 import { RadioOptionGroup } from "../ui/radio-option-group";
 import { SearchField } from "../ui/search-field";
 import { SelectedSources } from "../ui/selected-sources";
 import { SideSheet } from "../ui/side-sheet";
+import {
+  FeedbackDetailsForm,
+  type FeedbackControlsSubmission,
+  type FeedbackControlsValue,
+  type FeedbackDetailsFormLabels,
+  type FeedbackReasonOption,
+} from "./feedback-controls";
 import {
   cited,
   files,
@@ -23,7 +33,23 @@ import {
 } from "./file-review-model";
 
 type Mode = "only" | "mix" | "replace";
-type Activity = FileReviewAction["action"] | "more" | "open" | "reload" | "original" | "vote";
+type Activity = FileReviewAction["action"] | "more" | "open" | "reload" | "original" | "vote" | "details";
+
+/**
+ * 「解決しなかった」の理由・コメント・修正した回答の入力（#5906）。評価そのものは `vote` が先に保存し、ここは任意で足す。
+ * 修正した回答は品質評価のケースと登録済み Q&A の元になるので、資料の選び直しとは別に残せるようにする。
+ */
+export interface AnswerFileReviewDetails {
+  reasons: readonly FeedbackReasonOption[];
+  labels: FeedbackDetailsFormLabels;
+  /** 「修正した回答」の欄を出す。 */
+  correctedAnswer?: boolean;
+  commentMaxLength?: number;
+  /** その版の保存済みの内容（無ければ空で開く）。 */
+  value?: (id: string) => FeedbackControlsValue | null | undefined;
+  /** 保存する。成功の Toast は製品が出す。 */
+  save: (id: string, submission: FeedbackControlsSubmission) => Promise<void>;
+}
 const progressLabels = {
   open: "fileReview.loading", reload: "fileReview.loading", original: "fileReview.reading",
   discover: "fileReview.discovering", more: "fileReview.discovering", answer: "fileReview.answering",
@@ -37,9 +63,15 @@ interface Props {
   disabled?: boolean;
   loadingRating?: boolean;
   load: () => Promise<FileReviewState>;
+  /**
+   * mount のときに `load` で以前の版を読むか（既定 true）。回答し直した版が無いと分かっている回答は false にして、
+   * 利用者が資料を選び直す面を開くまで読まない（回答の多い会話で、回答の数だけ読まないため。#5938）。
+   */
+  loadOnMount?: boolean;
   original?: (task: string, documentId: string) => Promise<Record<string, string>>;
   change: (action: FileReviewAction) => Promise<FileReviewState>;
   vote: (id: string, value: AnswerRating) => Promise<void>;
+  details?: AnswerFileReviewDetails;
   initialRating?: AnswerRating | null;
   onHistory: (rootId: string) => void;
   taskLabel?: (task: string, question: string, number: number) => string;
@@ -53,9 +85,11 @@ export function AnswerFileReview({
   disabled,
   loadingRating,
   load,
+  loadOnMount = true,
   original,
   change,
   vote,
+  details,
   initialRating,
   onHistory,
   taskLabel,
@@ -65,7 +99,7 @@ export function AnswerFileReview({
   const [rating, setRating] = useState<AnswerRating | null>(initialRating ?? null);
   const [error, setError] = useState("");
   const [activity, setActivity] = useState<Activity | null>(null);
-  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(loadOnMount);
   const running = useRef(false);
   const retryFailed = useRef<(() => void) | undefined>(undefined);
   const busy = activity !== null;
@@ -78,6 +112,11 @@ export function AnswerFileReview({
   const [passages, setPassages] = useState<Record<string, string>>({});
   const [manage, setManage] = useState(false);
   const [reset, setReset] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  // この画面で理由を保存した版。製品が保存済みの内容を返せない版（回答し直した後の版）でも、消す前に確かめるために持つ。
+  const [recorded, setRecorded] = useState<string[]>([]);
+  const [voting, setVoting] = useState<AnswerRating | null>(null);
+  const confirm = useConfirm();
   const list = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLButtonElement | null>(null);
   const selectionId = useId();
@@ -90,6 +129,11 @@ export function AnswerFileReview({
   useEffect(() => {
     active.current = true;
     let cancelled = false;
+    if (!loadOnMount) {
+      return () => {
+        active.current = false;
+      };
+    }
     const initialAction = userAction.current;
     void loader
       .current()
@@ -102,7 +146,7 @@ export function AnswerFileReview({
       cancelled = true;
       active.current = false;
     };
-  }, [rootId]);
+  }, [rootId, loadOnMount]);
   const hasHistory = (state?.versions.length ?? 0) > 1;
   useEffect(() => {
     if (hasHistory) onHistory(rootId);
@@ -152,20 +196,37 @@ export function AnswerFileReview({
       if (active.current) setActivity(null);
     }
   }
-  function mark(value: AnswerRating) {
-    void operation(value === "not_helpful" ? "open" : "vote", async () => {
+  const hasDetails = (id: string) => {
+    const saved = details?.value?.(id);
+    return recorded.includes(id) || !!(saved && (saved.reason || saved.comment || saved.correctedAnswer));
+  };
+  /** 評価だけを保存する。資料の選び直しと理由の入力は、評価の後に出る別のボタンから開く（1 つのボタンに 1 つの処理。#5906）。 */
+  async function mark(value: AnswerRating) {
+    const current = latest ? latest.rating : (rating ?? initialRating);
+    const id = latest?.id ?? rootId;
+    if (current === value || running.current) return;
+    // 「解決した」は理由・コメント・修正した回答を持たないので、変える前に確かめる（保存は同じ行の上書き）。
+    if (
+      value === "helpful" &&
+      hasDetails(id) &&
+      !(await confirm({
+        title: t("fileReview.clearDetailsTitle"),
+        description: t("fileReview.clearDetailsDescription"),
+        confirmLabel: t("fileReview.clearDetailsConfirm"),
+        tone: "warning",
+      }))
+    )
+      return;
+    setVoting(value);
+    void operation("vote", async () => {
       userAction.current += 1;
-      if (value === "not_helpful") {
-        setOpen(true);
-        setPreview("");
-        setManage(false);
-        setReset(false);
-      }
-      const current = latest ? latest.rating : (rating ?? initialRating);
-      const id = latest?.id ?? rootId;
-      if (current !== value) await vote(id, value);
+      await vote(id, value);
       if (!active.current) return;
       setRating(value);
+      if (value === "helpful") {
+        setDetailsOpen(false);
+        setRecorded((previous) => previous.filter((key) => key !== id));
+      }
       setState(
         (previous) =>
           previous && {
@@ -173,16 +234,33 @@ export function AnswerFileReview({
             versions: previous.versions.map((v) => (v.id === id ? { ...v, rating: value } : v)),
           },
       );
-      if (value === "not_helpful") {
-        const s = await load();
-        if (!active.current) return;
-        if (!s?.versions?.length) throw new Error(t("fileReview.error"));
-        setState(s);
-        setOpen(true);
-        const keys = Object.keys(s.versions.at(-1)?.sources ?? {});
-        choose(s, keys.length === 1 ? keys[0] : "");
-      }
-    }, () => mark(value));
+    }, () => void mark(value));
+  }
+  /** 資料を選び直す面を開く。 */
+  function review() {
+    void operation("open", async () => {
+      userAction.current += 1;
+      setOpen(true);
+      setPreview("");
+      setManage(false);
+      setReset(false);
+      const s = await load();
+      if (!active.current) return;
+      if (!s?.versions?.length) throw new Error(t("fileReview.error"));
+      setState(s);
+      const keys = Object.keys(s.versions.at(-1)?.sources ?? {});
+      choose(s, keys.length === 1 ? keys[0] : "");
+    }, review);
+  }
+  function saveDetails(submission: FeedbackControlsSubmission) {
+    if (!details) return;
+    const id = latest?.id ?? rootId;
+    void operation("details", async () => {
+      await details.save(id, submission);
+      if (!active.current) return;
+      setRecorded((previous) => (previous.includes(id) ? previous : [...previous, id]));
+      setDetailsOpen(false);
+    }, () => saveDetails(submission));
   }
   function readOriginal(documentId: string) {
     if (!original) return;
@@ -225,26 +303,30 @@ export function AnswerFileReview({
     } else close();
   };
   const errorView = error && (
-    <div role="alert" className="space-y-1 text-sm">
-      <p>{error}</p>
-      <Button
-        size="sm"
-        icon={RotateCcw}
-        loading={activity === "reload"}
-        variant="secondary"
-        onClick={() => retryFailed.current ? retryFailed.current() :
-          void operation("reload", async () => {
-            const s = await load();
-            if (!active.current) return;
-            setState(s);
-            const keys = Object.keys(s.versions.at(-1)?.sources ?? {});
-            if (open && (!task || s.revision !== state?.revision)) choose(s, keys.includes(task) ? task : keys.length === 1 ? keys[0] : "");
-          })
-        }
-      >
-        {t("fileReview.retry")}
-      </Button>
-    </div>
+    <Banner
+      severity="danger"
+      action={
+        <Button
+          size="sm"
+          icon={RotateCcw}
+          loading={activity === "reload"}
+          variant="secondary"
+          onClick={() => retryFailed.current ? retryFailed.current() :
+            void operation("reload", async () => {
+              const s = await load();
+              if (!active.current) return;
+              setState(s);
+              const keys = Object.keys(s.versions.at(-1)?.sources ?? {});
+              if (open && (!task || s.revision !== state?.revision)) choose(s, keys.includes(task) ? task : keys.length === 1 ? keys[0] : "");
+            })
+          }
+        >
+          {t("fileReview.retry")}
+        </Button>
+      }
+    >
+      {error}
+    </Banner>
   );
   const currentRating = latest ? latest.rating : (rating ?? initialRating);
   const title = activity === "open" ? t("fileReview.title") : selectedFile
@@ -258,15 +340,10 @@ export function AnswerFileReview({
           : pending
             ? t("fileReview.candidates")
             : t("fileReview.title");
-  const actionTitle =
-    mode === "only" || pending
-      ? t("fileReview.confirm")
-      : checked.length
-        ? t("fileReview.keepFind")
-        : mode === "replace" && groups.length
-          ? t("fileReview.replaceFind")
-          : t("fileReview.find");
-  const processing = activity && activity !== "vote" ? t(progressLabels[activity]) : null;
+  // 主ボタンは、行う操作（回答し直す / 候補を探す）だけで名前とアイコンを決める（チェックの有無で変えない。#5921）。
+  const answering = pending || mode === "only";
+  const actionTitle = t(answering ? "fileReview.confirm" : "fileReview.find");
+  const processing = activity && activity !== "vote" && activity !== "details" ? t(progressLabels[activity]) : null;
   const replaceBody = activity === "open" || activity === "reset" || activity === "answer" ||
     activity === "discover" || activity === "original" || (activity === "more" && !groups.length) || (activity === "reload" && !state);
   const initialLoading = !open && (loadingRating || (loadingHistory && !state?.versions.length));
@@ -282,25 +359,26 @@ export function AnswerFileReview({
                   ? "fileReview.notHelpful"
                   : "fileReview.unrated",
             );
-            const title = t("fileReview.version", { version: i + 1 }) + " · " + status;
+            const title = t("fileReview.version", { version: i + 1 }) + "・" + status;
             return i === state.versions.length - 1 ? (
               <section key={v.id} className="space-y-2 border-t border-border pt-3">
-                <h3 className="font-semibold">{title}</h3>
+                <h3 className="text-sm font-semibold">{title}</h3>
                 {renderVersion(v)}
               </section>
             ) : (
-              <details key={v.id}>
-                <summary>{title}</summary>
+              <Disclosure key={v.id} variant="plain" summary={title}>
                 {renderVersion(v)}
-              </details>
+              </Disclosure>
             );
           })}
         </div>
       )}
       {initialLoading && (
-        <TimedLoadingState label={t("fileReview.loading")} operationKey={rootId} showSlowMessage={false}>
-          <Skeleton className="h-8 w-48" />
-        </TimedLoadingState>
+        // 回答ごとに出るので、経過時間つきの枠にせず、評価のボタンの形の骨組みだけを出す（#5921）。
+        <div className="flex gap-2" role="status" aria-label={t("fileReview.loading")}>
+          <Skeleton className="h-[var(--button-height-sm)] w-24" />
+          <Skeleton className="h-[var(--button-height-sm)] w-32" />
+        </div>
       )}
       {!readOnly && !initialLoading && (
         <div role="group" aria-labelledby={selectionId + "-question"} className="space-y-1.5">
@@ -314,16 +392,62 @@ export function AnswerFileReview({
                 size="sm"
                 variant="secondary"
                 icon={value === "helpful" ? ThumbsUp : ThumbsDown}
-                loading={value === "helpful" && activity === "vote"}
+                loading={activity === "vote" && voting === value}
                 disabled={busy || disabled || loadingRating}
                 aria-pressed={currentRating === value}
-                className={currentRating === value ? "border-primary bg-primary-subtle ring-1 ring-primary" : undefined}
-                onClick={() => mark(value)}
+                onClick={() => void mark(value)}
               >
                 {t(value === "helpful" ? "fileReview.helpful" : "fileReview.notHelpful")}
               </Button>
             ))}
           </div>
+          {currentRating === "not_helpful" && (
+            <>
+              <div className="flex flex-wrap items-center gap-2" data-testid="file-review-next">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={Search}
+                  loading={activity === "open"}
+                  disabled={busy || disabled}
+                  onClick={review}
+                >
+                  {t("fileReview.title")}
+                </Button>
+                {details && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={PencilLine}
+                    disabled={busy || disabled}
+                    aria-expanded={detailsOpen}
+                    onClick={() => setDetailsOpen((previous) => !previous)}
+                  >
+                    {t(details.correctedAnswer ? "fileReview.detailsWithAnswer" : "fileReview.details")}
+                  </Button>
+                )}
+                {details && hasDetails(latest?.id ?? rootId) && (
+                  <span className="inline-flex items-center gap-1 text-xs text-fg-muted" role="status">
+                    <CheckCircle2 size={14} className="text-success-fg" aria-hidden />
+                    {t("fileReview.detailsSaved")}
+                  </span>
+                )}
+              </div>
+              {details && detailsOpen && (
+                <FeedbackDetailsForm
+                  reasons={details.reasons}
+                  labels={details.labels}
+                  value={details.value?.(latest?.id ?? rootId)}
+                  correctedAnswer={details.correctedAnswer}
+                  commentMaxLength={details.commentMaxLength}
+                  disabled={busy || disabled}
+                  saving={activity === "details"}
+                  onSubmit={saveDetails}
+                  onCancel={() => setDetailsOpen(false)}
+                />
+              )}
+            </>
+          )}
         </div>
       )}
       {!open && errorView}
@@ -370,7 +494,7 @@ export function AnswerFileReview({
                 {task && activity !== "open" && !selectedFile && !manage && !reset && (
                   <>
                     <Button
-                      icon={Search}
+                      icon={answering ? MessageSquareText : Search}
                       loading={activity === "discover" || activity === "answer"}
                       disabled={
                         busy || (!pending && !mode) || (!checked.length && (pending || mode !== "replace"))
@@ -380,7 +504,7 @@ export function AnswerFileReview({
                       {actionTitle}
                     </Button>
                     {pending && (
-                      <Button icon={Search} variant="secondary" loading={activity === "more"} disabled={busy} onClick={() => submit("discover", checked, "more")}>
+                      <Button icon={ListPlus} variant="secondary" loading={activity === "more"} disabled={busy} onClick={() => submit("discover", checked, "more")}>
                         {t("fileReview.more")}
                       </Button>
                     )}
@@ -407,13 +531,15 @@ export function AnswerFileReview({
               activityIcon={activity === "more" || activity === "reload" ? "none" : "spinner"} reserveSlowLine={false} testId="file-review-progress" />
           ))}
           {!replaceBody && reset && <p className="text-sm">{t("fileReview.resetDescription")}</p>}
-          {!replaceBody && !task && state &&
-            latest &&
-            Object.entries(latest.sources).map(([id, s], index) => (
-              <Button key={id} variant="secondary" onClick={() => choose(state, id)}>
-                {taskLabel?.(id, s.title, index + 1) ?? s.title}
-              </Button>
-            ))}
+          {!replaceBody && !task && state && latest && (
+            <div className="flex flex-col items-start gap-2">
+              {Object.entries(latest.sources).map(([id, s], index) => (
+                <Button key={id} variant="secondary" onClick={() => choose(state, id)}>
+                  {taskLabel?.(id, s.title, index + 1) ?? s.title}
+                </Button>
+              ))}
+            </div>
+          )}
           {!replaceBody && task && state && (
             <div
               hidden={!!selectedFile || manage || reset}
@@ -439,14 +565,7 @@ export function AnswerFileReview({
                   }}
                 />
               )}
-              <div className="flex h-[var(--button-height-sm)] shrink-0 items-center justify-between gap-1">
-                <h3 className="text-sm font-semibold">{t(candidates ? "fileReview.found" : "fileReview.given")}</h3>
-                {hidden > 0 && (
-                  <Button variant="ghost" size="sm" aria-controls={selectionId} onClick={() => setQuery("")}>
-                    {t("fileReview.showHidden")}
-                  </Button>
-                )}
-              </div>
+              <h3 className="shrink-0 text-sm font-semibold">{t(candidates ? "fileReview.found" : "fileReview.given")}</h3>
               <SearchField
                 id={selectionId + "-search"}
                 value={query}
@@ -509,7 +628,7 @@ export function AnswerFileReview({
                             }
                           }}
                         >
-                          {t("fileReview.original")}
+                          {t("fileReview.showOriginal")}
                         </Button>
                       </div>
                       <p className="text-xs text-fg-muted">
@@ -519,7 +638,7 @@ export function AnswerFileReview({
                           t(count ? "fileReview.cited" : "fileReview.noCites", { count }),
                         ]
                           .filter(Boolean)
-                          .join(" · ")}
+                          .join("・")}
                       </p>
                       <p className="truncate text-sm text-fg-muted">{f.excerpt.text ?? f.excerpt.excerpt}</p>
                     </div>
@@ -530,7 +649,7 @@ export function AnswerFileReview({
                 <div className="flex shrink-0 flex-wrap gap-2">
                   {Object.keys(excluded).length > 0 && (
                     <Button variant="ghost" size="sm" disabled={busy} onClick={() => setManage(true)}>
-                      {t("fileReview.manage", { count: Object.keys(excluded).length })}
+                      {t("fileReview.showManage", { count: Object.keys(excluded).length })}
                     </Button>
                   )}
                   <Button variant="ghost" size="sm" disabled={busy} onClick={() => setReset(true)}>
@@ -554,7 +673,7 @@ export function AnswerFileReview({
                         cited(hit) ? t("fileReview.used") : "",
                       ]
                         .filter(Boolean)
-                        .join(" · ")}
+                        .join("・")}
                     </p>
                     <p className="whitespace-pre-wrap break-words text-sm">
                       {passages[hit.chunk_id] ?? hit.text ?? hit.excerpt}

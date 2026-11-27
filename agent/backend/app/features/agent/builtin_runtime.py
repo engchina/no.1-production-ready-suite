@@ -165,7 +165,6 @@ from app.features.agent.answer_references import (
     evidence_refs,
     without_lookup_notes,
 )
-from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND
 from app.features.agent.chat_progress import (
     APPROVAL_WAIT_SPAN,
     CONFIRMATION_WAIT_SPAN,
@@ -277,6 +276,7 @@ from app.features.agent.section_coverage import (
     with_unread_sections_notice,
 )
 from app.features.agent.skills import (
+    AgentSkillDefinition,
     reset_pinned_skills,
     resolve_skill,
     skill_registry,
@@ -3005,6 +3005,16 @@ def unavailable_skill_ids(skill_ids: Sequence[str]) -> list[str]:
     return [skill_id for skill_id in skill_ids if resolve_skill(skill_id) is None]
 
 
+def model_writes_answer(skill: AgentSkillDefinition) -> bool:
+    """このスキルを選ぶと、RAG の回答をそのまま返さずにモデルが回答を書くか（#5867）。
+
+    回答のツールを宣言せずにツールを使うスキル（データつきのスキル・ファイルを作るスキルなど）。
+    `final_answer_tool_names` と、業務 Agent の編集の案内（スキルの一覧の `model_writes_answer`）が
+    使う。
+    """
+    return not skill.final_answer_tools and bool(skill.mcp_requirements)
+
+
 def final_answer_tool_names(
     skill_ids: Sequence[str], origins: Mapping[tuple[str, str], str]
 ) -> frozenset[str]:
@@ -3021,9 +3031,9 @@ def final_answer_tool_names(
         skill = resolve_skill(skill_id)
         if skill is None or not skill.enabled:
             continue
-        finals = {(item.server_id, item.tool_name) for item in skill.final_answer_tools}
-        if not finals and skill.mcp_requirements:
+        if model_writes_answer(skill):
             return frozenset()
+        finals = {(item.server_id, item.tool_name) for item in skill.final_answer_tools}
         declared |= finals
         for requirement in skill.mcp_requirements:
             for server_id, tool_name in origins:
@@ -3032,6 +3042,26 @@ def final_answer_tool_names(
                 if not requirement.tool_names or tool_name in requirement.tool_names:
                     plain.add((server_id, tool_name))
     return frozenset(origins[key] for key in declared - plain if key in origins)
+
+
+def declares_grounding_tools(skill: AgentSkillDefinition) -> bool:
+    """スキルが根拠・データのツールを宣言しているか（#5859。業務 Agent の編集の設定の表示）。
+
+    MCP 接続（RAG・NL2SQL・登録した接続）のツールのうち、一覧・推薦を除くもの
+    （`tool_grounding.is_grounding_tool`）。ツールを挙げない宣言は接続のすべてのツールなので数える。
+    Control Plane のツール（ファイルを作るツールなど）は数えない。
+    """
+    return any(
+        item.server_id != CONTROL_PLANE_SERVER_ID
+        and (
+            not item.tool_names
+            or any(
+                tool_grounding.is_grounding_tool(mcp_function_name(item.server_id, name))
+                for name in item.tool_names
+            )
+        )
+        for item in skill.mcp_requirements
+    )
 
 
 def rag_final_answer(output: object) -> str | None:
@@ -4358,14 +4388,18 @@ async def _settle_and_finish(
         _record_usage(run.id, result, agent.model_id)
         await _finish(run.id, result, task, data_scopes=agent.data_scopes, rag_answer=True)
         return result
-    # 資料・データで確かめていない回答の扱いは、業務 Agent（Run が使う版）の設定で決める（#5859）。
-    # 拒答の設定だけが差し戻す。既定はモデルが返した回答をそのまま出し、確定のときに注意を付ける。
+    # 本文の確認の質問の差し戻しは回答前の確認の方針で（#1881・#1903）、確かめていない回答の
+    # 扱いは業務 Agent（Run が使う版）の設定で決める（#5859）。拒答の設定だけが確かめていない
+    # 回答を差し戻して拒答にし、既定は確定のときに注意を付ける。
     refuses = _ungrounded_answer_policy(agent) == tool_grounding.POLICY_REFUSE
-    refused = False
-    if refuses:
-        result, refused = await _require_tool_grounding(
-            run, sdk_agent, result, agent.data_scopes, assume=_assumes(task.confirmation)
-        )
+    result, refused = await _require_tool_grounding(
+        run,
+        sdk_agent,
+        result,
+        agent.data_scopes,
+        assume=_assumes(task.confirmation),
+        refuse=refuses,
+    )
     result = _resolve_report_result(run.id, result, agent.output_contract)
     if not refused:
         _raise_on_grounding_failure(run.id, result)
@@ -4897,28 +4931,13 @@ def _ungrounded_answer_policy(agent: Any) -> str:
     return str(getattr(agent, "ungrounded_answer_policy", tool_grounding.POLICY_ANNOTATE))
 
 
-def _grounding_waived(current: Any) -> bool:
-    """根拠・データのツールを呼んでいなくても、差し戻し・拒答・注意の対象にしない Run か。
-
-    2 つの設定（`annotate` / `refuse`）で同じ例外にする（#5859）。
-    """
-    if declined_kinds(current.metadata):
-        # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
-        # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
-        return True
-    # この Run がファイルを作った（#5853）。利用者が渡した内容をファイルにした Run で、
-    # ファイルは成果物に残っている。回答だけを拒答に置き換えると、作れたファイルと
-    # 「お答えできません」が食い違うので、モデルが返した回答をそのまま出す（差し戻さない）。
-    return any(artifact.kind == FILE_ARTIFACT_KIND for artifact in current.artifacts)
-
-
 def _ungrounded_answer(run: Any, sdk_agent: Agent[Any], result: Any) -> bool:
     """最後の回答が、根拠・データのツールを呼ばずに作った回答か（`annotate` の注意の対象。#5859）。
 
     拒答の設定なら拒答になる回答と同じ集合にする: 根拠・データのツールを渡した Run で、モデルが
     どれも呼ばず、確認の質問だけの回答（あいさつ・用件を聞くだけの回答を含む）でも NL2SQL の確認で
-    止まった Run でもない（`tool_grounding.needs_grounding`）。例外も同じ（`_grounding_waived`・
-    同じ会話の前の Run が根拠・データのツールで答えた続き・実行補助を外した Run）。回答の中身は
+    止まった Run でもない（`tool_grounding.needs_grounding`）。例外も同じ（利用者が確認を取り消した
+    Run・同じ会話の前の Run が根拠・データのツールで答えた続き・実行補助を外した Run）。回答の中身は
     見ない。承認・確認で止まる結果（回答を確定しない）は対象外。
     """
     from app.features.agent.runtime import runtime_repository
@@ -4931,7 +4950,7 @@ def _ungrounded_answer(run: Any, sdk_agent: Agent[Any], result: Any) -> bool:
     if list(getattr(result, "interruptions", []) or []):
         return False
     current = runtime_repository.get_run(run.id)
-    if _grounding_waived(current):
+    if declined_kinds(current.metadata):
         return False
     if not tool_grounding.needs_grounding(
         _answer_text(result.final_output),
@@ -4950,25 +4969,28 @@ async def _require_tool_grounding(
     data_scopes: data_scope.AgentDataScopes | None = None,
     *,
     assume: bool = False,
+    refuse: bool = False,
 ) -> tuple[Any, bool]:
-    """根拠・データのツールを呼ばずに作った回答を差し戻し、それでも呼ばなければ拒答にする（#1835）。
+    """根拠・データのツールを呼ばずに作った回答を差し戻し、`refuse` なら拒答にする（#1835）。
 
-    業務 Agent の設定が拒答（`ungrounded_answer_policy` が `refuse`。#5859）の Run だけが通る
-    （既定の `annotate` は差し戻さず、`_finish` が注意を付ける）。
-    根拠・データのツールを持つ Run で、モデルがどれも呼ばずに最終の回答を作ったら（確認の質問
-    だけの回答は除く。`tool_grounding.needs_grounding`）、`tool_grounding.MAX_RETRIES` 回まで
-    「ツールで確かめてから答える。確かめられないなら拒答する」を利用者のメッセージとして足して
-    Run を続ける（同じ SDK の Agent・ツール・予算。利用量は前の分に積む）。続けた Run が承認で
-    止まったら、そのまま返す（承認待ち。無人の Run は `_unattended_approvals` で続ける）。
-    差し戻しても呼ばなければ、2 つ目の値を True にして返す（`_finish` が拒答の文に置き換える）。
-    差し戻しと元の回答は Run の経過に残す。差し戻しの文は、この Run でモデルに回答前の確認の
-    ツール（`ask_user_confirmation`）を渡したかで分ける（#1881。`tool_grounding.retry_message`）。
-    差し戻しの後も、確認のツールを渡したのに本文で確認の質問だけを返した回答は、拒答にせず、
-    Run の経過に残す。
-    確認のツールを渡した Run（#1881）と `assume`（利用者に確認しない Run。#1903。`_assumes`）では、
-    ツールを呼ばずに本文の確認の質問だけを返した回答も 1 回差し戻す（あいさつへの返事は除く）。
-    `assume` の差し戻しの文は「確認の質問はせず、ツールで調べ、決まらない点は前提を示して答える」。
-    差し戻しの後も本文の聞き返しだけなら、拒答にはせず、Run の経過に残してそのまま出す。
+    2 つの設定を分けて当てる。
+    - 回答前の確認の方針（#1881・#1903）: 確認のツールを渡した Run と `assume`（利用者に確認しない
+      Run。`_assumes`。無人の Run を含む）では、ツールを呼ばずに本文の確認の質問だけを返した回答を
+      1 回差し戻す（あいさつへの返事は除く）。業務 Agent の確かめていない回答の設定に関わらず行う。
+      `assume` の差し戻しの文は「確認の質問はせず、ツールで調べ、決まらない点は前提を示して
+      答える」。差し戻しの後も本文の聞き返しだけなら、拒答にはせず、Run の経過に残してそのまま出す。
+    - 確かめていない回答の設定（`refuse`。業務 Agent の `ungrounded_answer_policy`。#1835・#5859）:
+      拒答の設定なら、根拠・データのツールを持つ Run で、モデルがどれも呼ばずに最終の回答を作ったら
+      （確認の質問だけの回答は除く。`tool_grounding.needs_grounding`）、`tool_grounding.MAX_RETRIES`
+      回まで「ツールで確かめてから答える。確かめられないなら拒答する」を利用者のメッセージとして
+      足して Run を続け、それでも呼ばなければ 2 つ目の値を True にして返す（`_finish` が拒答の文に
+      置き換える）。既定（`annotate`）はこの回答を差し戻さずに返す（`_finish` が注意を付ける）。
+
+    続けるときは同じ SDK の Agent・ツール・予算を使い、利用量は前の分に積む。続けた Run が承認で
+    止まったら、そのまま返す（承認待ち。無人の Run は `_unattended_approvals` で続ける）。差し戻しと
+    元の回答は Run の経過に残す。差し戻しの文は、この Run でモデルに回答前の確認のツール
+    （`ask_user_confirmation`）を渡したかで分ける（`tool_grounding.retry_message`）。差し戻しの後も、
+    確認のツールを渡したのに本文で確認の質問だけを返した回答は、拒答にせず、Run の経過に残す。
     回答の結論が範囲外・答えられないと述べる回答（調べずに判断した拒答。`tool_grounding.declined`。
     #2608）は、範囲の内外と根拠の有無をツールの結果で判断させる文で差し戻し、経過に `declined` を
     残す。
@@ -4987,7 +5009,9 @@ async def _require_tool_grounding(
     while not list(getattr(result, "interruptions", []) or []):
         answer = _answer_text(result.final_output)
         current = runtime_repository.get_run(run.id)
-        if _grounding_waived(current):
+        if declined_kinds(current.metadata):
+            # 利用者が確認を取り消し（「資料の検索は不要」など。#1441・#1445）、その手段を使わずに
+            # 続けると決めた Run。ほかの手段で続けるか意図を聞き直す回答を拒答にしない。
             return result, False
         steps = list(current.steps)
         if not tool_grounding.needs_grounding(
@@ -5007,8 +5031,12 @@ async def _require_tool_grounding(
         if _grounded_in_thread(run.id):
             # 同じ会話の前の Run がツールで答えた。前の回答の言い換え・整形を拒答にしない。
             return result, False
+        text_clarification = text_clarification_retried and is_clarification_only(answer)
+        if not refuse and not text_clarification:
+            # 既定（注意を付ける）は、確かめていない回答を差し戻さない（`_finish` が注意を付ける）。
+            return result, False
         if tool_grounding.retried(current.metadata) >= tool_grounding.MAX_RETRIES:
-            if text_clarification_retried and is_clarification_only(answer):
+            if text_clarification:
                 # 差し戻しの後も本文で聞き返した（#1881・#1903）。対象が曖昧な質問の聞き返しは
                 # 拒答にせず、経過に残してそのまま出す。
                 runtime_repository.record_tool_grounding(run.id, "text_clarification", answer)
@@ -5985,6 +6013,8 @@ def runtime_status() -> dict[str, Any]:
         "ready": False,
         "error_code": None,
         "message": None,
+        # 確かめていない回答に付ける注意（業務 Agent の編集の案内が差し込む。#5859）。
+        "ungrounded_notice": tool_grounding.UNGROUNDED_NOTICE,
         # Agent ごとに選べるモデル（システム設定 > モデル の登録モデル。ID と表示名だけ）。
         "models": [
             {"model_id": model.model_id, "display_name": model.display_name or model.model_id}

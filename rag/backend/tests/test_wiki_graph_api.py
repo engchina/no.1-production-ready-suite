@@ -111,6 +111,44 @@ class FakeOracle:
                 for did in documents[start : start + binds["graph_limit"]]
             ]
         by_id = {page.unit.unit_id: page for _, page in pages}
+        if "FROM rag_wiki_references r JOIN visible v ON v.page_id=r.page_id" in statement:
+            return [
+                {
+                    "document_id": by_id[source].unit.document_id,
+                    "target_name": name,
+                    "relation": relation,
+                }
+                for source, name, _, relation in REFERENCES
+                if source in by_id
+            ]
+        if "SELECT page_id,unit_id,document_id FROM visible WHERE" in statement:
+            wanted = {v for k, v in binds.items() if k.startswith("graph_conn_u")}
+            return [
+                {"page_id": uid, "unit_id": uid, "document_id": by_id[uid].unit.document_id}
+                for uid in by_id
+                if uid in wanted
+            ]
+        if any(key.startswith("graph_conn_p") for key in binds):
+            wanted_pages = {v for k, v in binds.items() if k.startswith("graph_conn_p")}
+            return [
+                {"page_id": src, "target_id": dep.unit_id, "relation": dep.relation}
+                for src, page in by_id.items()
+                for dep in page.navigation.dependencies
+                if src in wanted_pages and dep.unit_id in by_id
+            ]
+        if "SELECT s.unit_id AS source_id,s.document_id,r.target_name" in statement:
+            sources = {v for k, v in binds.items() if k.startswith("graph_conn_s")}
+            return [
+                {
+                    "source_id": source,
+                    "document_id": by_id[source].unit.document_id,
+                    "target_name": name,
+                    "target_section": section,
+                    "relation": relation,
+                }
+                for source, name, section, relation in REFERENCES
+                if source in by_id and source in sources
+            ]
         if "WITH shown_pages AS" in statement:
             shown = set(binds.values())
             return [
@@ -396,6 +434,52 @@ async def test_unit_detail_separates_directions_and_hides_relations_outside_scop
         await store.unit(KB, U["c1"])
 
 
+async def test_relations_resolve_document_names_once_per_request() -> None:
+    oracle = FakeOracle()
+    store = WikiGraphStore(oracle)  # type: ignore[arg-type]
+    everything = await store.relations(KB, U["a1"], 0, 500, grouped=True)
+    assert not everything["has_more"] and len(everything["items"]) == everything["total"] == 3
+    # 文書の名前の照合（範囲の全案内を読む）は 1 回の要求で 1 回だけ（#5916）。
+    names = [sql for sql, _ in oracle.statements if "SELECT DISTINCT p.document_id" in sql]
+    assert len(names) == 1
+
+
+async def test_document_graph_ranks_documents_by_references_and_links_them() -> None:
+    store = WikiGraphStore(FakeOracle())  # type: ignore[arg-type]
+    sample = await store.document_graph(KB, offset=0, limit=25)
+    assert [(d["id"], d["reference_count"]) for d in sample["documents"]] == [
+        ("doc-a", 2),
+        ("doc-b", 2),
+    ]
+    # 範囲の外の文書（doc-c）への参照は解けないので線にしない。
+    assert sample["links"] == [
+        {"source_id": "doc-a", "target_id": "doc-b", "relation": "exception", "count": 1},
+        {"source_id": "doc-b", "target_id": "doc-a", "relation": "prerequisite", "count": 1},
+    ]
+    assert sample["total"] == 2 and not sample["has_more"]
+    first = await store.document_graph(KB, offset=0, limit=1)
+    assert first["has_more"] and first["links"] == []
+    around = await store.document_graph(KB, offset=0, limit=25, document="doc-b")
+    assert [d["id"] for d in around["documents"]] == ["doc-a"] and len(around["links"]) == 2
+    with pytest.raises(KeyError):
+        await store.document_graph(KB, offset=0, limit=25, document="doc-c")
+
+
+async def test_connections_return_relations_between_selected_units_only() -> None:
+    store = WikiGraphStore(FakeOracle())  # type: ignore[arg-type]
+    found = await store.connections(KB, [U["a1"], U["a2"], U["a3"], U["b1"], U["c1"]])
+    assert {(c["source_id"], c["target_id"], c["relation"], c["scope"]) for c in found} == {
+        (U["a1"], U["a2"], "exception", "same_document"),
+        (U["a3"], U["a1"], "prerequisite", "same_document"),
+        (U["a3"], U["a2"], "continuation", "same_document"),
+        (U["a1"], U["b1"], "exception", "cross_document"),
+        (U["b1"], U["a3"], "prerequisite", "cross_document"),
+    }
+    pair = await store.connections(KB, [U["a1"], U["a3"]])
+    assert [(c["source_id"], c["target_id"]) for c in pair] == [(U["a3"], U["a1"])]
+    assert await store.connections(KB, [U["a1"]]) == []
+
+
 async def test_search_matches_unit_titles_and_guidance() -> None:
     store = WikiGraphStore(FakeOracle())  # type: ignore[arg-type]
     found = await store.search(KB, "単位 A3", offset=0, limit=25)
@@ -449,3 +533,35 @@ async def test_overview_prompts_unpaged_client_to_reload(monkeypatch: pytest.Mon
             response = await client.get(path, params=params)
             assert response.status_code == 200
             assert response.json()["data"]["documents"][0]["id"] == "doc-a"
+
+
+@pytest.mark.asyncio
+async def test_explore_routes_serve_document_graph_connections_and_locate() -> None:
+    from app.api.routes import wiki_search
+    from app.config import get_settings
+    from app.rag.wiki_explorer import WikiExplorer
+    from app.schemas.knowledge_base import KnowledgeBaseRef
+
+    async def scope() -> WikiExplorer:
+        oracle: Any = FakeOracle()
+        return WikiExplorer(oracle, [KnowledgeBaseRef(id=KB, name="合成")], get_settings())
+
+    app = FastAPI()
+    app.include_router(wiki_search.explorer_router(scope), prefix="/explore")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        sample = (await client.get("/explore/document-graph")).json()["data"]
+        assert [d["id"] for d in sample["documents"]] == ["doc-a", "doc-b"]
+        ids = ",".join([U["a1"], U["a2"]])
+        found = (await client.get("/explore/connections", params={"ids": ids})).json()["data"]
+        assert found["connections"][0]["scope"] == "same_document"
+        assert (await client.get("/explore/connections", params={"ids": "x,y"})).status_code == 422
+        located = await client.get("/explore/documents/doc-a/locate", params={"node": U["a2"]})
+        assert located.json()["data"]["path"][-1] == {"id": U["a2"], "index": 1}
+        missing = await client.get("/explore/documents/doc-a/locate", params={"node": U["c1"]})
+        assert missing.status_code == 404
+        everything = await client.get(f"/explore/units/{U['a1']}/relations", params={"limit": 500})
+        assert everything.status_code == 200 and len(everything.json()["data"]["items"]) == 3
+        too_many = await client.get(f"/explore/units/{U['a1']}/relations", params={"limit": 501})
+        assert too_many.status_code == 422

@@ -835,6 +835,23 @@ def test_citation_missing_mark_reaches_saved_chat_response(monkeypatch: MonkeyPa
     assert [m["answer_citation_missing"] for m in answers] == [False, True]
 
 
+def test_file_review_mark_reaches_saved_chat_response(monkeypatch: MonkeyPatch) -> None:
+    """回答し直した版がある回答だけに印を付ける（画面はその回答だけ以前の版を読む。#5938）。"""
+    fake = FakeChatOracle()
+    _chat_conversation(fake, "conv-review")
+    _stub_stream(monkeypatch, fake, ["m1"])
+    url = "/api/chat/conversations/conv-review/messages/stream"
+    assert client.post(url, json={"content": "合成の質問 A"}).status_code == 200
+    assert client.post(url, json={"content": "合成の質問 B"}).status_code == 200
+    # 2 つ目の回答だけ、資料を選び直して回答し直した（保存先は最新の版の回答を持つ）。
+    answers = [m for m in fake.messages["conv-review"] if m.role == "ASSISTANT"]
+    answers[1].reviewed_answer = "合成の回答し直した本文"
+
+    detail = client.get("/api/chat/conversations/conv-review").json()["data"]
+    saved = [m for m in detail["messages"] if m["role"] == "ASSISTANT"]
+    assert [m["has_file_review"] for m in saved] == [False, True]
+
+
 def test_stream_message_searches_with_the_search_top_k_default(monkeypatch: MonkeyPatch) -> None:
     """チャットの画面は top_k を送らず、RAG 検索と同じ既定(50)で検索する。上限は 100(#3512)。"""
     fake = FakeChatOracle()
