@@ -40,7 +40,7 @@ from contextlib import AbstractContextManager, ExitStack, contextmanager, nullco
 from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from pr_backend_core.oci_genai_regions import genai_endpoint
 from pr_backend_core.output_budget import configured_online_output_tokens
@@ -156,6 +156,9 @@ from app.schemas.search import (
 )
 
 T = TypeVar("T")
+
+if TYPE_CHECKING:
+    from app.rag.wiki_explorer import WikiHandoff
 
 logger = logging.getLogger(__name__)
 
@@ -749,6 +752,7 @@ class AnswerEngine:
         scope: AnswerScope | None = None,
         entity_store: EntityExpansionStore | None = None,
         attachment_chunks: Sequence[RetrievedChunk] = (),
+        wiki_handoff: WikiHandoff | None = None,
         degraded: DegradedSteps | None = None,
         materialize_images: bool = True,
         expand: bool = True,
@@ -761,6 +765,7 @@ class AnswerEngine:
         self._oracle = oracle
         # チャットの会話の添付から選んだ根拠の候補（#2517。`app.rag.chat_attachments`）。検索の
         # 結果の先頭に足し、rerank・文脈・引用は検索の chunk と同じに扱う。
+        self._wiki_handoff = wiki_handoff
         self._attachment_chunks = list(attachment_chunks)
         # 実体の表を読む SQL(#1362)。None は Oracle(``EntityStore``)。テストは同じ規則の表を渡す。
         self._entity_store = entity_store
@@ -905,6 +910,12 @@ class AnswerEngine:
                 "unresolved_count": sum(1 for hit in hits if not hit["source_chunk_ids"]),
                 "chunks": hits[:_REFERENCE_DIAGNOSTICS_LIMIT],
             }
+        if self._wiki_handoff:
+            selected_ids = {chunk.chunk_id for chunk in self._wiki_handoff.chunks}
+            for citation in outcome.citations:
+                citation.metadata["wiki_handoff_origin"] = (
+                    "selected" if citation.chunk_id in selected_ids else "additional"
+                )
         if state.wiki_trace:
             outcome.diagnostics["wiki"] = state.wiki_trace
         if degraded := state.degraded_steps():
@@ -998,6 +1009,9 @@ class AnswerEngine:
             照合し直す(#4941)。"""
 
             def call(*args: Any, **kwargs: Any) -> Any:
+                if self._wiki_handoff:
+                    handoff = self._wiki_handoff
+                    run_async(lambda: handoff.recheck(self._oracle, request.filters))
                 if state.wiki_pages:
                     run_async(
                         lambda: self._wiki_retriever().current_sources(
@@ -1016,6 +1030,18 @@ class AnswerEngine:
             else None
         )
 
+        selected_sources = []
+        if self._wiki_handoff:
+            for chunk in self._wiki_handoff.chunks:
+                state.chunks.setdefault(chunk.chunk_id, chunk)
+                selected_sources.append(
+                    _stored_child(chunk, rrf_score=0.0, retrieval_channels={"wiki"})
+                )
+
+        def additional_sources() -> list[Any]:
+            automatic = _wait_on_loop(wiki) if wiki is not None else []
+            return [*selected_sources, *automatic]
+
         dependencies = AnswerDependencies(
             search=lambda **kwargs: run_async(
                 lambda: self._search(request, state, defer_context=True, **kwargs)
@@ -1031,7 +1057,7 @@ class AnswerEngine:
             parse_text=checked(parse_text_response),
             parse_images=checked(parse_multimodal_response),
             # Wiki の検索の経路(#4941)。プロファイルで使用を指定したときだけ。始めた結果を待つ。
-            additional_sources=(lambda: _wait_on_loop(wiki)) if wiki is not None else None,
+            additional_sources=additional_sources if wiki is not None or selected_sources else None,
             rerank=lambda query, documents, settings, top_n=None: run_async(
                 lambda: self._rerank(query, list(documents), top_n)
             ),

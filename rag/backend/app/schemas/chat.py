@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.search import SEARCH_TOP_K_MAX, RetrievedChunk
 from app.schemas.search_answer_profile_knowledge import GuideConditionAnswer
+from app.schemas.wiki_graph import WikiSourceRef
 from app.search_defaults import search_top_k_default, search_top_k_schema
 
 
@@ -184,6 +185,7 @@ class ChatMessageRequest(BaseModel):
     """会話へのメッセージ送信リクエスト。"""
 
     content: str = Field(..., min_length=1, max_length=8000)
+    wiki_sources: list[WikiSourceRef] = Field(default_factory=list, max_length=200)
     question_context_token: str | None = Field(default=None, min_length=1, max_length=300000)
     # 複数指定でマルチモデル比較(設定済み OCI モデル間)。空なら既定モデル 1 系統。未登録のモデルが
     # あれば 422(落として既定のモデルで答えない。#4582)。

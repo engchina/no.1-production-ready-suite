@@ -320,6 +320,7 @@ def test_manifest_key_assignments() -> None:
         "GET", "/knowledge-bases"
     )
     assert _perm("GET", "/search-answer-profiles") == {
+        "menu.wiki_search",
         "menu.search",
         "menu.chat",
         "menu.feedback",

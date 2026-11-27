@@ -12,7 +12,10 @@ from app.clients.oracle import OracleClient, _execute
 from app.clients.wiki_graph_index import backfill_graph_index
 from app.clients.wiki_graph_store import WikiGraphStore, section_id
 from app.clients.wiki_store import WikiSnapshot, WikiStore
+from app.config import get_settings
+from app.rag.wiki_explorer import WikiExplorer
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, fingerprint
+from app.schemas.knowledge_base import KnowledgeBaseRef
 from tests.test_document_summary_oracle import _EMBEDDING, _indexed_document
 from tests.test_wiki_store_oracle import annotate_references
 
@@ -132,6 +135,17 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     # Wiki の構築を無効にしても、保存済みの案内は図で見られる。
     await store.set_enabled(kb.id, False)
     assert {doc["document_id"] for doc in (await graph.overview(kb.id))["documents"]} == {a, b}
+    # 2 KB を対象にした手動検索は構築停止後も保存済みの原文を読める。
+    explorer = WikiExplorer(
+        oracle, [KnowledgeBaseRef(id=k.id, name=k.name) for k in (kb, other)], get_settings()
+    )
+    hits = await explorer.search("syntheticgraph", "keyword", 0, 50)
+    assert {h.document_id for h in hits.items} == {a, b, c}
+    assert [kb.id] in [h.knowledge_base_ids for h in hits.items]
+    original = await explorer.original(first_a)
+    assert original.chunks and await explorer.selected([original.source])
+    groups = await graph.relations(explorer.ids, first_a, 0, 1, grouped=True)
+    assert len(groups["items"]) == 1 and sum(groups["counts"].values()) == groups["total"]
     # 文書を KB から外すと図から消え、その文書への参照は開けない参照になる（#5784）。
     await oracle.remove_document_from_knowledge_base(kb.id, b)
     overview = await graph.overview(kb.id)

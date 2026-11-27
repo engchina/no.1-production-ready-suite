@@ -50,6 +50,8 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
+import { SelectedSources } from "@production-ready/ui";
+import { isWikiDraft, type WikiDraft } from "@/components/wiki-search/wiki-api";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { AnswerCitations } from "@/components/search/CitationList";
 import { answerNoticeItems } from "@/components/search/AnswerDetailsPanel";
@@ -818,6 +820,9 @@ export function ChatClient() {
   const modelLabels = new Map(compareModels.map((model) => [model.model_id, model.display_name]));
 
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
+  const [wikiDraft, setWikiDraft] = useWorkspaceState<WikiDraft | null>("chat.wikiSources", null,
+    (value): value is WikiDraft | null => value === null || isWikiDraft(value));
+  const wikiItems = auth.hasPermission(MENU_PERMISSIONS.wikiSearch) && wikiDraft?.profileId === searchAnswerProfileId ? wikiDraft.items : [];
   // 回答の前に選ぶ類似の登録済みQ&A（選ぶまで送らない。#684）。選ぶ前に画面を離れても、戻ったとき・
   // 再読込で同じ質問と候補を出す（作業状態。#702）。検索・回答プロファイルを変えたら消す。
   const [faqChoice, setFaqChoice] = useWorkspaceState<FaqChoice | null>(
@@ -1005,6 +1010,7 @@ export function ChatClient() {
   }, [liveStreaming]);
 
   function selectConversation(id: string) {
+    setWikiDraft(null);
     // lg 未満のシートは、会話を選んだら閉じる（開閉ボタンへフォーカスを戻す）。
     history.closeSheet();
     conversationSelectionVersionRef.current += 1;
@@ -1020,6 +1026,7 @@ export function ChatClient() {
   }
 
   async function startNewConversation() {
+    setWikiDraft(null);
     if (!searchAnswerProfileId || createConversation.isPending) return;
     const selectionVersion = ++conversationSelectionVersionRef.current;
     setErrorText("");
@@ -1158,6 +1165,10 @@ export function ChatClient() {
     // Q&A の照会は会話の履歴で補完した質問で行うので、先に会話を確定する（#5107）。
     const conversationId = await ensureConversation(controller);
     if (!conversationId || controller.signal.aborted) return;
+    if (wikiItems.length) {
+      await clarifyOrDeliver(content, controller);
+      return;
+    }
     let suggestions: ApprovedFaqSuggestionData[] = [];
     let questionContextToken: string | undefined;
     try {
@@ -1322,6 +1333,7 @@ export function ChatClient() {
     stampNow(streamActivityAtRef);
     const handlers: ChatStreamHandlers = {
       onStart: ({ user_message, columns }) => {
+        setWikiDraft(null);
         started = true;
         // 送った会話は一覧の先頭へ移るので、1 ページ目に戻して選択中の行を見せる（#403）。
         setConversationOffset(0);
@@ -1423,6 +1435,7 @@ export function ChatClient() {
         ...(questionContextToken ? { question_context_token: questionContextToken } : {}),
         model_ids: [],
         client_message_id: clientMessageId,
+        ...(wikiItems.length ? { wiki_sources: wikiItems.map(item => item.source) } : {}),
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
         ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
         ...(clarification ? { clarification } : {}),
@@ -1661,7 +1674,7 @@ export function ChatClient() {
                   compact
                   items={searchAnswerProfiles}
                   value={searchAnswerProfileId}
-                  onChange={setSearchAnswerProfileId}
+                  onChange={(id) => { if (id !== searchAnswerProfileId) setWikiDraft(null); setSearchAnswerProfileId(id); }}
                 />
                 {searchAnswerProfileWithoutKnowledgeBases && searchAnswerProfileId ? (
                   <Banner
@@ -1751,6 +1764,12 @@ export function ChatClient() {
                     会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
                 <ChatComposer
                   id="chat-composer"
+                  options={wikiItems.length ? <SelectedSources items={wikiItems} label={t("wiki.search.selected")}
+                    removeLabel={(name) => t("fileReview.remove", {name})}
+                    disabled={answerInProgress || sending}
+                    focusAfterLast={() => composerRef.current?.focus()}
+                    onRemove={(id) => setWikiDraft(previous => previous && ({...previous, items:previous.items.filter(item=>item.id!==id)}))}
+                    action={<Button variant="ghost" size="sm" onClick={() => navigate(APP_ROUTES.wikiSearch)}>{t("wiki.search.return")}</Button>} /> : undefined}
                   textareaRef={composerRef}
                   value={composer}
                   onValueChange={setComposer}

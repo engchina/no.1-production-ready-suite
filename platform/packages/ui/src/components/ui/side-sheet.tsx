@@ -30,7 +30,7 @@ export interface SideSheetProps {
   /** 閉じるボタンの名前（翻訳済み。Tooltip にも出る）。 */
   closeLabel: string;
   /** 出す側（既定は左）。 */
-  side?: "left" | "right";
+  side?: "left" | "right" | "bottom";
   /**
    * 幅（#1154 / #2281）。`default` は 22rem（画面幅 − 3.5rem まで。会話の履歴・絞り込みなどの短い一覧）。
    * `md` は 40rem（画面幅 − 3.5rem まで）で、一覧の 1 件の詳細（評価のケース・回答・コメントなど文章を読む内容）。
@@ -140,6 +140,7 @@ export function SideSheet({
   if (typeof document === "undefined") return null;
 
   const left = side === "left";
+  const bottom = side === "bottom";
   return createPortal(
     <>
       {/* scrim。タップで閉じる。読み上げとキーボードには出さない（閉じるボタンと Escape がある）。 */}
@@ -171,7 +172,7 @@ export function SideSheet({
               : size === "md"
                 ? "w-[40rem] max-w-[calc(100vw-3.5rem)]"
                 : "w-[22rem] max-w-[calc(100vw-3.5rem)]",
-          left ? "left-0 border-r border-border" : "right-0 border-l border-border",
+          bottom ? "inset-x-0 top-auto bottom-0 h-[min(78dvh,42rem)] w-full max-w-full rounded-t-lg border-t border-border" : left ? "left-0 border-r border-border" : "right-0 border-l border-border",
           "duration-200 ease-out motion-reduce:transition-none",
           // 開くときは visibility を即座に visible にする（遷移させると開いた瞬間にフォーカスを移せない）。
           // 閉じるときは slide が終わってから hidden にする。
@@ -180,7 +181,7 @@ export function SideSheet({
           // 画面の外に出ていた。#810）。
           open
             ? "visible translate-none transition-transform"
-            : cn("invisible transition-[transform,visibility]", left ? "-translate-x-full" : "translate-x-full"),
+            : cn("invisible transition-[transform,visibility]", bottom ? "translate-y-full" : left ? "-translate-x-full" : "translate-x-full"),
           className
         )}
         onKeyDown={onPanelKeyDown}

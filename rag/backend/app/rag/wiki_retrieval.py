@@ -159,7 +159,7 @@ class WikiRetriever:
     async def follow(
         self, scope: WikiScope, pages: dict[str, WikiPage], selected: Sequence[str]
     ) -> tuple[list[str], list[dict[str, int]], int, set[tuple[str, str, str]]]:
-        """選んだ単位から、同じ文書の依存を辿る（#5492）。別の文書への参照は辿らない（#5841）。
+        """選んだ単位から、同じ文書の依存を辿る（#5492）。
 
         ``RAG_WIKI_LINK_DEPTH`` 段まで、段ごとに関係の種類の順（例外・前提を先）で、まだ読んでいない
         単位を ``RAG_WIKI_LINK_MAX_UNITS`` まで足す。一度見た単位は辿り直さない（循環を止める）。
@@ -315,10 +315,30 @@ class WikiRetriever:
         vector_ranks = {page.unit.unit_id: rank for rank, page in enumerate(candidates, 1)}
         pages = {page.unit.unit_id: page for page in candidates}
         selected = list(dict.fromkeys(page.unit.unit_id for page in roots))
-        # 案内の依存（同じ文書）を、予算の内で段ごとに辿る（#5492）。別の文書への参照は辿らない
-        # （#5841）。
+        # 同じ文書の依存と、起点から直接参照する別の文書の原文を予算内で読む。
         with _stage("Wiki: 依存の辿り", seconds):
             followed, hops, missing, edges = await self.follow(wiki, pages, selected)
+            linked: list[str] = []
+            remaining = opts.rag_wiki_link_max_units - len(followed)
+            if selected and remaining > 0 and opts.rag_wiki_link_depth > 0:
+                cross = await store.cross_document_edges(
+                    wiki, {uid: pages[uid] for uid in selected}, remaining
+                )
+                edges.update(cross)
+                known = set(selected + followed)
+                targets = list(
+                    dict.fromkeys(
+                        uid
+                        for source, target, _ in cross
+                        for uid in (source, target)
+                        if uid not in known
+                    )
+                )
+                if targets:
+                    current = {p.unit.unit_id: p for p in await store.pages(wiki, unit_ids=targets)}
+                    pages.update(current)
+                    linked = [uid for uid in targets if uid in current]
+                    followed.extend(linked)
         with _stage("Wiki: 原文の読み込み", seconds):
             required = [pages[uid] for uid in [*selected, *followed]]
             originals = await self.current_sources(profile_id, scope, required)
@@ -333,6 +353,8 @@ class WikiRetriever:
         dependencies = set(followed)
 
         def origin(unit_id: str) -> dict[str, Any]:
+            if unit_id in linked:
+                return {"wiki_origin": "link"}
             if unit_id in dependencies:
                 return {"wiki_origin": "dependency"}
             return {
@@ -374,7 +396,8 @@ class WikiRetriever:
                 **rerank_trace,
                 "selected_documents": len({page.unit.document_id for page in roots}),
                 "selected_units": len(selected),
-                "dependency_units": len(followed),
+                "dependency_units": len(followed) - len(linked),
+                "link_units": len(linked),
                 "missing_dependency_units": missing,
                 "link_hops": hops,
                 "source_count": len(chunks),
@@ -385,7 +408,8 @@ class WikiRetriever:
                 ],
                 "source_chunk_ids_by_origin": {
                     "selected": source_ids(selected),
-                    "dependency": source_ids(followed),
+                    "dependency": source_ids([uid for uid in followed if uid not in linked]),
+                    **({"link": source_ids(linked)} if linked else {}),
                 },
             },
         )

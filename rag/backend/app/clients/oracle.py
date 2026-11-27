@@ -2362,15 +2362,18 @@ class OracleClient:
         """ナレッジベース詳細を返す。"""
         return await self._get_knowledge_base_with_oracle(knowledge_base_id)
 
-    async def knowledge_base_is_visible(self, knowledge_base_id: str) -> bool:
-        """件数を集計せず、指定IDそのもののKBが利用範囲内にあるか確認する。"""
+    async def knowledge_base_ref(self, knowledge_base_id: str) -> KnowledgeBaseRef | None:
+        """件数を集計せず、利用範囲内の KB の ID と表示名を返す。"""
         row = await self._fetch_one(
-            f"""SELECT kb.knowledge_base_id FROM rag_knowledge_bases kb
+            f"""SELECT kb.knowledge_base_id,kb.name FROM rag_knowledge_bases kb
             WHERE kb.knowledge_base_id = :knowledge_base_id
             AND {_oracle_knowledge_base_access_predicate_sql(alias="kb")}""",
             _with_tenant_bind({"knowledge_base_id": knowledge_base_id}),
         )
-        return row is not None
+        return KnowledgeBaseRef(id=knowledge_base_id, name=str(row["name"])) if row else None
+
+    async def knowledge_base_is_visible(self, knowledge_base_id: str) -> bool:
+        return (await self.knowledge_base_ref(knowledge_base_id)) is not None
 
     async def get_knowledge_base_config(self, knowledge_base_id: str) -> KnowledgeBaseConfig | None:
         """件数を集計せず、利用範囲内の KB の状態と retrieval_config だけを返す。"""

@@ -30,6 +30,7 @@ export const APP_ROUTES = {
   documents: "/documents",
   chat: "/chat",
   search: "/search",
+  wikiSearch: "/wiki-search",
   // 実行履歴（#1890）。詳細は `/history/<run_id>`。
   history: "/history",
   evaluation: "/evaluation",

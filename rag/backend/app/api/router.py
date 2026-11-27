@@ -33,6 +33,7 @@ from app.api.routes import (
     support_guides,
     wiki,
     wiki_graph,
+    wiki_search,
 )
 from app.rag.prompt_runtime import published_prompt_dependency
 from app.rag.published_language_runtime import published_language_dependency
@@ -67,6 +68,17 @@ api_router.include_router(
 )
 api_router.include_router(wiki.router, prefix="/knowledge-bases", tags=["knowledge-bases"])
 api_router.include_router(wiki_graph.router, prefix="/knowledge-bases", tags=["knowledge-bases"])
+api_router.include_router(wiki_search.profile_router, prefix="/wiki-search", tags=["wiki-search"])
+api_router.include_router(
+    wiki_search.explorer_router(wiki_search.profile_scope),
+    prefix="/wiki-search/profiles/{scope_id}",
+    tags=["wiki-search"],
+)
+api_router.include_router(
+    wiki_search.explorer_router(wiki_search.kb_scope),
+    prefix="/knowledge-bases/{scope_id}/wiki/explore",
+    tags=["knowledge-bases"],
+)
 api_router.include_router(
     search_answer_profile_knowledge.router,
     dependencies=[Depends(published_language_dependency), Depends(published_prompt_dependency)],

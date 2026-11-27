@@ -30,6 +30,7 @@ import { SearchAnswerProfileManagementClient } from "@/components/search-answer-
 import { Sidebar } from "@/components/layout/Sidebar";
 import { DatabaseGate } from "@/components/system/DatabaseGate";
 import { ChatClient } from "@/components/chat/ChatClient";
+import { WikiSearchClient } from "@/components/wiki-search/WikiSearchClient";
 import { SearchClient } from "@/components/search/SearchClient";
 import { RunHistoryClient, RunHistoryDetailClient } from "@/components/history/RunHistoryClient";
 import { RememberedSearchParams } from "@/components/RememberedSearchParams";
@@ -107,6 +108,7 @@ export function App() {
         <Route path={`${APP_ROUTES.documents}/:id`} element={<DocumentDetailRoute />} />
         <Route path={APP_ROUTES.chat} element={<ChatClient />} />
         <Route path={APP_ROUTES.search} element={<SearchClient />} />
+        <Route path={APP_ROUTES.wikiSearch} element={<WikiSearchClient />} />
         {/* 実行履歴（チャット・RAG 検索の実行。#1890）。詳細は全幅（Agent の実行履歴と同じ型）。 */}
         <Route path={APP_ROUTES.history} element={<RunHistoryClient />} />
         <Route path={`${APP_ROUTES.history}/:runId`} element={<RunHistoryDetailRoute />} />

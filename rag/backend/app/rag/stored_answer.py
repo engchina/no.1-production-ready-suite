@@ -51,6 +51,10 @@ _PAGE_AND_SECTION_KEYS = (
     "sheet_name",
     "row_start",
     "row_end",
+    "source_line_start",
+    "source_line_end",
+    "line_start",
+    "line_end",
     # XML ツリー JSON の段落の引用ラベルと原典の URL（#2024。引用カードの印と出典の行）。
     "xml_tree_document_id",
     "xml_tree_document_title",
@@ -80,6 +84,7 @@ _EVIDENCE_KEYS = (
     # Wiki の経路の由来(起点 / 関係を辿った先)と、起点の Wiki のベクトル検索の順位(#5831)。
     "wiki_origin",
     "wiki_rank",
+    "wiki_handoff_origin",
     # 文書の版（処理レシピ・古い版の印）。
     "recipe_id",
     "recipe_slot_no",

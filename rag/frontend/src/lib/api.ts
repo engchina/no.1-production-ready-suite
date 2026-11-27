@@ -1635,6 +1635,7 @@ export interface ConversationUpdateBody {
 }
 
 export interface ChatMessageRequestBody {
+  wiki_sources?: {unit_id: string; source_hash: string}[];
   content: string;
   question_context_token?: string;
   model_ids?: string[];
