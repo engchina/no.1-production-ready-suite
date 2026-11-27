@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { MessagesSquare, Search, SlidersHorizontal } from "lucide-react";
+import { MessagesSquare, Search, ListRestart, SlidersHorizontal } from "lucide-react";
 import {
   Button,
   Card,
@@ -9,6 +9,9 @@ import {
   Disclosure,
   FieldActionRow,
   FormGrid,
+  FieldSkeleton,
+  Skeleton,
+  TimedLoadingState,
   PageBody,
   PageHeader,
   SelectedSources,
@@ -45,6 +48,10 @@ interface SearchState {
   submitted: string;
   method: WikiMethod;
   root: string;
+  appliedMethod?: WikiMethod;
+  appliedKb?: string;
+  offset?: number;
+  selectedUnit?: string;
   items: WikiPick[];
 }
 const initial: SearchState = {
@@ -59,6 +66,10 @@ const initial: SearchState = {
 function isSearch(value: unknown): value is SearchState {
   return (
     isWikiDraft(value) &&
+    (!("selectedUnit" in value) || typeof value.selectedUnit === "string") &&
+    (!("offset" in value) || (typeof value.offset === "number" && Number.isSafeInteger(value.offset) && value.offset >= 0)) &&
+    (!("appliedMethod" in value) || ["vector", "keyword", "hybrid"].includes(String(value.appliedMethod))) &&
+    (!("appliedKb" in value) || typeof value.appliedKb === "string") &&
     "kb" in value &&
     typeof value.kb === "string" &&
     "query" in value &&
@@ -74,6 +85,7 @@ function isSearch(value: unknown): value is SearchState {
 export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string }) {
   const auth = useAuth();
   const navigate = useNavigate();
+  const client = useQueryClient();
   const manual = !knowledgeBaseId;
   const canChat =
     auth.hasPermission(MENU_PERMISSIONS.chat) && auth.hasPermission(MENU_PERMISSIONS.wikiSearch);
@@ -82,8 +94,9 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
   const [run, setRun] = useState(0);
   const profiles = useAllSearchAnswerProfiles({ status: "ACTIVE" }, manual);
   const profileId = state.profileId;
+  const appliedMethod = state.appliedMethod ?? state.method;
   const scope: WikiScope = manual
-    ? { kind: "profile", id: profileId, kb: state.kb }
+    ? { kind: "profile", id: profileId, kb: state.appliedKb ?? state.kb }
     : { kind: "kb", id: knowledgeBaseId! };
   const available = useQuery({
     queryKey: ["wiki-kbs", profileId],
@@ -100,6 +113,8 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
     enabled: !manual && canChat && state.items.length > 0,
     retry: false,
   });
+  const isSearching = useIsFetching({ queryKey: ["wiki-explorer", scope, state.submitted ? "search" : "docs"] }) > 0;
+  const scopePending = manual && !!profileId && available.isPending && !profiles.isPending;
   const kbProfiles = chatProfiles.data ?? [];
   const chatProfile = manual
     ? profileId
@@ -109,10 +124,17 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
   }, [state, knowledgeBaseId]);
   const patch = (next: Partial<SearchState>) => setState((s) => ({ ...s, ...next }));
   const search = () => {
-    if (!scope.id) return;
-    patch({ submitted: state.query.trim(), root: "" });
+    if (!scope.id || isSearching || (manual && (!available.isSuccess || !state.query.trim()))) return;
+    void client.invalidateQueries({ queryKey: ["wiki-explorer", scope, state.query.trim() ? "search" : "docs"], refetchType: "none" });
+    patch({ submitted: state.query.trim(), root: "", selectedUnit: "", offset: 0, appliedKb: state.kb, appliedMethod: state.method,
+      ...(scope.kind === "profile" && scope.kb !== state.kb ? { items: [] } : {}) });
+
     setRun((r) => r + 1);
   };
+  function newSearch() {
+    patch({ query: "", submitted: "", root: "", selectedUnit: "", items: [], offset: 0, appliedKb: state.kb, appliedMethod: state.method });
+    document.getElementById("wiki-question")?.focus();
+  }
   const pick = (p: WikiPick) =>
     setState((s) => ({
       ...s,
@@ -120,11 +142,10 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
     }));
   function chat() {
     if (!canChat || !chatProfile || !state.items.length) return;
-    writeWorkspace("chat.wikiSources", { profileId: chatProfile, items: state.items });
+    writeWorkspace("chat.wikiSources", { profileId: chatProfile, items: state.items, knowledgeBaseId });
     writeWorkspace("chat.composer", state.submitted);
     for (const f of ["chat.conversationId", "chat.faqChoice", "chat.clarifyChoice"] as const)
       removeWorkspace(f);
-    if (!manual) writeWorkspace("wiki.search", { ...state, profileId: chatProfile, kb: knowledgeBaseId });
     navigate(`${APP_ROUTES.chat}?search_answer_profile_id=${encodeURIComponent(chatProfile)}`);
   }
   const noKbs = manual && !!profileId && available.isSuccess && !available.data.knowledge_bases.length;
@@ -166,9 +187,9 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
                 value,
                 label: t(`wiki.search.${value}`),
               }))}
-              onValueChange={(method) => patch({ method, root: "" })}
+              onValueChange={(method) => patch({ method })}
             />
-            {manual && (
+            {manual && (scopePending ? <FieldSkeleton /> : (
               <SelectField
                 id="wiki-search-kb"
                 label={t("wiki.search.kb")}
@@ -177,23 +198,29 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
                   { value: "", label: t("wiki.search.allKb") },
                   ...(available.data?.knowledge_bases ?? []).map((k) => ({ value: k.id, label: k.name })),
                 ]}
-                onValueChange={(kb) => patch({ kb, root: "", items: [] })}
+                onValueChange={(kb) => patch({ kb })}
               />
-            )}
+            ))}
           </FormGrid>
         )}
       </Disclosure>
       <div className="border-t border-border pt-4">
         <FieldActionRow
           actions={
+            <>
+            {manual && state.submitted && (
+              <Button icon={ListRestart} variant="secondary" onClick={newSearch}>{t("wiki.search.new")}</Button>
+            )}
             <Button
               size="lg"
               icon={Search}
-              disabled={!scope.id || noKbs || (!state.query.trim() && manual)}
+              loading={isSearching}
+              disabled={!scope.id || noKbs || (manual && (!state.query.trim() || !available.isSuccess))}
               onClick={search}
             >
               {t("search.button")}
             </Button>
+            </>
           }
         >
           <TextareaField
@@ -226,6 +253,11 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
       ) : (
         inputs
       )}
+      {manual && (profiles.isPending || scopePending) && (
+        <TimedLoadingState label={t(profiles.isPending ? "wiki.search.loadingProfiles" : "wiki.search.loadingScope")} operationKey={profileId} testId="wiki-scope-progress">
+          <Skeleton className="h-20 w-full" />
+        </TimedLoadingState>
+      )}
       {available.isError && manual && (
         <ApiErrorState
           error={available.error}
@@ -238,18 +270,25 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
       ) : scope.id && (!manual || (available.isSuccess && !!state.submitted)) ? (
         <>
           <WikiExplorer
-            key={JSON.stringify([scope, run, state.submitted, state.method])}
+            key={JSON.stringify([scope, run, state.submitted, appliedMethod])}
             scope={scope}
             kbs={available.data?.knowledge_bases ?? []}
             question={state.submitted}
-            method={state.method}
+            method={appliedMethod}
+            initialOffset={state.offset ?? 0}
+            onOffset={(offset) => patch({ offset, root: "", selectedUnit: "" })}
             picks={state.items}
             toggle={canChat ? pick : undefined}
+            initialSelection={state.selectedUnit}
+            onSelectUnit={(selectedUnit) => patch({ selectedUnit })}
             initialUnit={state.root}
             onRoot={(root) => patch({ root })}
           />
           {canChat && state.items.length > 0 && (
             <div className="space-y-2 rounded-md border border-border bg-surface p-3">
+              {!manual && chatProfiles.isPending && (
+                <TimedLoadingState label={t("wiki.search.loadingProfiles")} operationKey={knowledgeBaseId}><FieldSkeleton /></TimedLoadingState>
+              )}
               {!manual && kbProfiles.length > 1 && (
                 <SelectField
                   id="wiki-chat-profile"
@@ -287,7 +326,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
           )}
         </>
       ) : (
-        manual && (
+        manual && !profiles.isPending && !profiles.isError && !scopePending && !available.isError && (
           <Card>
             <CardContent className="pt-5">
               <EmptyState

@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Network } from "lucide-react";
 import { Disclosure } from "@production-ready/ui";
 import { WikiWorkspace } from "@/components/wiki-search/WikiSearchClient";
 import { t } from "@/lib/i18n";
 
 export function KnowledgeBaseGraphView({ knowledgeBaseId }: { knowledgeBaseId: string }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => window.location.hash === "#wiki-graph");
+  useEffect(() => {
+    if (window.location.hash === "#wiki-graph") document.getElementById("wiki-graph")?.scrollIntoView({ block: "start" });
+  }, [knowledgeBaseId]);
   return (
     <Disclosure
       surface="sunken"

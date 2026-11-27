@@ -299,3 +299,64 @@ test(
       });
   },
 );
+
+test("候補がなくても経過時間を示し、今回の選択に戻れる", { tag: "@responsive" }, async ({ page }, info) => {
+  await mockApi(page, 0, true);
+  const states = reviewSnapshots("trace-model", "question");
+  const prior = { ...states.unresolved, excluded: { "doc-b": "一覧 B.txt" } };
+  let current = prior;
+  let voted = false;
+  let release: (() => void) | undefined;
+  const gate = () => new Promise<void>((done) => { release = done; });
+  await page.route("**/api/feedback/current**", r => r.fulfill({ json: envelope([]) }));
+  await page.route("**/api/feedback", r => {
+    voted = true;
+    return r.fulfill({ json: envelope(r.request().postDataJSON()) });
+  });
+  await page.route("**/api/search/answers/trace-model/review", async r => {
+    if (r.request().method() === "POST") {
+      const action = r.request().postDataJSON();
+      if (action.action === "discover") {
+        await gate();
+        current = { ...prior, revision: 2, excluded: { ...prior.excluded, "doc-a": "操作ガイド A.pdf" },
+          pending: { question: { ...prior.versions[0].sources.question, citations: [] } } };
+      } else if (action.action === "back") {
+        current = { ...prior, revision: 3 };
+      } else {
+        expect(action.action).toBe("reset");
+        await gate();
+        current = { ...states.unresolved, excluded: prior.excluded, revision: 4 };
+      }
+    } else if (voted) {
+      await gate();
+    }
+    return r.fulfill({ json: envelope(!voted ? { ...prior, versions: states.initial.versions } : current) });
+  });
+  const dialog = page.getByRole("dialog");
+  async function waitForProgress(label: string, shotName: string) {
+    const progress = dialog.getByTestId("file-review-progress");
+    await expect(progress.locator("[data-processing-label]")).toHaveText(label);
+    await expect(progress.getByRole("timer")).toHaveText(/00:0[1-9]/);
+    await expect(progress.locator(".animate-pulse").first()).toBeVisible();
+    await expect(dialog.getByText("新しい候補はありません。")).toHaveCount(0);
+    if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+      await page.screenshot({ path: process.env.RAG_E2E_SCREENSHOT_DIR + "/review-" + shotName + "-" + info.project.name + ".png" });
+    }
+    release!();
+  }
+  await ask(page);
+  await page.getByRole("button", { name: "未解決", exact: true }).click();
+  await waitForProgress("回答と資料を読み込んでいます", "open");
+  await dialog.getByRole("radio", { name: "今回の資料を外して探し直す" }).check();
+  await dialog.getByRole("button", { name: "今回の資料を除外して、ほかの候補を探す" }).click();
+  await waitForProgress("ほかの候補を検索しています", "discover");
+  await expect(dialog.getByText("新しい候補はありません。")).toBeVisible();
+  await dialog.getByRole("button", { name: "戻る", exact: true }).click();
+  await expect(dialog.getByRole("radio")).toHaveCount(3);
+  await expect(dialog.getByRole("checkbox", { name: "操作ガイド A.pdf" })).toBeVisible();
+  await expect(dialog.getByRole("checkbox", { name: "一覧 B.txt" })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "この質問を最初から探す" }).click();
+  await dialog.getByRole("button", { name: "この質問を最初から探す" }).click();
+  await waitForProgress("この質問の資料を最初から検索しています", "restart");
+  await expect(dialog.getByRole("radio")).toHaveCount(3);
+});

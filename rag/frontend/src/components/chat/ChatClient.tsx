@@ -1769,7 +1769,7 @@ export function ChatClient() {
                     disabled={answerInProgress || sending}
                     focusAfterLast={() => composerRef.current?.focus()}
                     onRemove={(id) => setWikiDraft(previous => previous && ({...previous, items:previous.items.filter(item=>item.id!==id)}))}
-                    action={<Button variant="ghost" size="sm" onClick={() => navigate(APP_ROUTES.wikiSearch)}>{t("wiki.search.return")}</Button>} /> : undefined}
+                    action={<Button variant="ghost" size="sm" onClick={() => navigate(wikiDraft?.knowledgeBaseId ? APP_ROUTES.knowledgeBases + "/" + encodeURIComponent(wikiDraft.knowledgeBaseId) + "#wiki-graph" : APP_ROUTES.wikiSearch)}>{t("wiki.search.return")}</Button>} /> : undefined}
                   textareaRef={composerRef}
                   value={composer}
                   onValueChange={setComposer}
