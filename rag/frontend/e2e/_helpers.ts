@@ -281,8 +281,8 @@ export async function openSearchableMultiSelect(scope: Page | Locator, label: st
 }
 
 /**
- * 開いている検索つきの複数選択（`SearchableMultiSelect`）の popover が、トリガーに合わせた幅（20〜40rem、375px は画面の幅から
- * 左右の 1rem を引いた幅）で画面からはみ出さず、下部の「N 件選択中」が折り返さず、操作の組（表示中をすべて選択・クリア・完了）が
+ * 検索つきの複数選択（`SearchableMultiSelect`）の popover はトリガーに合わせた幅（20〜40rem）で、
+ * 左右の 1rem を空ける。下部の「N 件選択中」が折り返さず、操作の組（表示中をすべて選択・クリア・完了）が
  * 1 行にそろうことを確かめる（#2091・#5267）。popover が 28rem 以上なら、件数の文と操作の組も 1 行に並ぶ。
  */
 export async function expectSearchablePanelFits(page: Page): Promise<void> {

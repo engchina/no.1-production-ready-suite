@@ -753,8 +753,8 @@ export interface SearchablePanelLayout {
 /**
  * 開いている検索つきの複数選択（`SearchableMultiSelect`）の popover の下部の行と位置を測る（#2091・#5267）。
  *
- * 規則（README §4「検索して選ぶ選択欄の popover」）: popover はトリガーと同じ幅を 20〜40rem に収め（sm 未満は画面の幅から
- * 左右の 1rem を引いた幅）、画面からはみ出さない。下部の「N 件選択中」は折り返さず、操作の組（表示中をすべて選択・クリア・
+ * 規則（README §4「検索して選ぶ選択欄の popover」）: popover はトリガーと同じ幅を 20〜40rem に収め、
+ * 画面の左右の 1rem を空ける。下部の「N 件選択中」は折り返さず、操作の組（表示中をすべて選択・クリア・
  * 完了）は分けず、ボタンの間は 0.25rem 空ける（#5465）。幅が足りないときだけ件数の文と操作の組を 2 段にする。
  *
  * ```ts
@@ -816,15 +816,13 @@ export async function measureSearchablePanels(page: EvaluatePage): Promise<Searc
 }
 
 /**
- * 検索つきの選択の popover の幅の規則（#5267）。sm（640px）以上はトリガーの幅を 20〜40rem に収めた幅、
- * sm 未満は画面の幅から左右の 1rem を引いた幅（どちらも画面の左右の 1rem の内側を超えない）。
+ * 検索つきの選択の popover の幅（#5893）。どの画面でもトリガーに合わせ、画面の左右の 1rem を空ける。
  */
 export function expectedSearchablePopoverWidth(
   panel: Pick<SearchablePanelLayout, "fieldWidth" | "viewport" | "rem">
 ): number {
   const available = panel.viewport - panel.rem * 2;
-  if (panel.viewport < 640) return Math.floor(available);
-  return Math.floor(Math.min(available, Math.max(20 * panel.rem, Math.min(40 * panel.rem, panel.fieldWidth))));
+  return Math.min(Math.floor(available), Math.max(20 * panel.rem, Math.min(40 * panel.rem, panel.fieldWidth)));
 }
 
 /** 文字の横のアイコンの縦の中心のずれ（`findIconTextMisalignment`）。 */

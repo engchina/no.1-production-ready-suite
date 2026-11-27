@@ -27,6 +27,7 @@ export interface WikiPick {
   id: string;
   name: string;
   location: string;
+  fullLocation?: string;
   source: SourceRef;
 }
 export interface WikiOriginal extends WikiGraphUnitRef {
@@ -66,6 +67,7 @@ export function isWikiDraft(value: unknown): value is WikiDraft {
       typeof item.id === "string" &&
       typeof item.name === "string" &&
       typeof item.location === "string" &&
+      (item.fullLocation === undefined || typeof item.fullLocation === "string") &&
       item.source?.unit_id === item.id &&
       typeof item.source.source_hash === "string",
   );
@@ -122,10 +124,10 @@ export const wikiApi = {
       signal,
     ),
 };
-export function sourceLocation(chunk: RetrievedChunk | undefined, fallback: string): string {
-  if (!chunk) return fallback;
+function sourcePosition(chunk: RetrievedChunk | undefined, fallback: string) {
+  if (!chunk) return { short: fallback, full: fallback };
   const page = passagePageLabel(chunk);
-  if (page) return page;
+  if (page) return { short: page, full: page };
   const metadata = chunk.metadata;
   const locator = metadata.source_locator;
   const m =
@@ -134,14 +136,24 @@ export function sourceLocation(chunk: RetrievedChunk | undefined, fallback: stri
       : metadata;
   const from = Number(m.source_line_start ?? m.line_start ?? m.row_start);
   const to = Number(m.source_line_end ?? m.line_end ?? m.row_end);
-  if (from > 0) return t("wiki.search.lines", { range: to > from ? `${from}–${to}` : String(from) });
-  return String(m.xml_tree_citation_label || fallback);
+  if (from > 0) {
+    const lines = t("wiki.search.lines", { range: to > from ? `${from}–${to}` : String(from) });
+    return { short: lines, full: lines };
+  }
+  const citation = String(m.xml_tree_citation_label || fallback);
+  return { short: fallback || citation, full: citation };
+}
+export function sourceLocation(chunk: RetrievedChunk | undefined, fallback: string): string {
+  return sourcePosition(chunk, fallback).full;
 }
 export function sourcePick(original: WikiOriginal): WikiPick {
+  const location = sourcePosition(original.chunks[0], original.label);
+  const path = original.path;
   return {
     id: original.id,
     name: original.document_name,
     source: original.source,
-    location: sourceLocation(original.chunks[0], original.label),
+    location: location.short,
+    fullLocation: (path.at(-1) === location.full ? path : [...path, location.full]).join(" › "),
   };
 }

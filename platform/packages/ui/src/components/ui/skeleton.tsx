@@ -162,6 +162,8 @@ export function FormSkeleton({ fields = 4, title = true, actions = true, classNa
 }
 
 export interface FieldSkeletonProps {
+  /** 検索付きの選択欄と同じ幅を予約する。 */
+  searchable?: boolean;
   /** 幅の段。読み込み後の欄の `width` と同じ値を渡す（既定 `full`）。 */
   width?: FieldWidth;
   /** 高さ。読み込み後の欄の `size` と同じ値を渡す（既定 `md`）。 */
@@ -191,6 +193,7 @@ const FIELD_HELPER_LINE_CLASS = { 1: "h-[1lh]", 2: "h-[2lh]", 3: "h-[3lh]" } as 
  */
 export function FieldSkeleton({
   width = "full",
+  searchable,
   size = "md",
   fieldLabel,
   helperText,
@@ -218,7 +221,7 @@ export function FieldSkeleton({
         // 棒の高さ（1lh）は読み込み後のラベルの文字の行と同じ。
         <Skeleton className="h-[1lh] w-24 text-sm" />
       )}
-      <Skeleton className={cn(CONTROL_HEIGHT_CLASS[size], widthClasses.control)} />
+      <Skeleton className={cn(CONTROL_HEIGHT_CLASS[size], searchable && "w-[min(100%,var(--searchable-field-max-width))]", widthClasses.control)} />
       {helperText ? (
         <p className={cn("text-xs leading-relaxed text-fg-muted", widthClasses.text)} aria-hidden="true">
           {helperText}

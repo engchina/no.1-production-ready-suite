@@ -60,6 +60,7 @@ async def test_owner_confirms_candidates_before_creating_answer(
 
     async def search_again(req: SearchRequest, **kwargs: object) -> Mock:
         calls.append(req)
+        assert kwargs["flow"] == ("expanded" if surface == "chat" else "basic")
         assert req.filters["file_name"] == "資料"
         if req.generate_answer:
             assert json.loads(req.filters["include_document_ids"]) == ["C"]

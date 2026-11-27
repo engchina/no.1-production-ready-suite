@@ -374,15 +374,24 @@ for (const viewport of [
       // compact（チャット）は「ラベル 値 必須」、上のラベルの欄（検索）は「ラベル 必須 値」（#4560）。
       await expect(trigger).toHaveAccessibleName(/^検索・回答プロファイル\s*(必須\s*未選択|未選択\s*必須)$/);
       await expect(page.getByText("選んだ検索・回答プロファイルが参照するナレッジベースを検索し")).toHaveCount(0);
-      return trigger.evaluate((button) => {
-        // 欄（ラベル・ボタン）を置いた親の、内側の幅いっぱいに置く。
+      const box = await trigger.evaluate((button) => {
         const container = button.parentElement!.parentElement!;
         const style = getComputedStyle(container);
         const inner =
           container.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
         const rect = button.getBoundingClientRect();
-        return { width: rect.width, inner, height: rect.height };
+        const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+        return { width: rect.width, left: rect.left, inner, height: rect.height, rem };
       });
+      await trigger.click();
+      const panel = page.locator("[data-searchable-select-popover]");
+      await expect(panel).toBeVisible();
+      const menu = (await panel.boundingBox())!;
+      const expected = Math.min(viewport.width - 2 * box.rem, Math.max(20 * box.rem, box.width));
+      expect(Math.abs(menu.width - expected)).toBeLessThanOrEqual(1);
+      if (box.width >= 20 * box.rem) expect(Math.abs(menu.x - box.left)).toBeLessThanOrEqual(1);
+      await page.keyboard.press("Escape");
+      return box;
     };
 
     await page.goto("/search");
@@ -401,7 +410,7 @@ for (const viewport of [
     expect(Math.abs(badgeLayout.valueGap - badgeLayout.gap)).toBeLessThanOrEqual(0.5);
     expect(badgeLayout.chevronGap).toBeGreaterThanOrEqual(badgeLayout.gap);
     await page.getByRole("button", { name: /検索・回答プロファイル/ }).screenshot({ path: test.info().outputPath(`chat-target-required-${viewport.name}.png`) });
-    for (const box of [search, chat]) expect(Math.abs(box.width - box.inner)).toBeLessThanOrEqual(1);
+    for (const box of [search, chat]) expect(Math.abs(box.width - Math.min(box.inner, 40 * box.rem))).toBeLessThanOrEqual(1);
     expect(chat.width).toBeLessThan(search.width);
     const target = page.getByRole("button", {name: /検索・回答プロファイル/});
     expect(await target.evaluate(node => node.closest("[data-chat-target-selector]") !== null)).toBe(true);

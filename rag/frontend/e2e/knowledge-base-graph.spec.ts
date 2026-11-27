@@ -90,6 +90,18 @@ const related = Array.from({ length: 137 }, (_, i) => ({
   scope: i < 79 ? "same_document" : "cross_document",
   relation: i < 2 ? "exception" : "reference",
 }));
+async function expectPagerInsets(page: Page) {
+  const pager = page.getByRole("navigation", { name: "検索結果", exact: true });
+  await expect(pager).toBeVisible();
+  const insets = await pager.evaluate((nav) => {
+    const pane = nav.parentElement!.parentElement!.getBoundingClientRect();
+    const controls = nav.getBoundingClientRect();
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    return { left: controls.left - pane.left, bottom: pane.bottom - controls.bottom, rem };
+  });
+  expect(insets.left).toBeCloseTo(0.75 * insets.rem, 0);
+  expect(insets.bottom).toBeCloseTo(0.5 * insets.rem, 0);
+}
 function paged<T>(items: T[]) {
   return { items, total: items.length, offset: 0, limit: 50, has_next: false };
 }
@@ -232,6 +244,17 @@ test(
     await expect(location).toBeVisible();
     expect(await original.locator("..").evaluate(overflow)).toBeLessThanOrEqual(1);
     expect(await location.evaluate(overflow)).toBeLessThanOrEqual(1);
+    const phone = info.project.name === "mobile";
+    const panel = detail(page, phone);
+    await panel.getByRole("button", { name: "質問に追加" }).click();
+    if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+    await page.getByRole("button", { name: "チャットで質問" }).click();
+    const source = page.getByRole("list", { name: "Wiki で選んだ原文" }).getByRole("listitem");
+    const pageNumber = source.getByText("p.1", { exact: true });
+    await expect(pageNumber).toBeVisible();
+    expect(await pageNumber.locator("..").evaluate(overflow)).toBeLessThanOrEqual(1);
+    await source.locator("[data-info-tip]").click();
+    await expect(page.getByRole("tooltip")).toContainText(files[1].name);
     await expectNoPageOverflow(page);
   },
 );
@@ -250,6 +273,7 @@ test(
     const area = page.getByTestId("wiki-graph-disclosure");
     control.failDocs = false;
     await area.getByRole("button", { name: /再試行|再読み込み/ }).click();
+    await expectPagerInsets(page);
     await area.getByRole("button", { name: /1 合成資料 01/ }).click();
     const panel = detail(page, phone);
     await panel.getByRole("button", { name: "関連を展開" }).click();
@@ -279,6 +303,7 @@ test(
     const phone = info.project.name === "mobile",
       control = await data(page);
     await begin(page);
+    await expectPagerInsets(page);
     await expect
       .poll(() => control.calls.find((u) => u.pathname.endsWith("/search"))?.searchParams.get("method"))
       .toBe("hybrid");
@@ -321,7 +346,11 @@ test(
     await expect(composer).toHaveValue("資料の確認方法");
     const selected = page.getByRole("list", { name: "Wiki で選んだ原文" });
     await expect(selected.getByRole("listitem")).toHaveCount(2);
-    await selected.getByRole("button").first().click();
+    const first = selected.getByRole("listitem").first();
+    await first.locator("[data-info-tip]").click();
+    await expect(page.getByRole("tooltip")).toContainText("p.1");
+    await page.keyboard.press("Escape");
+    await first.locator("button[data-source-id]").click();
     await expect(selected).toContainText("p.2");
     await expect(selected.getByRole("listitem")).toHaveCount(1);
     await expectNoPageOverflow(page);

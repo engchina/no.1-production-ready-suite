@@ -466,9 +466,10 @@ async def _resolve_query_context(
                 "exclude_document_ids" in effective_request.filters
                 or "include_document_ids" in effective_request.filters
             ):
-                # 資料を指定した再回答で、登録済みの回答や独立したガイドから本文を足さない。
+                # 資料の再検索・再回答にも、元のプロファイルの用語と同義語を渡す。
                 settings = settings.model_copy(
                     update={
+                        "rag_runtime_knowledge": runtime_knowledge or {},
                         "rag_approved_faq_selected": {},
                         "rag_support_guide_enabled": False,
                     }

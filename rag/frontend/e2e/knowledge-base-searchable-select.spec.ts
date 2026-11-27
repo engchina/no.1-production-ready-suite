@@ -298,7 +298,7 @@ test("文書インデックスの状態は選択の欄 1 つで絞り込む（15
   await expectNoPageOverflow(page);
 });
 
-// #2091・#5267: 開いた popover はボタンの幅（20〜40rem）に合わせ、375px は画面の幅から左右の 1rem を引いた幅。
+// 開いた popover は 375px でもボタンと同じ幅にする。20rem 未満の欄では画面の余白を保って広げる（#5893）。
 // 下部の「N 件選択中」と操作（表示中をすべて選択・クリア・完了）は 28rem 以上なら 1 行、狭いときは件数の文と操作の組の
 // 2 段まで（操作の組は分けない）。画面からはみ出さない。
 const PANEL_SCREENS = [
@@ -327,6 +327,14 @@ for (const screen of PANEL_SCREENS) {
     await expect(footer.locator("span").first()).not.toHaveText(before ?? "");
     await expectSearchablePanelFits(page);
     await expectNoPageOverflow(page);
+    const viewport = page.viewportSize();
+    if (viewport?.width === 375) {
+      await page.setViewportSize({ width: 320, height: viewport.height });
+      const rem = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).fontSize));
+      await expect(page.locator("[data-searchable-select-popover]")).toHaveCSS("width", `${20 * rem}px`);
+      await expectSearchablePanelFits(page);
+      await expectNoPageOverflow(page);
+    }
   });
 }
 

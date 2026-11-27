@@ -279,7 +279,10 @@ test(
     expect(size.total).toBeGreaterThan(size.height);
     await panel.getByPlaceholder("ファイル名の一部を入力").fill("55");
     await expect(selected.getByRole("listitem")).toHaveCount(40);
-    await selected.getByRole("button").first().click();
+    await selected.getByRole("button", { name: names[0], exact: true }).click();
+    await expect(panel.locator('[role="tooltip"][data-tooltip-reason="press"]')).toHaveText(names[0]);
+    await page.keyboard.press("Escape");
+    await selected.locator("button[data-source-id]").first().click();
     expect(commands).toHaveLength(0);
     await expect(selected.getByRole("listitem")).toHaveCount(39);
     await panel.getByPlaceholder("ファイル名の一部を入力").fill("");
