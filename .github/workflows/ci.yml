@@ -293,6 +293,8 @@ jobs:
             rag_backend:
               - "rag/**"
               - "!rag/frontend/**"
+              # 3 製品の起動テストが使う、共有 UI の依存とビルドの準備手順。
+              - "platform/scripts/prepare-shared-ui.sh"
               # 入口の一覧のテスト（tests/test_system_access_entry_points.py）が、配備の後の確認で RAG の CLI を
               # 呼ぶ platform の配備のスクリプトを読む（#3334）。
               - "platform/deploy/*.sh"
