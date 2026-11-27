@@ -27,6 +27,8 @@ export interface DatabaseSettingsData {
   vector_column: string;
   adb_ocid: string;
   region: string;
+  /** Oracle AI Data Platform の OCID が設定されているか（区画を出すかを決める。#5931）。 */
+  aidp_configured?: boolean;
   config_source: "runtime";
 }
 
@@ -79,6 +81,22 @@ export interface AdbInfoData {
   region?: string | null;
 }
 
+export type AidpDbUserStatus = "exists" | "missing" | "unknown";
+
+/** Oracle AI Data Platform の連携の情報（読み取り専用。パスワードの項目は無い。#5931）。 */
+export interface AidpIntegrationData {
+  /** false なら未設定（ほかの項目は空。画面は区画を出さない）。 */
+  configured: boolean;
+  url: string;
+  ocid: string;
+  region: string;
+  /** 接続のサービス名から読めた ADB の DB 名（読めなければ空）。 */
+  adb_db_name: string;
+  adb_service_name: string;
+  db_user: string;
+  db_user_status: AidpDbUserStatus;
+}
+
 /** 製品側の API 関数（fetch wrapper・認証・エラー形式は製品ごとに異なるため注入する）。 */
 export interface DatabaseSettingsApi {
   getDatabaseSettings: (options?: {
@@ -98,8 +116,17 @@ export interface DatabaseSettingsApi {
   updateAdbSettings: (payload: AdbSettingsUpdate) => Promise<AdbInfoData>;
   startAdb: () => Promise<AdbInfoData>;
   stopAdb: () => Promise<AdbInfoData>;
+  /** Oracle AI Data Platform の連携の情報（`aidp_configured` のときだけ呼ぶ。#5931）。 */
+  getAidpIntegration: (options?: {
+    signal?: AbortSignal;
+  }) => Promise<AidpIntegrationData>;
 }
 
 /** 3製品で共通の React Query key（各製品の queries.ts と同じ）。 */
 export const DATABASE_SETTINGS_QUERY_KEY = ["settings", "database"] as const;
 export const ADB_INFO_QUERY_KEY = ["settings", "database", "adb"] as const;
+export const AIDP_INTEGRATION_QUERY_KEY = [
+  "settings",
+  "database",
+  "aidp",
+] as const;

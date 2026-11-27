@@ -122,6 +122,8 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "aidp_ocid",
         "aidp_region",
         "aidp_url",
+        # AIDP の External Catalog が ADB に接続する DB ユーザーの名前（#5931。パスワードは無い）
+        "aidp_db_user",
         "oracle_tcp_connect_timeout_seconds",
         "oracle_db_test_timeout_seconds",
         # 共通認証（構成管理者・認証ポリシー・ログインの Cookie 名。環境と認証方式も共通）。
