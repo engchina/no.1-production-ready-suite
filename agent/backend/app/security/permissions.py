@@ -187,7 +187,8 @@ PERMISSION_CATALOG: tuple[PermissionDefinition, ...] = (
     _menu_permission(MENU_SETTINGS_ANSWER_NOTICE, _GROUP_OPERATIONS, "回答の注意書き"),
     # 組み込み Runtime の状態とモデルの確認（#754 / #791）。
     _menu_permission(MENU_RUNTIMES, _GROUP_OPERATIONS, "実行環境"),
-    _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "MCP 接続"),
+    # 画面の名前は「外部接続」（MCP と A2A の接続。#5932）。権限の名前（code）は変えない。
+    _menu_permission(MENU_SETTINGS_EXTERNAL_MCP, _GROUP_OPERATIONS, "外部接続"),
     _menu_permission(MENU_SETTINGS_OCI, _GROUP_SETTINGS, "OCI 認証"),
     _menu_permission(MENU_SETTINGS_UPLOAD_STORAGE, _GROUP_SETTINGS, "アップロード保存先"),
     _menu_permission(MENU_SETTINGS_MODEL, _GROUP_SETTINGS, "モデル"),
@@ -559,6 +560,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/adb/settings"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/start"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/stop"): _any(MENU_SETTINGS_DATABASE),
+    # Oracle AI Data Platform の連携の情報（読み取り専用。#5931）。
+    ("GET", "/settings/database/aidp"): _any(MENU_SETTINGS_DATABASE),
     # 回答の注意書き（設定は製品ごと。#2449）。
     ("GET", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
     ("PUT", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),

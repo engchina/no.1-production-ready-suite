@@ -41,6 +41,10 @@ REQUIRED_ENTRIES = {
     "extract_wallet.sh",
     "cloud_init/bootstrap.template.yaml",
     "bastion.tf",
+    # 任意の Oracle AI Data Platform（#5917）。
+    "aidp.tf",
+    # 任意の Oracle Analytics Cloud（#5933）。
+    "oac.tf",
     "cloud_init/bastion.sh",
 }
 FORBIDDEN_NAMES = {".terraform.lock.hcl", "wallet_full.zip", "wallet_small.zip"}
@@ -67,6 +71,7 @@ SECRET_VARIABLES = [
     "app_admin_login_user_password",
     "nl2sql_oracle_deepsec_data_user_password",
     "bastion_vnc_password",
+    "aidp_db_user_password",
 ]
 # 任意の bastion の Compute（#2670）の入力と既定値（利用者の決定。2026-10-20）。
 BASTION_DEFAULTS = {
@@ -588,7 +593,7 @@ def _verify_schema(schema: str, variables: str) -> None:
         "New Autonomous AI Database", "ADB のネットワーク",
         "主 Compute の構成", "主 Compute のネットワークと SSH", "HTTPS", "Bastion", "bastion の構成",
         "bastion のネットワークと接続", "アプリケーション管理者",
-        "NL2SQL Deep Data Security", "配備する製品", "Hidden",
+        "NL2SQL Deep Data Security", "AI Data Platform", "Oracle Analytics Cloud", "配備する製品", "Hidden",
     ]
     if list(groups) != expected_groups:
         raise AssertionError(f"Resource Manager groups must follow the deployment flow: {list(groups)}")
@@ -727,6 +732,18 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
         context="adb_workload",
     )
     _require_all(_terraform_variable(variables, "adb_db_version"), ['default     = "26ai"'], context="adb_db_version")
+    # Wallet は plan の時点で決まる形で小さくする（作業ディレクトリのファイルを経由しない）。経由すると、入力を
+    # 変えなくても apply のたびに Compute が作り直される（#5945）。
+    wallet_files = re.search(r'(?ms)^data "external" "wallet_files" \{.*?^\}', adb)
+    if wallet_files is None or "depends_on" in wallet_files.group(0):
+        raise AssertionError("data.external.wallet_files must not be deferred to apply with depends_on")
+    _require_all(
+        re.sub(r"[ \t]+", " ", wallet_files.group(0)),
+        ["wallet_base64 = oci_database_autonomous_database_wallet.generated_autonomous_database_wallet.content"],
+        context="data.external.wallet_files",
+    )
+    if "local_file" in adb:
+        raise AssertionError("the wallet must not go through a file in the stack directory (local_file)")
     _require_all(
         _terraform_variable(variables, "region"),
         ["contains([" + ", ".join(f'"{region}"' for region in SUPPORTED_REGIONS) + "], var.region)"],
@@ -1059,8 +1076,14 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
     # 既定はオン（#1668・#1675）。名前の既定は ADB_APP_USER。
     _require_all(_schema_variable(schema, "adb_app_user_enabled"), ["type: boolean", "default: true"], context="adb_app_user_enabled schema")
     _require_all(_schema_variable(schema, "adb_app_user_name"), ['default: "ADB_APP_USER"'], context="adb_app_user_name schema")
-    for name in ("adb_app_user_name", "adb_app_user_password", "existing_adb_admin_password"):
+    for name in ("adb_app_user_name", "adb_app_user_password"):
         _require_all(_schema_variable(schema, name), ["visible: adb_app_user_enabled"], context=f"{name} schema")
+    # ADMIN のパスワードは、アプリ用の DB ユーザーか Oracle AI Data Platform（#5917）を使うときに出す。
+    _require_all(
+        _schema_variable(schema, "existing_adb_admin_password"),
+        ["visible:\n      or:\n        - adb_app_user_enabled\n        - deploy_aidp\n"],
+        context="existing_adb_admin_password schema",
+    )
     for name in ("existing_oracle_user", "existing_oracle_password"):
         _require_all(
             _schema_variable(schema, name), ["visible:\n      not:\n        - adb_app_user_enabled"], context=f"{name} schema"
@@ -1121,7 +1144,11 @@ def _verify_app_db_user(schema: str, variables: str, adb: str, locals_source: st
     )
     _require_all(
         suite_init,
-        ['"${PROPS_DIR}/adb_admin.env"', 'python "${SUITE_DEPLOY_DIR}/suite-db-user.py" apply'],
+        [
+            '"${PROPS_DIR}/adb_admin.env"',
+            'run_suite_db_user apply --admin-env "${admin_env}" --current-env "${SUITE_REPO_DIR}/platform/.env"',
+            'python "${SUITE_DEPLOY_DIR}/suite-db-user.py" "$@"',
+        ],
         context="suite-init provision_db_app_user",
     )
     script = (SUITE_DEPLOY_DIR / "suite-db-user.py").read_text(encoding="utf-8")
@@ -1521,7 +1548,17 @@ def verify(package_path: Path) -> None:
         _verify_package_entries(archive)
         sources = {
             name: archive.read(name).decode()
-            for name in ("schema.yaml", "variables.tf", "adb.tf", "compute.tf", "locals.tf", "output.tf", "bastion.tf")
+            for name in (
+                "schema.yaml",
+                "variables.tf",
+                "adb.tf",
+                "compute.tf",
+                "locals.tf",
+                "output.tf",
+                "bastion.tf",
+                "aidp.tf",
+                "oac.tf",
+            )
         }
         bootstrap = archive.read("cloud_init/bootstrap.template.yaml").decode()
         bastion_script = archive.read("cloud_init/bastion.sh").decode()
@@ -1542,6 +1579,15 @@ def verify(package_path: Path) -> None:
     _verify_bootstrap(bootstrap)
     _verify_bastion(sources["schema.yaml"], sources["variables.tf"], sources["bastion.tf"], sources["output.tf"], bastion_script)
     _verify_app_db_user(sources["schema.yaml"], sources["variables.tf"], sources["adb.tf"], sources["locals.tf"], bootstrap)
+    _verify_aidp(
+        sources["schema.yaml"],
+        sources["variables.tf"],
+        sources["aidp.tf"],
+        sources["locals.tf"],
+        sources["output.tf"],
+        bootstrap,
+    )
+    _verify_oac(sources["schema.yaml"], sources["variables.tf"], sources["oac.tf"], sources["output.tf"], "\n".join([sources["locals.tf"], sources["compute.tf"], bootstrap]))
     stack_sources = "\n".join([*sources.values(), bootstrap, bastion_script])
     # ADB には Compute からしか接続できない（プライベート・エンドポイント・ACL）。アプリ用の DB ユーザーの作成などの
     # DB の操作は Compute の suite-init.sh が行い、Terraform の provisioner（local-exec など）では行わない（#1668）。
@@ -1581,6 +1627,253 @@ def verify(package_path: Path) -> None:
             "cloud_init/bastion.sh": bastion_script,
         },
     )
+
+
+# 任意の Oracle Analytics Cloud（#5933）の入力（フォームの group の並び）。
+OAC_GROUP = "Oracle Analytics Cloud"
+OAC_VARIABLES = [
+    "deploy_oac",
+    "oac_name",
+    "oac_identity_domain_ocid",
+    "oac_admin_user",
+    "oac_feature_set",
+    "oac_license_type",
+    "oac_capacity_ocpus",
+]
+
+
+def _verify_oac(schema: str, variables: str, oac: str, outputs: str, cloud_init_sources: str) -> None:
+    """任意の Oracle Analytics Cloud（#5933）: 入力・資源・output。cloud-init には何も書かない。"""
+    visible, group = _schema_groups(schema)[OAC_GROUP]
+    if visible != "true" or group != OAC_VARIABLES:
+        raise AssertionError(f"{OAC_GROUP} group: visible={visible}, variables={group}")
+    _require_all(_terraform_variable(variables, "deploy_oac"), ["default     = false"], context="deploy_oac")
+    _require_all(_schema_variable(schema, "deploy_oac"), ["visible: true", "default: false"], context="deploy_oac schema")
+    for name in OAC_VARIABLES[1:]:
+        _terraform_variable(variables, name)
+        _require_all(_schema_variable(schema, name), ["visible: deploy_oac"], context=f"{name} schema")
+    normalized = re.sub(r"[ \t]+", " ", oac)
+    _require_all(
+        normalized,
+        [
+            "count = var.deploy_oac ? 1 : 0",
+            "compartment_id = var.adb_compartment_ocid",
+            "domain_id = trimspace(var.oac_identity_domain_ocid)",
+            "admin_user = trimspace(var.oac_admin_user)",
+            'capacity_type = "OLPU_COUNT"',
+            'condition = trimspace(var.oac_identity_domain_ocid) != ""',
+            'condition = trimspace(var.oac_admin_user) != ""',
+        ],
+        context="oac.tf",
+    )
+    if len(re.findall(r'(?m)^resource "', oac)) != 1:
+        raise AssertionError("oac.tf must create only the Oracle Analytics Cloud instance")
+    # IDCS の access token は入力させない（期限が短い）。IAM policy も作らない。
+    for forbidden in ("idcs_access_token", "oci_identity_policy"):
+        if forbidden in re.sub(r"(?m)^\s*#.*$", "", oac) or f'variable "{forbidden}"' in variables:
+            raise AssertionError(f"the stack must not use {forbidden} for Oracle Analytics Cloud")
+    # cloud-init に入れない（deploy_oac の切り替えで user_data を変えない）。
+    if "deploy_oac" in cloud_init_sources or "oci_analytics_analytics_instance" in cloud_init_sources:
+        raise AssertionError("Oracle Analytics Cloud must not be written to cloud-init or platform/.env")
+    _require_all(
+        re.sub(r"[ \t]+", " ", outputs),
+        [
+            "value = var.deploy_oac ? oci_analytics_analytics_instance.suite[0].service_url : null",
+            "value = var.deploy_oac ? oci_analytics_analytics_instance.suite[0].id : null",
+        ],
+        context="output.tf",
+    )
+    for name in ("oac_url", "oac_ocid"):
+        if not re.search(rf"(?m)^  {name}:\n(?:    [^\n]*\n)*?    visible: deploy_oac", schema):
+            raise AssertionError(f"{name} output must be shown only when deploy_oac is true")
+
+
+# 任意の Oracle AI Data Platform（#5917）の入力（フォームの group の並び）と既定値（利用者の決定。2026-11-27）。
+AIDP_GROUP = "AI Data Platform"
+AIDP_VARIABLES = [
+    "deploy_aidp",
+    "aidp_iam_policies_confirmed",
+    "aidp_display_name",
+    "aidp_default_workspace_name",
+    "aidp_ai_feature_enabled",
+    "aidp_db_user_name",
+    "aidp_db_user_password",
+    "aidp_db_user_write_enabled",
+]
+AIDP_BOOL_DEFAULTS = {
+    "deploy_aidp": "false",
+    "aidp_iam_policies_confirmed": "false",
+    "aidp_ai_feature_enabled": "true",
+    "aidp_db_user_write_enabled": "true",
+}
+AIDP_OUTPUTS = [
+    "aidp_url",
+    "aidp_ocid",
+    "aidp_alias_key",
+    "aidp_default_workspace_name",
+    "aidp_api_endpoint",
+    "aidp_web_socket_endpoint",
+    "aidp_external_catalog_info",
+]
+
+
+def _verify_aidp(schema: str, variables: str, aidp: str, locals_source: str, outputs: str, bootstrap: str) -> None:
+    """任意の Oracle AI Data Platform（#5917）: 入力・資源・IAM の確認・DB ユーザーの置き場所・output。"""
+    for name, default in AIDP_BOOL_DEFAULTS.items():
+        _require_all(
+            _terraform_variable(variables, name), ["type        = bool", f"default     = {default}"], context=name
+        )
+        _require_all(_schema_variable(schema, name), ["type: boolean", f"default: {default}"], context=f"{name} schema")
+    _require_all(
+        _terraform_variable(variables, "aidp_db_user_name"),
+        ['default     = "ADB_AIDP_USER"', 'can(regex("^[A-Za-z][A-Za-z0-9_]{0,29}$", var.aidp_db_user_name))', '"ADMIN"'],
+        context="aidp_db_user_name",
+    )
+    _require_all(
+        _terraform_variable(variables, "aidp_db_user_password"),
+        ["length(var.aidp_db_user_password) >= 12", "length(var.aidp_db_user_password) <= 30"],
+        context="aidp_db_user_password",
+    )
+    # フォーム: 「NL2SQL Deep Data Security」の後の group。配備するかどうか以外は、配備するときだけ出す。
+    groups = _schema_groups(schema)
+    visible, members = groups.get(AIDP_GROUP, ("", []))
+    if visible != "true" or members != AIDP_VARIABLES:
+        raise AssertionError(f"the {AIDP_GROUP} group must list the AIDP inputs in order: {members}")
+    titles = list(groups)
+    order = ["NL2SQL Deep Data Security", AIDP_GROUP, "配備する製品"]
+    if [title for title in titles if title in order] != order:
+        raise AssertionError(f"the {AIDP_GROUP} group must follow NL2SQL Deep Data Security: {titles}")
+    _require_all(_schema_variable(schema, "deploy_aidp"), ["visible: true"], context="deploy_aidp schema")
+    for name in AIDP_VARIABLES[1:]:
+        _require_all(_schema_variable(schema, name), ["visible: deploy_aidp"], context=f"{name} schema")
+
+    normalized = re.sub(r"[ \t]+", " ", aidp)
+    _require_all(
+        normalized,
+        [
+            'resource "oci_ai_data_platform_ai_data_platform" "suite" {',
+            "count = var.deploy_aidp ? 1 : 0",
+            # 置き場所は ADB のコンパートメント。vector DB は stack の ADB（新規 / 既存）。
+            "compartment_id = var.adb_compartment_ocid",
+            "is_enable_ai_feature = var.aidp_ai_feature_enabled",
+            "vector_db_id = var.aidp_ai_feature_enabled ? local.effective_adb_ocid : null",
+            "vector_db_admin_cred = var.aidp_ai_feature_enabled ? local.effective_adb_admin_password : null",
+            # stack は IAM policy を作らない。未確認なら plan で止める。
+            "condition = var.aidp_iam_policies_confirmed",
+            # ADMIN のパスワードは、既存の ADB でアプリ用の DB ユーザーを使わない構成でも必須。
+            'condition = local.create_new_adb || trimspace(var.existing_adb_admin_password) != ""',
+            'condition = trimspace(var.aidp_db_user_password) != ""',
+            "condition = local.aidp_db_user != upper(trimspace(local.effective_oracle_user))",
+            "aidp_db_user = upper(trimspace(var.aidp_db_user_name))",
+        ],
+        context="aidp.tf",
+    )
+    if len(re.findall(r'(?m)^resource "', aidp)) != 1:
+        raise AssertionError("aidp.tf must create only the Oracle AI Data Platform Workbench instance")
+    # 画面の host は「alias key ＋ リージョンの符号」。符号は対応リージョンの分だけ持つ（region の validation と同じ集合）。
+    region_keys = dict(re.findall(r'(?m)^    "([a-z0-9-]+)"\s*=\s*"([a-z]{3})"$', aidp))
+    if set(region_keys) != set(SUPPORTED_REGIONS):
+        raise AssertionError(f"aidp_region_keys must cover the supported regions: {sorted(region_keys)}")
+    _require_all(
+        aidp,
+        [
+            ".alias_key}${local.aidp_region_keys[var.region]}.datalake.oci.oraclecloud.com/",
+            "https://aidp.${var.region}.oci.oraclecloud.com/20260430/aiDataPlatforms/${local.aidp_ocid}",
+        ],
+        context="aidp.tf URLs",
+    )
+    for forbidden in ("oci_identity_", "oci_kms_", "oci_vault_"):
+        if forbidden in aidp:
+            raise AssertionError(f"the stack must not create IAM policies or a Vault for Oracle AI Data Platform: {forbidden}")
+
+    # 共通 .env: deploy_aidp=true のときだけ書く（false の配備の cloud-init を変えない）。パスワードは書かない。
+    platform_env = _heredoc(locals_source, "platform_env")
+    block = re.search(r"(?ms)^%\{if var\.deploy_aidp~\}\n(.*?)^%\{endif~\}\n", platform_env)
+    if block is None:
+        raise AssertionError("PLATFORM_AIDP_* must be written only when deploy_aidp is true")
+    if _env_keys(block.group(1)) != [
+        "PLATFORM_AIDP_OCID",
+        "PLATFORM_AIDP_REGION",
+        "PLATFORM_AIDP_URL",
+        "PLATFORM_AIDP_DB_USER",
+    ]:
+        raise AssertionError(f"platform/.env AIDP keys: {_env_keys(block.group(1))}")
+    if "PLATFORM_AIDP_" in platform_env.replace(block.group(0), ""):
+        raise AssertionError("PLATFORM_AIDP_* must stay inside the deploy_aidp block")
+    for heredoc in ("platform_env", "rag_backend_env", "nl2sql_backend_env", "agent_backend_env"):
+        if "aidp_db_user_password" in _heredoc(locals_source, heredoc):
+            raise AssertionError(f"{heredoc} must not contain the Oracle AI Data Platform database user password")
+    _require_all(
+        _heredoc(locals_source, "adb_aidp_user_env"),
+        [
+            "SUITE_DB_ADMIN_USER=ADMIN",
+            "SUITE_DB_ADMIN_PASSWORD='${local.effective_adb_admin_password}'",
+            "SUITE_DB_AIDP_USER='${local.aidp_db_user}'",
+            "SUITE_DB_AIDP_PASSWORD='${var.aidp_db_user_password}'",
+            "SUITE_DB_AIDP_WRITE=${var.aidp_db_user_write_enabled}",
+        ],
+        context="adb_aidp_user.env",
+    )
+    _require_all(
+        re.sub(r"[ \t]+", " ", locals_source),
+        ['adb_aidp_user_env = var.deploy_aidp ? base64gzip(local.adb_aidp_user_env) : ""'],
+        context="adb_aidp_user.env only with Oracle AI Data Platform",
+    )
+    block = re.search(r'(?ms)^%\{ if adb_aidp_user_env != "" ~\}\n(.*?)^%\{ endif ~\}', bootstrap)
+    if block is None or not re.search(
+        r'path: "/u01/aipoc/props/adb_aidp_user.env"\n    permissions: "0600"\n    owner: "root:root"\n', block.group(1)
+    ):
+        raise AssertionError("adb_aidp_user.env must be written root-only (0600) and only with Oracle AI Data Platform")
+
+    # DB ユーザーの作成は Compute の上（アプリ用の DB ユーザーの後、製品の配備の前）。
+    suite_init = (SUITE_DEPLOY_DIR / "suite-init.sh").read_text(encoding="utf-8")
+    main_body = re.search(r"(?ms)^main\(\) \{\n(.*?)^\}", suite_init)
+    if main_body is None:
+        raise AssertionError("suite-init.sh main not found")
+    _require_in_order(
+        main_body.group(1),
+        ["if ! provision_db_app_user; then\n", "if ! provision_db_aidp_user; then\n", "deploy_products\n"],
+        context="suite-init main (aidp)",
+    )
+    _require_all(
+        suite_init,
+        ['"${PROPS_DIR}/adb_aidp_user.env"', 'run_suite_db_user apply-aidp --aidp-env "${aidp_env}"'],
+        context="suite-init provision_db_aidp_user",
+    )
+    script = (SUITE_DEPLOY_DIR / "suite-db-user.py").read_text(encoding="utf-8")
+    _require_all(
+        script,
+        [
+            '"GRANT CREATE SESSION TO {user}"',
+            '"GRANT READ, WRITE ON DIRECTORY DATA_PUMP_DIR TO {user}"',
+            'AIDP_WRITE_ROLE = "DWROLE"',
+        ],
+        context="suite-db-user.py AIDP grants",
+    )
+    # AIDP 用のユーザーに、アプリ用のユーザーの広い権限を付けない。
+    aidp_grants = script.split("AIDP_USER_GRANTS = (", 1)[1].split(")", 1)[0]
+    for forbidden in ("PDB_DBA", "ANY", "DATA ROLE", "DATA GRANT"):
+        if forbidden in aidp_grants:
+            raise AssertionError(f"the Oracle AI Data Platform database user must not get {forbidden}")
+
+    # output: 配備しないときは null。パスワードは出さない。フォームの output は配備するときだけ出す。
+    for name in AIDP_OUTPUTS:
+        body = re.search(rf'(?ms)^output "{name}" \{{.*?^\}}', outputs)
+        if body is None or "var.deploy_aidp ?" not in body.group(0) or ": null" not in body.group(0):
+            raise AssertionError(f"output {name} must be null unless deploy_aidp is true")
+        if "password" in body.group(0).lower().replace("enter the password", ""):
+            raise AssertionError(f"output {name} must not expose a password")
+        section = re.search(rf"(?ms)^  {name}:\n(.*?)(?=^  [a-z0-9_]+:\n|\Z)", _schema_section(schema, "outputs"))
+        if section is None or "visible: deploy_aidp" not in section.group(1):
+            raise AssertionError(f"schema output {name} must be visible only when deploy_aidp is true")
+    # AIDP の URL はアプリケーションの入口の並び（CA の証明書の前）、ほかは末尾。
+    output_names = re.findall(r"(?m)^  ([a-z0-9_]+):\n", _schema_section(schema, "outputs"))
+    if output_names.index("aidp_url") > output_names.index("ca_certificate_url"):
+        raise AssertionError("aidp_url must be listed with the application URLs")
+    # 末尾は AIDP の接続の情報、その後に Oracle Analytics Cloud の OCID（#5933）。
+    tail = [*AIDP_OUTPUTS[1:], "oac_ocid"]
+    if output_names[-len(tail) :] != tail:
+        raise AssertionError(f"AIDP connection outputs and oac_ocid must be the last outputs in order: {output_names}")
 
 
 def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, script: str) -> None:
@@ -1690,7 +1983,10 @@ def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, scr
         block = re.search(rf'(?ms)^output "{name}" \{{.*?^\}}', outputs)
         if block is None or value not in block.group(0) or "var.bastion_enabled ?" not in block.group(0):
             raise AssertionError(f"output {name} must be shown only when bastion_enabled")
-        if not re.search(rf"(?ms)^  {name}:\n(?:    .*\n)*?    visible: bastion_enabled", _schema_section(schema, "outputs")):
+        # 行の中だけに一致させる（`.` を改行にも一致させると、後ろの output が増えたときに後戻りが爆発する。#5917）。
+        if not re.search(
+            rf"(?m)^  {name}:\n(?:    [^\n]*\n)*?    visible: bastion_enabled", _schema_section(schema, "outputs")
+        ):
             raise AssertionError(f"output {name} must be shown only when bastion_enabled in the schema")
 
 

@@ -72,7 +72,7 @@ export default defineConfig(() => {
       // 共有システム設定パッケージが Router / React Query の context を共有できるよう、これらも 1 コピーへ集約する（#97）。
       // 共通画布の provider と製品の hook も同じ React Flow context を使う。
       // lucide-react も 1 コピーにする（1.x のアイコンは React の context を読む。共有 UI と同じ版を使う。#5571）。
-      dedupe: ["react", "react-dom", "react-router-dom", "@tanstack/react-query", "@xyflow/react", "lucide-react"],
+      dedupe: ["react", "react-dom", "react-router-dom", "@tanstack/react-query", "@xyflow/react", "cytoscape", "lucide-react"],
     },
     server: {
       host: "0.0.0.0",

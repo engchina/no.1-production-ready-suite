@@ -138,6 +138,29 @@ variableGroups:
       - nl2sql_oracle_deepsec_enabled
       - nl2sql_oracle_deepsec_data_user_password
 
+  - title: "AI Data Platform"
+    visible: true
+    variables:
+      - deploy_aidp
+      - aidp_iam_policies_confirmed
+      - aidp_display_name
+      - aidp_default_workspace_name
+      - aidp_ai_feature_enabled
+      - aidp_db_user_name
+      - aidp_db_user_password
+      - aidp_db_user_write_enabled
+
+  - title: "Oracle Analytics Cloud"
+    visible: true
+    variables:
+      - deploy_oac
+      - oac_name
+      - oac_identity_domain_ocid
+      - oac_admin_user
+      - oac_feature_set
+      - oac_license_type
+      - oac_capacity_ocpus
+
   - title: "配備する製品"
     visible: false
     variables:
@@ -286,9 +309,12 @@ variables:
   existing_adb_admin_password:
     type: password
     required: false
-    visible: adb_app_user_enabled
+    visible:
+      or:
+        - adb_app_user_enabled
+        - deploy_aidp
     title: "既存の ADB の ADMIN パスワード"
-    description: "アプリ用の DB ユーザーを作るために、Compute が配備のときに ADMIN で接続します（ADB には Compute から接続します）。platform/.env・各製品の .env には書かず、Compute の root だけが読める /u01/aipoc/props/adb_admin.env に置きます。単一引用符は使えません。"
+    description: "アプリ用の DB ユーザーを作るために、Compute が配備のときに ADMIN で接続します（ADB には Compute から接続します）。platform/.env・各製品の .env には書かず、Compute の root だけが読める /u01/aipoc/props/adb_admin.env に置きます。Oracle AI Data Platform を配備するときは、AI 機能の関連付けと AIDP 用の DB ユーザーの作成にも使います（必須）。単一引用符は使えません。"
     confirmation: true
 
   existing_oracle_user:
@@ -956,6 +982,130 @@ variables:
 
 
 
+  deploy_aidp:
+    type: boolean
+    required: true
+    visible: true
+    title: "Oracle AI Data Platform を配備する"
+    description: "既定はオフ。オンにすると、Oracle AI Data Platform Workbench を ADB のコンパートメントに 1 つ作り、この stack の ADB と関連付けます（作成に 20〜40 分かかることがあります）。データの取り込み・加工（Notebook・Spark・Workflow・カタログ）に使います。後から切り替えると主 Compute が作り直されるため、最初の配備で決めてください。"
+    default: false
+
+  aidp_iam_policies_confirmed:
+    type: boolean
+    required: true
+    visible: deploy_aidp
+    title: "Oracle AI Data Platform の IAM policy を設定済み"
+    description: "stack は IAM policy を作りません。terraform/README.md「Oracle AI Data Platform」の policy（利用者側・サービス側・プライベート・ネットワーク用）を設定してからオンにしてください。オフのままでは配備できません（policy が無いと、作成が長い待ちの後に失敗します）。"
+    default: false
+
+  aidp_display_name:
+    type: string
+    required: true
+    visible: deploy_aidp
+    title: "AI Data Platform の表示名"
+    default: "production-ready-suite-aidp"
+
+  aidp_default_workspace_name:
+    type: string
+    required: true
+    visible: deploy_aidp
+    title: "既定の workspace の名前"
+    description: "AI Data Platform と一緒に作る workspace の名前です。後から変えると AI Data Platform が作り直されます。"
+    default: "production-ready-suite"
+
+  aidp_ai_feature_enabled:
+    type: boolean
+    required: true
+    visible: deploy_aidp
+    title: "AI 機能（Knowledge Base・Agent）を有効にする"
+    description: "既定で有効。この stack の ADB を vector DB として関連付けます（ADMIN のパスワードを使い、AI Data Platform が ADB に自分の schema を作ります）。後から有効にすると AI Data Platform が作り直されます。"
+    default: true
+
+  aidp_db_user_name:
+    type: string
+    required: true
+    visible: deploy_aidp
+    title: "AIDP 用の DB ユーザー"
+    description: "AI Data Platform の External Catalog が ADB に接続するユーザーです（3 製品の接続のユーザーとは別。自分の schema だけを使えます）。Compute が配備のときに ADMIN で作ります。"
+    default: "ADB_AIDP_USER"
+
+  aidp_db_user_password:
+    type: password
+    required: false
+    visible: deploy_aidp
+    title: "AIDP 用の DB ユーザーのパスワード"
+    description: "12〜30 文字で、英大文字・英小文字・数字を 1 つ以上含めます（ユーザー名・二重引用符・単一引用符は使えません）。AI Data Platform で External Catalog を登録するときに入力します。Compute の root だけが読める /u01/aipoc/props/adb_aidp_user.env にだけ置き、platform/.env には書きません。"
+    confirmation: true
+
+  aidp_db_user_write_enabled:
+    type: boolean
+    required: true
+    visible: deploy_aidp
+    title: "AIDP 用の DB ユーザーに書き込みを許す"
+    description: "既定で有効。AI Data Platform で加工した結果を、このユーザーの schema に表として書けます（DWROLE と表領域の quota）。ほかの schema には書けません。オフにすると読み取りだけになります。"
+    default: true
+
+  deploy_oac:
+    type: boolean
+    required: true
+    visible: true
+    title: "Oracle Analytics Cloud を配備する"
+    description: "既定はオフ。オンにすると、Oracle Analytics Cloud を ADB のコンパートメントに 1 つ作ります（作成に 20〜40 分かかることがあります）。ADB のデータの可視化（dataset・workbook）に使います。ADB との接続は stack では作らず、Oracle Analytics Cloud の画面で作ります（手順は terraform/README.md「Oracle Analytics Cloud」）。後からオンにしても主 Compute は作り直されません。"
+    default: false
+
+  oac_name:
+    type: string
+    required: true
+    visible: deploy_oac
+    title: "Oracle Analytics Cloud の名前"
+    description: "英字で始め、英数字だけで付けます（30 文字まで）。tenancy で一意にし、後から変えられません。"
+    pattern: "^[A-Za-z][A-Za-z0-9]{0,29}$"
+    default: "ProductionReadySuiteOAC"
+
+  oac_identity_domain_ocid:
+    type: string
+    required: true
+    visible: deploy_oac
+    title: "Identity Domain の OCID"
+    description: "Oracle Analytics Cloud へのサインインに使う Identity Domain の OCID です（OCI コンソール › アイデンティティとセキュリティ › ドメイン）。後から変えると Oracle Analytics Cloud が作り直されます。"
+    pattern: "^ocid1\\.domain\\..+$"
+
+  oac_admin_user:
+    type: string
+    required: true
+    visible: deploy_oac
+    title: "Oracle Analytics Cloud の管理者のユーザー名"
+    description: "上の Identity Domain の利用者のユーザー名です（OCID ではなく、サインインに使う名前）。この利用者が Oracle Analytics Cloud の管理者になります。"
+
+  oac_feature_set:
+    type: enum
+    required: true
+    visible: deploy_oac
+    title: "エディション"
+    description: "ENTERPRISE_ANALYTICS（Enterprise Edition）か SELF_SERVICE_ANALYTICS（Professional Edition）。プライベート・エンドポイントの ADB に接続する Private Access Channel は Enterprise Edition だけで使えます。後から変えると Oracle Analytics Cloud が作り直されます。"
+    enum:
+      - "ENTERPRISE_ANALYTICS"
+      - "SELF_SERVICE_ANALYTICS"
+    default: "ENTERPRISE_ANALYTICS"
+
+  oac_license_type:
+    type: enum
+    required: true
+    visible: deploy_oac
+    title: "ライセンス"
+    enum:
+      - "LICENSE_INCLUDED"
+      - "BRING_YOUR_OWN_LICENSE"
+    default: "LICENSE_INCLUDED"
+
+  oac_capacity_ocpus:
+    type: number
+    required: true
+    visible: deploy_oac
+    title: "OCPU の数"
+    description: "1・2・4・6・8・10・12・16・24・36・52 のどれかです。1 は試用だけに使えます。本番は 2 以上にしてください。"
+    default: 2
+
 outputs:
 
   application_url:
@@ -981,6 +1131,18 @@ outputs:
     displayText: "Agent Control Plane URL"
     type: copyableString
     visible: deploy_agent
+
+  aidp_url:
+    title: "AI Data Platform URL"
+    displayText: "Oracle AI Data Platform Workbench URL"
+    type: copyableString
+    visible: deploy_aidp
+
+  oac_url:
+    title: "Oracle Analytics Cloud URL"
+    displayText: "Oracle Analytics Cloud URL"
+    type: copyableString
+    visible: deploy_oac
 
   ca_certificate_url:
     title: "CA certificate URL"
@@ -1023,3 +1185,45 @@ outputs:
     displayText: "Autonomous AI Database HIGH connection string"
     type: copyableString
     visible: true
+
+  aidp_ocid:
+    title: "AI Data Platform OCID"
+    displayText: "Oracle AI Data Platform Workbench instance OCID"
+    type: copyableString
+    visible: deploy_aidp
+
+  aidp_alias_key:
+    title: "AI Data Platform alias key"
+    displayText: "Oracle AI Data Platform Workbench alias key"
+    type: copyableString
+    visible: deploy_aidp
+
+  aidp_default_workspace_name:
+    title: "AI Data Platform default workspace"
+    displayText: "Default workspace of the Oracle AI Data Platform Workbench instance"
+    type: copyableString
+    visible: deploy_aidp
+
+  aidp_api_endpoint:
+    title: "AI Data Platform REST API"
+    displayText: "Base URL of the Oracle AI Data Platform Workbench REST API"
+    type: copyableString
+    visible: deploy_aidp
+
+  aidp_web_socket_endpoint:
+    title: "AI Data Platform WebSocket endpoint"
+    displayText: "WebSocket endpoint of the Oracle AI Data Platform Workbench instance"
+    type: copyableString
+    visible: deploy_aidp
+
+  aidp_external_catalog_info:
+    title: "External Catalog の登録に要る値"
+    displayText: "Values to register the Autonomous AI Database as an External Catalog in Oracle AI Data Platform"
+    type: copyableString
+    visible: deploy_aidp
+
+  oac_ocid:
+    title: "Oracle Analytics Cloud OCID"
+    displayText: "Oracle Analytics Cloud instance OCID"
+    type: copyableString
+    visible: deploy_oac

@@ -19,7 +19,7 @@ test(
     const recreateSection = page.locator('section[aria-labelledby="recreate-system-tables-title"]');
     const deletedData = [
       "実行履歴",
-      "保存済みの定義（業務 Agent・スキル・MCP 接続など）",
+      "保存済みの定義（業務 Agent・スキル・外部接続など）",
       "利用状況の集計データ",
       "ロールの権限と利用できる業務 Agent の割り当て",
     ];

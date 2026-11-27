@@ -148,7 +148,7 @@ for (const viewport of VIEWPORTS) {
         service_token_configured: false,
       });
       await page.goto("/settings/mcp-connections");
-      const table = page.getByRole("table", { name: "MCP 接続" });
+      const table = page.getByRole("table", { name: "外部接続" });
       // 見出しの行 + RAG / NL2SQL（標準の接続）+ CRM。
       await expect(table.getByRole("row")).toHaveCount(4);
 
@@ -178,7 +178,7 @@ for (const viewport of VIEWPORTS) {
       await trigger.click();
       await page.getByRole("menuitem", { name: "削除" }).click();
       const dialog = page.getByRole("alertdialog").or(page.getByRole("dialog"));
-      await expect(dialog.getByText("MCP 接続を削除しますか?")).toBeVisible();
+      await expect(dialog.getByText("外部接続を削除しますか?")).toBeVisible();
       await expectNoPageHorizontalOverflow(page);
       await dialog.getByRole("button", { name: "キャンセル" }).click();
       await expect(trigger).toBeVisible();
@@ -187,7 +187,7 @@ for (const viewport of VIEWPORTS) {
       await trigger.click();
       await page.getByRole("menuitem", { name: "削除" }).click();
       await dialog.getByRole("button", { name: "削除", exact: true }).click();
-      await expect(page.getByText("MCP 接続を削除しました")).toBeVisible();
+      await expect(page.getByText("外部接続を削除しました")).toBeVisible();
       await expect(trigger).toHaveCount(0);
     });
 

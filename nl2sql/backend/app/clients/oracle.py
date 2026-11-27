@@ -47,6 +47,21 @@ async def test_oracle_connection(
         ) from exc
 
 
+async def run_on_oracle_connection[T](settings: Settings, operation: Callable[[Any], T]) -> T:
+    """保存済みの設定のアプリの接続を pool から借りて `operation` を実行する（#5931）。
+
+    システム設定の読み取りに使う。状態の保存先と同じ pool（`state_connection`。#830）を使い、
+    新しい接続を毎回は張らない。業務データの SQL・Select AI・DeepSec の接続には使わない。
+    待ちの上限は呼び出し側が決める。
+    """
+
+    def run() -> T:
+        with OracleNl2SqlAdapter(settings).state_connection() as connection:
+            return operation(connection)
+
+    return await asyncio.to_thread(run)
+
+
 def _test_oracle_connection_sync(settings: Settings) -> None:
     ok, message = OracleNl2SqlAdapter(settings).test_connection()
     if not ok:

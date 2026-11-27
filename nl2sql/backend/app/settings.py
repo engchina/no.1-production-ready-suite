@@ -99,6 +99,12 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_deepsec_data_user_password: str = ""
     oracle_adb_ocid: str = ""
     oracle_adb_region: str = ""
+    # Oracle AI Data Platform（任意の配備。PLATFORM_AIDP_*。未設定なら連携の機能を出さない。#5917）
+    aidp_ocid: str = ""
+    aidp_region: str = ""
+    aidp_url: str = ""
+    # AIDP の External Catalog が ADB に接続する DB ユーザーの名前（#5931。パスワードは無い）
+    aidp_db_user: str = ""
     oci_region: str = ""
     oci_compartment_id: str = ""
     oci_config_file: str = "~/.oci/config"

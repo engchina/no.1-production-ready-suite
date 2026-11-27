@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
+import { ontologyViewTab } from "./_helpers/ontology-controls";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
@@ -1121,7 +1122,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expect.poll(() => state.ontologyViewCalls).toBe(1);
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveCount(0);
   await expect(ontologyQueryPanel.getByText("公開済みオントロジーがまだありません", { exact: true })).toBeVisible();
-  await expect(ontologyQueryPanel.getByTestId("ontology-graph-mode-physical_er")).toHaveCount(0);
+  await expect(ontologyViewTab(ontologyQueryPanel, "物理 ER")).toHaveCount(0);
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-question")).toHaveCount(0);
 
   await draftEditor.fill(`${generatedDraftMarkdown}\n\n## 手動メモ\n- 公開確認済み`);
@@ -2984,7 +2985,7 @@ async function unifiedGraphFixture(page: Page) {
 async function openUnifiedGraph(page: Page) {
   const panel=page.locator("#ontology-query-playground-panel");
   const expand=panel.getByRole("button",{name:"グラフを表示",exact:true});
-  const modeAll=panel.getByTestId("ontology-graph-mode-all");
+  const modeAll=ontologyViewTab(panel,"全体");
   // 展開ボタンかモード切替のどちらかが描画されるまで待ってから判断する（その瞬間の isVisible だけでは、遅い環境で展開を飛ばす）。
   await expect(expand.or(modeAll).filter({visible:true}).first()).toBeVisible();
   if(await expand.isVisible()) await expand.click();
@@ -3040,10 +3041,12 @@ test("統一グラフの13分類を識別し検索・選択・定義詳細を利
     await category.selectOption(kind);
     await expect(category).toHaveValue(kind);
     if (kind !== "link_type") {
-      const card=panel.getByTestId(`ontology-node-card-concept-${kind}`);
-      await expect(card).toBeVisible();
-      await card.click();
+      // 全体の表示は Cytoscape の探索の画布（#5922）。描いた数を確かめ、図内検索で選ぶ。
+      await expect.poll(()=>panel.getByTestId("ontology-concept-graph-canvas").evaluate(el=>Number((el as HTMLElement).dataset.graphNodes ?? 0))).toBeGreaterThan(0);
+      await panel.getByTestId("ontology-graph-search").fill(`API_${kind}`);
+      await panel.getByTestId("ontology-graph-search-next").click();
       await expect(panel.getByText(`説明_${kind}`,{exact:true}).last()).toBeVisible();
+      await panel.getByTestId("ontology-graph-search").clear();
     } else {
       await panel.getByTestId("ontology-graph-search").fill("API_link_type");
       await panel.getByRole("button",{name:"定義_link_type",exact:true}).click();
@@ -3120,7 +3123,8 @@ test("Function と Action はグラフ上の定義として表示し操作 API �
   const panel=await openUnifiedGraph(page);
   for(const kind of ["function","action_type"]){
     await panel.getByRole("combobox",{name:"概念の種類",exact:true}).selectOption(kind);
-    await panel.getByTestId(`ontology-node-card-concept-${kind}`).click();
+    await panel.getByTestId("ontology-graph-search").fill(`API_${kind}`);
+    await panel.getByTestId("ontology-graph-search-next").click();
     await expect(panel.getByText(`説明_${kind}`,{exact:true}).last()).toBeVisible();
     await expect(panel.getByRole("button",{name:/実行|プレビュー|実装を設定/})).toHaveCount(0);
   }

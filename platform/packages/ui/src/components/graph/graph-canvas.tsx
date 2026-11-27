@@ -1,4 +1,4 @@
-import { useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ComponentProps, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ComponentProps, type ReactNode, type Ref } from "react";
 import { ChevronLeft, ChevronRight, Focus, Undo2, Maximize2, Minus, Plus, RotateCcw, type LucideIcon } from "lucide-react";
 import {
   Background,
@@ -9,6 +9,7 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useNodesInitialized,
   useReactFlow,
   useStoreApi,
   useUpdateNodeInternals,
@@ -24,7 +25,8 @@ import { cn } from "../../lib/utils";
 import { isImeComposing } from "../../lib/keyboard";
 import { graphParallelEdgeGeometry } from "../../lib/graph-edges";
 import { arrangeOverviewLabels } from "../../lib/graph-overview-labels";
-import { GRAPH_CANVAS_JA, GRAPH_EXPLORATION_JA } from "../../lib/graph-labels";
+import { GRAPH_CANVAS_JA } from "../../lib/graph-labels";
+import { GRAPH_OVERVIEW_MIN_ZOOM, graphReadableViewport, type GraphRect, type GraphViewportPadding } from "../../lib/graph-viewport";
 import { Button } from "../ui/button";
 import { SearchField } from "../ui/search-field";
 import { StatusBadge } from "../data/status-badge";
@@ -100,6 +102,48 @@ function OverviewScale() {
   return <span hidden ref={marker} />;
 }
 
+export interface GraphReadableFitOptions {
+  /** 合わせるノード（省略時は表示中のすべて）。 */
+  nodes?: readonly string[];
+  /** ノードの外の範囲（画布に重ねた見出しなど）を含めるときに直接渡す。 */
+  bounds?: GraphRect;
+  padding?: GraphViewportPadding;
+  maxZoom?: number;
+  align?: { x?: "start" | "end"; y?: "start" | "end" };
+  duration?: number;
+}
+
+/**
+ * 範囲を画布に合わせる。縮尺は読める下限（`GRAPH_READABLE_MIN_ZOOM`）より小さくせず、
+ * 収まらない分は端をそろえて図を動かして見る（#5520・#5908）。合わせられたら true。
+ */
+export function useGraphReadableFit() {
+  const flow = useReactFlow();
+  const store = useStoreApi();
+  return useCallback((options: GraphReadableFitOptions = {}) => {
+    const { width, height } = store.getState();
+    if (!width || !height) return false;
+    const ids = options.nodes ? options.nodes.filter((id) => flow.getNode(id)) : flow.getNodes().map((node) => node.id);
+    const bounds = options.bounds ?? (ids.length ? flow.getNodesBounds([...ids]) : null);
+    if (!bounds || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height)) return false;
+    void flow.setViewport(graphReadableViewport({
+      bounds, frame: { width, height }, padding: options.padding ?? 24, maxZoom: options.maxZoom ?? 1, align: options.align,
+    }), { duration: options.duration ?? 0 });
+    return true;
+  }, [flow, store]);
+}
+
+/** 最初にノードを測り終えたときに一度だけ、読める縮尺で範囲を合わせる。 */
+function ReadableInitialFit() {
+  const initialized = useNodesInitialized();
+  const fit = useGraphReadableFit();
+  const done = useRef(false);
+  useEffect(() => {
+    if (initialized && !done.current) done.current = fit();
+  }, [initialized, fit]);
+  return null;
+}
+
 export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge = Edge>({
   children,
   miniMap,
@@ -108,8 +152,9 @@ export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge 
   ariaLabelConfig,
   onSelectNode,
   onSelectEdge,
+  fitView = true,
   ...props
-}: ReactFlowProps<NodeType, EdgeType> & {
+}: Omit<ReactFlowProps<NodeType, EdgeType>, "fitViewOptions"> & {
   overview?: boolean;
   miniMap?: MiniMapProps<NodeType> | false;
   onSelectNode?: (id: string) => void;
@@ -117,15 +162,15 @@ export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge 
 }) {
   return (
     <ReactFlow<NodeType, EdgeType>
-      fitView
-      fitViewOptions={{ padding: 0.18 }}
-      minZoom={Number.EPSILON}
+      // 手で縮める下限は総覧の値。範囲を合わせる表示は ReadableInitialFit・useGraphReadableFit が読める下限を守る（#5908）。
+      minZoom={GRAPH_OVERVIEW_MIN_ZOOM}
       maxZoom={1.8}
       nodeDragThreshold={4}
       nodesConnectable={false}
       nodesFocusable
       edgesFocusable
       {...props}
+      fitView={false}
       proOptions={{ ...proOptions, hideAttribution: true }}
       ariaLabelConfig={{ ...GRAPH_CANVAS_JA, ...ariaLabelConfig }}
       onNodeClick={(event, node) => { onSelectNode?.(node.id); props.onNodeClick?.(event, node); }}
@@ -141,6 +186,7 @@ export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge 
         if (id && select) { event.preventDefault(); event.stopPropagation(); select(id); }
       }}
     >
+      {fitView && <ReadableInitialFit />}
       {overview && <OverviewScale />}
       <Background gap={20} size={1} />
       {miniMap ? <MiniMap<NodeType>
@@ -163,6 +209,10 @@ export interface GraphControlsLabels {
   zoomOut: string;
   fit: string;
   reset: string;
+  /** 選択を中心に表示（`selectedId` を渡すときに出す）。 */
+  focus?: string;
+  /** 前の表示に戻る（視点の履歴。`selectedId` を渡すときに出す）。 */
+  previous?: string;
 }
 
 export function GraphCanvasControls({
@@ -187,6 +237,7 @@ export function GraphCanvasControls({
   selectedEdgeId?: string | null;
 }) {
   const flow = useReactFlow();
+  const fit = useGraphReadableFit();
   const [history, setHistory] = useState<Viewport[]>([]);
   function remember() {
     const current = flow.getViewport();
@@ -200,7 +251,7 @@ export function GraphCanvasControls({
     const edge = selectedEdgeId ? flow.getEdge(selectedEdgeId) : undefined;
     if (edge && edge.source !== edge.target) {
       remember();
-      void flow.fitView({ nodes: [{ id: edge.source }, { id: edge.target }], padding: 0.2, minZoom: 0, maxZoom: 1.2 });
+      fit({ nodes: [edge.source, edge.target], padding: 48, maxZoom: 1.2 });
       return;
     }
     const id = selectedId ?? edge?.source;
@@ -226,11 +277,9 @@ export function GraphCanvasControls({
       {bottom && zoomOut}
       <Button type="button" size="sm" variant="ghost" iconOnly icon={Plus} aria-label={labels.zoomIn} tooltip={labels.zoomIn} onClick={() => void flow.zoomIn({ duration: 0 })} />
       {!bottom && zoomOut}
-      <Button type="button" size="sm" variant="ghost" iconOnly={!bottom} icon={Maximize2} aria-label={labels.fit} tooltip={labels.fit} onClick={() => { remember(); if (onFit) onFit(); else void flow.fitView({ padding: 0.18, minZoom: 0, duration: 0 }); }}>{bottom && labels.fit}</Button>
-      {selectedId !== undefined && <>
-        <Button type="button" size="sm" variant="ghost" iconOnly icon={Focus} aria-label={GRAPH_EXPLORATION_JA.focus} tooltip={GRAPH_EXPLORATION_JA.focus} disabled={!selectedId && !selectedEdgeId} onClick={focus} />
-        <Button type="button" size="sm" variant="ghost" iconOnly={!bottom} icon={Undo2} aria-label={GRAPH_EXPLORATION_JA.previous} tooltip={GRAPH_EXPLORATION_JA.previous} disabled={!history.length} onClick={previous}>{bottom && <span className="hidden @min-lg:inline">{GRAPH_EXPLORATION_JA.previous}</span>}</Button>
-      </>}
+      <Button type="button" size="sm" variant="ghost" iconOnly={!bottom} icon={Maximize2} aria-label={labels.fit} tooltip={labels.fit} onClick={() => { remember(); if (onFit) onFit(); else fit(); }}>{bottom && labels.fit}</Button>
+      {selectedId !== undefined && labels.focus && <Button type="button" size="sm" variant="ghost" iconOnly icon={Focus} aria-label={labels.focus} tooltip={labels.focus} disabled={!selectedId && !selectedEdgeId} onClick={focus} />}
+      {selectedId !== undefined && labels.previous && <Button type="button" size="sm" variant="ghost" iconOnly={!bottom} icon={Undo2} aria-label={labels.previous} tooltip={labels.previous} disabled={!history.length} onClick={previous}>{bottom && <span className="hidden @min-lg:inline">{labels.previous}</span>}</Button>}
       {onReset ? <Button type="button" size="sm" variant="ghost" iconOnly icon={RotateCcw} aria-label={labels.reset} tooltip={labels.reset} onClick={onReset} disabled={resetDisabled} data-testid={resetTestId} /> : null}
     </div>
   );
@@ -431,42 +480,7 @@ export function GraphParallelEdge({
   );
 }
 
-/** 凡例の種類の色の印。 */
-export function GraphLegendSwatch({ fill }: { fill: string }) {
-  return <span className="h-2.5 w-2.5 shrink-0 rounded-sm border border-current/20" style={{ background: fill }} aria-hidden="true" />;
-}
-
-/**
- * 凡例（押すと種類を隠す・出す）。`placement="overlay"`（既定）は画布の左下に重ね、
- * `"inline"` は画布の外（上か下）に置く行で、見出し（`label`）を出す。項目が多く狭い画面で画布を覆う図は `inline` にする（#5520）。
- */
-export function GraphLegend({
-  label, items, disabledIds, onToggle, children, testId, placement = "overlay",
-}: {
-  label: string;
-  items: { id: string; label: string; marker?: ReactNode; hint?: string }[];
-  disabledIds: ReadonlySet<string>;
-  onToggle: (id: string) => void;
-  children?: ReactNode;
-  testId?: string;
-  placement?: "overlay" | "inline";
-}) {
-  const inline = placement === "inline";
-  return (
-    <div className={cn("rounded-md border border-border bg-surface px-2 py-1.5", inline ? "min-w-0" : "absolute bottom-3 left-3 z-10 max-w-[calc(100%-1.5rem)] shadow-sm")} role="group" aria-label={label} data-testid={testId}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-4 text-fg-muted">
-        {inline ? <span aria-hidden="true">{label}</span> : null}
-        {items.map((item) => <Button type="button" size="sm" variant="ghost" key={item.id}
-          aria-pressed={!disabledIds.has(item.id)} tooltip={item.hint} onClick={() => onToggle(item.id)}
-          className={cn("text-xs", disabledIds.has(item.id) && "opacity-40 line-through")}
-          data-testid={testId ? `${testId}-${item.id}` : undefined}>
-          {item.marker}{item.label}
-        </Button>)}
-        {children}
-      </div>
-    </div>
-  );
-}
+export { GraphLegend, GraphLegendSwatch } from "./graph-legend";
 
 export function GraphSelectionDetails({ title, closeLabel, onClose, fields, compactLabels = false, children }: {
   title: string;

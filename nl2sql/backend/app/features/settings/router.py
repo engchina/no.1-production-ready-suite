@@ -55,7 +55,11 @@ from app.clients.oci_auth import (
 )
 from app.clients.oci_enterprise_ai import OciEnterpriseAiClient
 from app.clients.oci_genai import OciGenAiClient
-from app.clients.oracle import close_oracle_pool, test_oracle_connection
+from app.clients.oracle import (
+    close_oracle_pool,
+    run_on_oracle_connection,
+    test_oracle_connection,
+)
 from app.clients.oracle_diagnostics import oracle_connection_diagnostics
 from app.env_file import locked_env_file, replace_env_file
 from app.features.nl2sql.oracle_adapter import (
@@ -119,6 +123,8 @@ router.include_router(
         connection_failure_log_extra=lambda exc: oracle_connection_diagnostics(exc),
         connection_security_enabled=True,
         password_reveal_enabled=True,
+        # Oracle AI Data Platform 用の DB ユーザーが在るかの確認（アプリの接続の pool。#5931）。
+        run_on_connection=lambda settings, operation: run_on_oracle_connection(settings, operation),
     )
 )
 # 回答の注意書きも3製品共通の実装（pr_system_settings.answer_notice。#2405）。

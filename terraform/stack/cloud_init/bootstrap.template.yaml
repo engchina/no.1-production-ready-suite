@@ -47,6 +47,16 @@ write_files:
     content: |
       ${adb_admin_env}
 %{ endif ~}
+%{ if adb_aidp_user_env != "" ~}
+  # Oracle AI Data Platform 用の DB ユーザー（#5917）: ADMIN のパスワードと、AIDP 用のユーザーの名前・パスワード。
+  # root だけが読める。
+  - path: "/u01/aipoc/props/adb_aidp_user.env"
+    permissions: "0600"
+    owner: "root:root"
+    encoding: "gzip+base64"
+    content: |
+      ${adb_aidp_user_env}
+%{ endif ~}
   - path: "/u01/aipoc/props/wallet.zip"
     permissions: "0600"
     owner: "root:root"
