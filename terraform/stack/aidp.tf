@@ -12,10 +12,17 @@
 locals {
   aidp_db_user = upper(trimspace(var.aidp_db_user_name))
   aidp_ocid    = var.deploy_aidp ? oci_ai_data_platform_ai_data_platform.suite[0].id : ""
-  # 画面を開く URL。資源の属性に URL が無いため、OCID から組み立てる。
-  aidp_url = var.deploy_aidp ? "https://aidp.oci.oraclecloud.com/?ocid=${local.aidp_ocid}" : ""
-  # Workbench REST API（workspace・catalog・Agent など）の基点。
-  aidp_api_endpoint = var.deploy_aidp ? "https://aidp.${var.region}.oci.oraclecloud.com/api/20260430/aiDataPlatforms/${local.aidp_ocid}" : ""
+  # 画面の host は「alias key ＋ リージョンの 3 文字の符号」（資源の属性に URL は無い。実環境と画面の実装で確認。#5917）。
+  # 対応リージョン（variables.tf の region の validation）と同じ並びにする。
+  aidp_region_keys = {
+    "ap-tokyo-1"   = "nrt"
+    "ap-osaka-1"   = "kix"
+    "us-chicago-1" = "ord"
+  }
+  aidp_url = var.deploy_aidp ? "https://${oci_ai_data_platform_ai_data_platform.suite[0].alias_key}${local.aidp_region_keys[var.region]}.datalake.oci.oraclecloud.com/" : ""
+  # Workbench REST API（workspace・catalog・Agent など）の基点。公式文書の例は /api/ を挟むが、実環境では
+  # /api/ を挟むと 404 になり、挟まない形で応答する（2026-11 に Osaka で確認）。
+  aidp_api_endpoint = var.deploy_aidp ? "https://aidp.${var.region}.oci.oraclecloud.com/20260430/aiDataPlatforms/${local.aidp_ocid}" : ""
 }
 
 resource "oci_ai_data_platform_ai_data_platform" "suite" {

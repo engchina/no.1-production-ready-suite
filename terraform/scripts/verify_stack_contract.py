@@ -1695,6 +1695,18 @@ def _verify_aidp(schema: str, variables: str, aidp: str, locals_source: str, out
     )
     if len(re.findall(r'(?m)^resource "', aidp)) != 1:
         raise AssertionError("aidp.tf must create only the Oracle AI Data Platform Workbench instance")
+    # 画面の host は「alias key ＋ リージョンの符号」。符号は対応リージョンの分だけ持つ（region の validation と同じ集合）。
+    region_keys = dict(re.findall(r'(?m)^    "([a-z0-9-]+)"\s*=\s*"([a-z]{3})"$', aidp))
+    if set(region_keys) != set(SUPPORTED_REGIONS):
+        raise AssertionError(f"aidp_region_keys must cover the supported regions: {sorted(region_keys)}")
+    _require_all(
+        aidp,
+        [
+            ".alias_key}${local.aidp_region_keys[var.region]}.datalake.oci.oraclecloud.com/",
+            "https://aidp.${var.region}.oci.oraclecloud.com/20260430/aiDataPlatforms/${local.aidp_ocid}",
+        ],
+        context="aidp.tf URLs",
+    )
     for forbidden in ("oci_identity_", "oci_kms_", "oci_vault_"):
         if forbidden in aidp:
             raise AssertionError(f"the stack must not create IAM policies or a Vault for Oracle AI Data Platform: {forbidden}")
