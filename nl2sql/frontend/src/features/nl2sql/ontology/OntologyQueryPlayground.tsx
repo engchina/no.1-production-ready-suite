@@ -472,8 +472,10 @@ function OntologyDetailsPanel({
             <p className="text-xs font-semibold text-fg-muted">
               {t("ontologyPlayground.inspector.nodePicker")}
             </p>
+            {/* 行の track は中身の高さにする（auto-rows-max）。高さの上限がある grid の auto の行は、行に指定した
+                最小の高さまで縮み、折り返した名前の 2 行目が行の下端で切れる（#5962）。 */}
             <div
-              className={`grid min-w-0 content-start gap-1.5 pr-1 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
+              className={`grid min-w-0 auto-rows-max content-start gap-1.5 pr-1 ${INFORMATION_LIST_SCROLL_CLASS} ${INFORMATION_TABLE_FOCUS_CLASS}`}
               role="region"
               aria-label={t("ontologyPlayground.inspector.nodePicker")}
               tabIndex={0}
