@@ -1,11 +1,13 @@
 """実行履歴（チャット・RAG 検索の 1 回の実行。#1890）の記録。
 
 チャットと RAG 検索の画面の実行（回答を作った・作らなかった・安全チェックで止めた・失敗した）を、
-`RunRecorder` が 1 行の要約として `rag_run_history` に残す。回答を作った実行の回答・引用・診断は回
-答の記録（`rag_answer_records`）が正本で、ここには一覧の絞り込みと詳細の「処理の経過」に使う値だけ
-を持つ。詳細の「処理の経過」は共通の span の表の実行の trace で、ここには表を引く trace id と工程
-の詳細（`stages_json.trace`。`app.rag.trace_store.TraceRecord`。#3226）だけを持つ。記録は補助なの
-で、失敗しても検索・回答は止めない。
+`RunRecorder` が 1 行の要約として `rag_run_history` に残す。資料を選び直した再回答と新しい候補の
+検索（`app.rag.file_review`）も、元の回答と同じ種類の 1 回の実行として残す（#5913）。
+回答を作った実行の回答・引用・診断は回答の記録（`rag_answer_records`）が正本で、ここには一覧の
+絞り込みと詳細の「処理の経過」に使う値だけを持つ。詳細の「処理の経過」は共通の span の表の実行の
+trace で、ここには表を引く trace id と工程の詳細（`stages_json.trace`。
+`app.rag.trace_store.TraceRecord`。#3226）だけを持つ。記録は補助なので、失敗しても検索・回答は
+止めない。
 
 記録しない実行: 根拠の検索だけ（`retrieval_only`。レシピの検索比較）、
 業務ガイドの下書きで試した回答、品質評価、MCP（Agent が呼ぶ `rag_search`。Agent の実行履歴に残る）。

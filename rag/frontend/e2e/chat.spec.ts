@@ -827,7 +827,9 @@ test("解決しなかったを直ちに保存し、戻った後に選んだ資�
     { ...userMessage, content: reviewQuestion },
     { ...assistantMessage, content: firstAnswer, citations: originalHits },
   ]);
+  let reviewReads = 0;
   await page.route("**/api/search/answers/t1/review", (route) => {
+    if (route.request().method() === "GET") reviewReads += 1;
     if (route.request().method() === "POST") {
       const command = route.request().postDataJSON();
       expect(command.action).toBe("answer");
@@ -845,6 +847,9 @@ test("解決しなかったを直ちに保存し、戻った後に選んだ資�
   });
   const bad = page.getByRole("button", { name: "解決しなかった", exact:true });
   const review = page.getByRole("button", { name: "資料を選んで再検索", exact:true });
+  // 回答し直した版の無い回答は、会話を開いただけでは資料の選び直しの状態を読まない（#5938）。
+  await expect(bad).toBeVisible();
+  expect(reviewReads).toBe(0);
   await bad.click();
   await expect.poll(() => feedbackPayload).toMatchObject({
     trace_id:"t1", search_answer_profile_id:"bv-1", source_surface:"chat",
