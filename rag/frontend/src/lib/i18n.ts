@@ -4039,7 +4039,7 @@ export const ja = {
   "feedback.controls.answerQuestion": "この回答は役に立ちましたか？",
   "feedback.controls.answerHelpful": "この回答は役に立った",
   "feedback.controls.answerNotHelpful": "この回答は役に立たなかった",
-  "feedback.controls.reasonLegend": "役に立たなかった理由を選択してください",
+  "feedback.controls.reasonLegend": "解決しなかった理由を選択してください",
   "feedback.controls.commentLabel": "コメント",
   "feedback.controls.commentPlaceholder": "どこが問題だったかを入力してください。",
   "feedback.controls.commentCount": "{count}/1000文字",

@@ -47,6 +47,7 @@ export const FILE_REVIEW_JA = {
   "fileReview.helpful": "解決した",
   "fileReview.notHelpful": "未解決",
   "fileReview.unrated": "未評価",
+  "fileReview.details": "理由と修正した回答を記録（任意）",
   "fileReview.title": "資料を選んで再検索",
   "fileReview.task": "見直す検索を選ぶ",
   "fileReview.candidates": "回答に使う資料を選ぶ",

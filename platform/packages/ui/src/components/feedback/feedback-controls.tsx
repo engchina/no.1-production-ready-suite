@@ -133,9 +133,6 @@ export function FeedbackControls<R extends string = string>({
 }: FeedbackControlsProps<R>) {
   const autoId = useId();
   const [showReasons, setShowReasons] = useState(false);
-  const [selectedReason, setSelectedReason] = useState<R | null>(null);
-  const [comment, setComment] = useState("");
-  const [correctedAnswer, setCorrectedAnswer] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState<FeedbackRating | null>(null);
   const [lastSubmission, setLastSubmission] = useState<FeedbackControlsSubmission<R> | null>(null);
@@ -167,9 +164,6 @@ export function FeedbackControls<R extends string = string>({
 
   function toggleReasons() {
     setError("");
-    setSelectedReason(value?.reason ?? null);
-    setComment(value?.comment ?? "");
-    setCorrectedAnswer(value?.correctedAnswer ?? "");
     setShowReasons((open) => !open);
   }
 
@@ -225,74 +219,21 @@ export function FeedbackControls<R extends string = string>({
       ) : null}
 
       {showReasons && !readOnly ? (
-        <fieldset className="mt-3 rounded-md border border-border bg-surface-sunken p-3">
-          {/* 役に立たなかった理由は必須（未選択では保存できない）。コメントと修正した回答は任意なので何も付けない（#531）。 */}
-          <FieldLegend required className="px-1 text-xs font-medium">
-            {labels.reasonLegend}
-          </FieldLegend>
-          <div className="flex flex-wrap gap-1" role="group" aria-label={labels.reasonLegend}>
-            {reasons.map((reason) => (
-              <ToggleChip
-                key={reason.value}
-                selected={selectedReason === reason.value}
-                disabled={busy}
-                onClick={() => setSelectedReason(reason.value)}
-              >
-                {reason.label}
-              </ToggleChip>
-            ))}
-          </div>
-          <TextareaField
-            id={commentId ?? `${autoId}-comment`}
-            label={labels.commentLabel}
-            className="mt-3"
-            value={comment}
-            maxLength={commentMaxLength}
-            rows={3}
-            disabled={busy}
-            placeholder={labels.commentPlaceholder}
-            showCount={labels.commentCount ? (count) => labels.commentCount!(count, commentMaxLength) : false}
-            onChange={(event) => setComment(event.target.value)}
-          />
-          {showCorrectedAnswer ? (
-            <TextareaField
-              id={correctedAnswerId ?? `${autoId}-corrected`}
-              label={labels.correctedAnswerLabel ?? ""}
-              className="mt-3"
-              value={correctedAnswer}
-              maxLength={correctedAnswerMaxLength}
-              rows={3}
-              disabled={busy}
-              placeholder={labels.correctedAnswerPlaceholder}
-              helper={labels.correctedAnswerHelp}
-              onChange={(event) => setCorrectedAnswer(event.target.value)}
-            />
-          ) : null}
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            <Button
-              type="button"
-              size="md"
-              icon={Save}
-              loading={pending === "not_helpful"}
-              disabled={!selectedReason}
-              onClick={() =>
-                selectedReason
-                  ? submit({
-                      rating: "not_helpful",
-                      reason: selectedReason,
-                      comment: normalizeText(comment),
-                      correctedAnswer: showCorrectedAnswer ? normalizeText(correctedAnswer) : null,
-                    })
-                  : undefined
-              }
-            >
-              {labels.save}
-            </Button>
-            <Button type="button" variant="ghost" size="md" onClick={() => setShowReasons(false)}>
-              {labels.cancel}
-            </Button>
-          </div>
-        </fieldset>
+        <FeedbackDetailsForm<R>
+          className="mt-3"
+          reasons={reasons}
+          value={value}
+          labels={labels}
+          disabled={busy}
+          saving={pending === "not_helpful"}
+          commentMaxLength={commentMaxLength}
+          correctedAnswer={showCorrectedAnswer}
+          correctedAnswerMaxLength={correctedAnswerMaxLength}
+          commentId={commentId ?? `${autoId}-comment`}
+          correctedAnswerId={correctedAnswerId ?? `${autoId}-corrected`}
+          onSubmit={submit}
+          onCancel={() => setShowReasons(false)}
+        />
       ) : null}
 
       {error ? (
@@ -312,5 +253,136 @@ export function FeedbackControls<R extends string = string>({
         </div>
       ) : null}
     </div>
+  );
+}
+
+export type FeedbackDetailsFormLabels = Pick<
+  FeedbackControlsLabels,
+  | "reasonLegend"
+  | "commentLabel"
+  | "commentPlaceholder"
+  | "commentCount"
+  | "correctedAnswerLabel"
+  | "correctedAnswerPlaceholder"
+  | "correctedAnswerHelp"
+  | "save"
+  | "cancel"
+>;
+
+export interface FeedbackDetailsFormProps<R extends string = string> {
+  reasons: readonly FeedbackReasonOption<R>[];
+  /** 保存済みの評価（開いたときの初期値）。 */
+  value?: FeedbackControlsValue<R> | null;
+  labels: FeedbackDetailsFormLabels;
+  onSubmit: (submission: FeedbackControlsSubmission<R>) => void;
+  /** 渡したときだけ「キャンセル」を出す。 */
+  onCancel?: () => void;
+  /** 入力と保存を止める（保存中など）。 */
+  disabled?: boolean;
+  /** 保存のボタンを loading にする。 */
+  saving?: boolean;
+  commentMaxLength?: number;
+  correctedAnswer?: boolean;
+  correctedAnswerMaxLength?: number;
+  commentId?: string;
+  correctedAnswerId?: string;
+  className?: string;
+}
+
+/**
+ * 「役に立たなかった」の理由（必須）・コメント（任意）・修正した回答（任意）の入力（#531・#5906）。
+ * `FeedbackControls` の 👎 と、資料を選び直す評価（`AnswerFileReview`）の「未解決」の後で同じものを使う。
+ * 修正した回答は品質評価のケースと登録済み Q&A の元になる。
+ */
+export function FeedbackDetailsForm<R extends string = string>({
+  reasons,
+  value,
+  labels,
+  onSubmit,
+  onCancel,
+  disabled = false,
+  saving = false,
+  commentMaxLength = 1000,
+  correctedAnswer: showCorrectedAnswer = false,
+  correctedAnswerMaxLength = 20000,
+  commentId,
+  correctedAnswerId,
+  className,
+}: FeedbackDetailsFormProps<R>) {
+  const autoId = useId();
+  const [selectedReason, setSelectedReason] = useState<R | null>(value?.reason ?? null);
+  const [comment, setComment] = useState(value?.comment ?? "");
+  const [correctedAnswer, setCorrectedAnswer] = useState(value?.correctedAnswer ?? "");
+  return (
+    <fieldset className={cn("rounded-md border border-border bg-surface-sunken p-3", className)}>
+      {/* 役に立たなかった理由は必須（未選択では保存できない）。コメントと修正した回答は任意なので何も付けない（#531）。 */}
+      <FieldLegend required className="px-1 text-xs font-medium">
+        {labels.reasonLegend}
+      </FieldLegend>
+      <div className="flex flex-wrap gap-1" role="group" aria-label={labels.reasonLegend}>
+        {reasons.map((reason) => (
+          <ToggleChip
+            key={reason.value}
+            selected={selectedReason === reason.value}
+            disabled={disabled}
+            onClick={() => setSelectedReason(reason.value)}
+          >
+            {reason.label}
+          </ToggleChip>
+        ))}
+      </div>
+      <TextareaField
+        id={commentId ?? `${autoId}-comment`}
+        label={labels.commentLabel}
+        className="mt-3"
+        value={comment}
+        maxLength={commentMaxLength}
+        rows={3}
+        disabled={disabled}
+        placeholder={labels.commentPlaceholder}
+        showCount={labels.commentCount ? (count) => labels.commentCount!(count, commentMaxLength) : false}
+        onChange={(event) => setComment(event.target.value)}
+      />
+      {showCorrectedAnswer ? (
+        <TextareaField
+          id={correctedAnswerId ?? `${autoId}-corrected`}
+          label={labels.correctedAnswerLabel ?? ""}
+          className="mt-3"
+          value={correctedAnswer}
+          maxLength={correctedAnswerMaxLength}
+          rows={3}
+          disabled={disabled}
+          placeholder={labels.correctedAnswerPlaceholder}
+          helper={labels.correctedAnswerHelp}
+          onChange={(event) => setCorrectedAnswer(event.target.value)}
+        />
+      ) : null}
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <Button
+          type="button"
+          size="md"
+          icon={Save}
+          loading={saving}
+          disabled={!selectedReason || (disabled && !saving)}
+          onClick={() =>
+            selectedReason
+              ? onSubmit({
+                  rating: "not_helpful",
+                  reason: selectedReason,
+                  comment: normalizeText(comment),
+                  correctedAnswer: showCorrectedAnswer ? normalizeText(correctedAnswer) : null,
+                })
+              : undefined
+          }
+        >
+          {labels.save}
+        </Button>
+        {onCancel ? (
+          <Button type="button" variant="ghost" size="md" onClick={onCancel}>
+            {labels.cancel}
+          </Button>
+        ) : null}
+      </div>
+    </fieldset>
   );
 }

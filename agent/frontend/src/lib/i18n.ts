@@ -5,6 +5,7 @@ import { ja as ragJa } from "@/lib/rag-i18n";
 const agentJa = {
   ...FILE_REVIEW_JA,
   "chat.fileReview.task": "検索 {number}（{tool}）· {question}",
+  "chat.fileReview.reasonLegend": "解決しなかった理由を選択してください",
   "chat.fileReview.chatTool": "RAG チャット",
   "chat.fileReview.searchTool": "RAG 検索",
   "feedback.summary.retry": "未解決・再回答なし {pending} 件 ／ 再回答あり {retried} 件（うち解決 {resolved} 件）",

@@ -4,10 +4,18 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import { ListSkeleton, Skeleton } from "../ui/skeleton";
 import { ProcessingIndicator, TimedLoadingState, staleContentClass, REFRESH_REVEAL_DELAY_MS } from "./processing-state";
 import { Button } from "../ui/button";
+import { Disclosure } from "../ui/disclosure";
 import { RadioOptionGroup } from "../ui/radio-option-group";
 import { SearchField } from "../ui/search-field";
 import { SelectedSources } from "../ui/selected-sources";
 import { SideSheet } from "../ui/side-sheet";
+import {
+  FeedbackDetailsForm,
+  type FeedbackControlsSubmission,
+  type FeedbackControlsValue,
+  type FeedbackDetailsFormLabels,
+  type FeedbackReasonOption,
+} from "./feedback-controls";
 import {
   cited,
   files,
@@ -23,7 +31,23 @@ import {
 } from "./file-review-model";
 
 type Mode = "only" | "mix" | "replace";
-type Activity = FileReviewAction["action"] | "more" | "open" | "reload" | "original" | "vote";
+type Activity = FileReviewAction["action"] | "more" | "open" | "reload" | "original" | "vote" | "details";
+
+/**
+ * 「未解決」の理由・コメント・修正した回答の入力（#5906）。評価そのものは `vote` が先に保存し、ここは任意で足す。
+ * 修正した回答は品質評価のケースと登録済み Q&A の元になるので、資料の選び直しとは別に残せるようにする。
+ */
+export interface AnswerFileReviewDetails {
+  reasons: readonly FeedbackReasonOption[];
+  labels: FeedbackDetailsFormLabels;
+  /** 「修正した回答」の欄を出す。 */
+  correctedAnswer?: boolean;
+  commentMaxLength?: number;
+  /** その版の保存済みの内容（無ければ空で開く）。 */
+  value?: (id: string) => FeedbackControlsValue | null | undefined;
+  /** 保存する。成功の Toast は製品が出す。 */
+  save: (id: string, submission: FeedbackControlsSubmission) => Promise<void>;
+}
 const progressLabels = {
   open: "fileReview.loading", reload: "fileReview.loading", original: "fileReview.reading",
   discover: "fileReview.discovering", more: "fileReview.discovering", answer: "fileReview.answering",
@@ -40,6 +64,7 @@ interface Props {
   original?: (task: string, documentId: string) => Promise<Record<string, string>>;
   change: (action: FileReviewAction) => Promise<FileReviewState>;
   vote: (id: string, value: AnswerRating) => Promise<void>;
+  details?: AnswerFileReviewDetails;
   initialRating?: AnswerRating | null;
   onHistory: (rootId: string) => void;
   taskLabel?: (task: string, question: string, number: number) => string;
@@ -56,6 +81,7 @@ export function AnswerFileReview({
   original,
   change,
   vote,
+  details,
   initialRating,
   onHistory,
   taskLabel,
@@ -78,6 +104,7 @@ export function AnswerFileReview({
   const [passages, setPassages] = useState<Record<string, string>>({});
   const [manage, setManage] = useState(false);
   const [reset, setReset] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const list = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLButtonElement | null>(null);
   const selectionId = useId();
@@ -184,6 +211,14 @@ export function AnswerFileReview({
       }
     }, () => mark(value));
   }
+  function saveDetails(submission: FeedbackControlsSubmission) {
+    if (!details) return;
+    const id = latest?.id ?? rootId;
+    void operation("details", async () => {
+      await details.save(id, submission);
+      if (active.current) setDetailsOpen(false);
+    }, () => saveDetails(submission));
+  }
   function readOriginal(documentId: string) {
     if (!original) return;
     void operation("original", async () => {
@@ -266,7 +301,7 @@ export function AnswerFileReview({
         : mode === "replace" && groups.length
           ? t("fileReview.replaceFind")
           : t("fileReview.find");
-  const processing = activity && activity !== "vote" ? t(progressLabels[activity]) : null;
+  const processing = activity && activity !== "vote" && activity !== "details" ? t(progressLabels[activity]) : null;
   const replaceBody = activity === "open" || activity === "reset" || activity === "answer" ||
     activity === "discover" || activity === "original" || (activity === "more" && !groups.length) || (activity === "reload" && !state);
   const initialLoading = !open && (loadingRating || (loadingHistory && !state?.versions.length));
@@ -324,6 +359,29 @@ export function AnswerFileReview({
               </Button>
             ))}
           </div>
+          {details && currentRating === "not_helpful" && (
+            <Disclosure
+              variant="plain"
+              size="sm"
+              summary={t("fileReview.details")}
+              open={detailsOpen}
+              onOpenChange={setDetailsOpen}
+            >
+              {detailsOpen && (
+                <FeedbackDetailsForm
+                  reasons={details.reasons}
+                  labels={details.labels}
+                  value={details.value?.(latest?.id ?? rootId)}
+                  correctedAnswer={details.correctedAnswer}
+                  commentMaxLength={details.commentMaxLength}
+                  disabled={busy || disabled}
+                  saving={activity === "details"}
+                  onSubmit={saveDetails}
+                  onCancel={() => setDetailsOpen(false)}
+                />
+              )}
+            </Disclosure>
+          )}
         </div>
       )}
       {!open && errorView}
