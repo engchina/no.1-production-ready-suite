@@ -11,6 +11,7 @@ from pr_system_settings.guardrails import GuardrailPolicy
 
 from app.api.routes import chat as chat_route
 from app.api.routes import search
+from app.clients import oracle as oracle_client
 from app.clients.oracle import StoredMessage
 from app.config import Settings
 from app.mcp.tools import ChatInput, FileSelection, SearchInput, _chat_request, _search_request
@@ -232,6 +233,27 @@ async def test_chat_history_uses_latest_reviewed_answer() -> None:
         ("USER", "質問2"),
         ("ASSISTANT", "元の回答2"),
     ]
+
+
+@pytest.mark.anyio
+async def test_list_messages_statement_keeps_order_by_after_normalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """実行される文（改行を消した後）で ORDER BY と bind が行コメントに入らない（#5923）。"""
+    statements: list[str] = []
+
+    async def fetch_all(statement: str, binds: object = None) -> list[dict[str, object]]:
+        statements.append(oracle_client._normalize_sql(statement))
+        return []
+
+    client = oracle_client.OracleClient()
+    monkeypatch.setattr(client, "_fetch_all", fetch_all)
+    assert await client.list_messages("conversation-a", limit=5) == []
+    (statement,) = statements
+    assert "--" not in statement
+    assert statement.index(":conversation_id") < statement.index("ORDER BY m.created_at ASC")
+    assert statement.endswith("FETCH NEXT :limit ROWS ONLY")
+    assert "$.versions[last].answer" in statement
 
 
 def test_both_mcp_tools_share_retrieval_constraints() -> None:

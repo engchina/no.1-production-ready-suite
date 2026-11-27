@@ -5286,6 +5286,12 @@ class OracleClient:
             paging_sql = "FETCH NEXT :limit ROWS ONLY"
         else:
             paging_sql = ""
+        # SQL の中に行コメント（`--`）を書かない。実行の前に改行を消すので、コメントの後ろの句
+        # （ORDER BY など）まで無効になる（#5923）。
+        # - reviewed_answer: 資料を選び直した再回答があれば、最新の版の回答（会話の履歴に使う。
+        #   #5914）。
+        # - 並び: 同じ往復の問いと回答は同じ時刻で作るので、問いを先に並べる（#5787）。回答が先に
+        #   来ると、履歴の組み立てがその回答を捨てる。
         rows = await self._fetch_all(
             _render_sql(
                 """
@@ -5316,7 +5322,6 @@ class OracleClient:
                     AS answer_attached_images,
                 JSON_VALUE(r.diagnostics_json, '$.answer_source') AS answer_source,
                 JSON_VALUE(r.diagnostics_json, '$.citation_missing') AS answer_citation_missing,
-                -- 資料を選び直した再回答があれば、最新の版の回答（会話の履歴に使う。#5914）。
                 CASE WHEN JSON_EXISTS(r.review_state, '$.versions[1]') THEN
                     JSON_VALUE(r.review_state, '$.versions[last].answer' RETURNING CLOB)
                 END AS reviewed_answer
@@ -5328,8 +5333,6 @@ class OracleClient:
              AND m.role = 'ASSISTANT'
             WHERE m.conversation_id = :conversation_id
               AND {access_sql}
-            -- 同じ往復の問いと回答は同じ時刻で作るので、問いを先に並べる（#5787）。
-            -- 回答が先に来ると、履歴の組み立てがその回答を捨てる。
             ORDER BY m.created_at ASC, CASE m.role WHEN 'USER' THEN 0 ELSE 1 END, m.message_id ASC
             {paging_sql}
             """,
