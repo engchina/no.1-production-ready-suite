@@ -56,6 +56,8 @@ class _Cursor:
             self.rows = [(1 if state.get("has_app_profile", True) else 0,)]
         elif "FROM DBA_USERS" in upper:
             self.rows = [tuple(state["existing"])] if state.get("existing") else []
+        elif "FROM DBA_ROLE_PRIVS" in upper:
+            self.rows = [(1 if (binds or {}).get("role") in state.get("roles", []) else 0,)]
         elif "FROM SESSION_PRIVS" in upper:
             self.rows = [(name,) for name in state.get("session_privs", ALL_PRIVS)]
         elif upper.startswith("CREATE USER"):
@@ -304,5 +306,90 @@ printf "PLATFORM_ORACLE_USER='ADB_APP_USER'\nPLATFORM_ORACLE_PASSWORD='Xadb_app_
 status=0
 run_apply "${case_dir}" "${base_state}" || status=$?
 [ "${status}" -eq 1 ] && grep -qF "ユーザー名（ADB_APP_USER）を含めないでください" "${case_dir}/out.log" || fail "ユーザー名を含むパスワード"
+
+# 9. Oracle AI Data Platform 用のユーザー（#5917）。External Catalog の接続のユーザーで、アプリ用のユーザーとは別。
+aidp_pass="Stub-Aidp-Pass-44"
+write_aidp_case() {
+  local dir="$1" aidp_user="${2:-ADB_AIDP_USER}" write="${3:-true}"
+  mkdir -p "${dir}"
+  printf "SUITE_DB_ADMIN_USER=ADMIN\nSUITE_DB_ADMIN_PASSWORD='%s'\nSUITE_DB_AIDP_USER='%s'\nSUITE_DB_AIDP_PASSWORD='%s'\nSUITE_DB_AIDP_WRITE=%s\n" \
+    "${admin_pass}" "${aidp_user}" "${aidp_pass}" "${write}" > "${dir}/aidp.env"
+  printf "PLATFORM_ORACLE_USER='ADB_APP_USER'\nPLATFORM_ORACLE_PASSWORD='%s'\nPLATFORM_ORACLE_DSN='suiteadb_high'\nPLATFORM_ORACLE_WALLET_PASSWORD='%s'\n" \
+    "${app_pass}" "${app_pass}" > "${dir}/platform.env"
+}
+run_apply_aidp() {
+  local dir="$1" state="$2"
+  shift 2
+  printf '%s\n' "${state}" > "${dir}/state.json"
+  STUB_ORACLE_STATE="${dir}/state.json" PYTHONPATH="${task_dir}/stub" "${python_bin}" "${script}" apply-aidp \
+    --aidp-env "${dir}/aidp.env" --app-env "${dir}/platform.env" --wallet-dir "${dir}/wallet" \
+    --connect-wait-seconds 0 "$@" > "${dir}/out.log" 2>&1
+}
+aidp_write_privs='"session_privs": ["CREATE SESSION", "CREATE TABLE"]'
+
+# 9a. plan: 書き込みあり（既定）は DWROLE と quota、なしは quota 0 で DWROLE を付けない。PDB_DBA は付けない。
+plan="$("${python_bin}" "${script}" plan-aidp)"
+expected_plan='CREATE USER ADB_AIDP_USER IDENTIFIED BY "<password>" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE;
+GRANT CREATE SESSION TO ADB_AIDP_USER;
+GRANT READ, WRITE ON DIRECTORY DATA_PUMP_DIR TO ADB_AIDP_USER;
+GRANT DWROLE TO ADB_AIDP_USER;'
+[ "${plan}" = "${expected_plan}" ] || fail "plan-aidp: ${plan}"
+plan="$("${python_bin}" "${script}" plan-aidp --read-only)"
+expected_plan='CREATE USER ADB_AIDP_USER IDENTIFIED BY "<password>" DEFAULT TABLESPACE DATA QUOTA 0 ON DATA PROFILE ORA_APP_PROFILE;
+GRANT CREATE SESSION TO ADB_AIDP_USER;
+GRANT READ, WRITE ON DIRECTORY DATA_PUMP_DIR TO ADB_AIDP_USER;'
+[ "${plan}" = "${expected_plan}" ] || fail "plan-aidp --read-only: ${plan}"
+
+# 9b. 新しく作る（書き込みあり）: CREATE USER → grant → AIDP 用のユーザーで接続して権限を確かめる。
+case_dir="${task_dir}/aidp-create"
+write_aidp_case "${case_dir}"
+run_apply_aidp "${case_dir}" "${base_state%\}}, ${aidp_write_privs}}" || fail "AIDP 用のユーザーの作成が失敗した: $(cat "${case_dir}/out.log")"
+sql="$(executed "${case_dir}")"
+printf '%s\n' "${sql}" | grep -qxF "CREATE USER ADB_AIDP_USER IDENTIFIED BY \"${aidp_pass}\" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE" \
+  || fail "AIDP の CREATE USER: ${sql}"
+for grant in "GRANT CREATE SESSION TO ADB_AIDP_USER" "GRANT READ, WRITE ON DIRECTORY DATA_PUMP_DIR TO ADB_AIDP_USER" "GRANT DWROLE TO ADB_AIDP_USER"; do
+  printf '%s\n' "${sql}" | grep -qxF "${grant}" || fail "${grant} が無い: ${sql}"
+done
+if printf '%s\n' "${sql}" | grep -Eq "PDB_DBA|DATA ROLE|DATA GRANT| ANY "; then fail "AIDP 用のユーザーに広い権限を付けた: ${sql}"; fi
+if printf '%s\n' "${sql}" | grep -q "^REVOKE"; then fail "書き込みありで REVOKE した: ${sql}"; fi
+tail -n 1 "${case_dir}/out.log" | grep -qF "[suite-db-user] OK: ADB_AIDP_USER で接続でき、権限が付いています（profile ORA_APP_PROFILE、自分の schema への書き込み あり）。" \
+  || fail "AIDP の OK の行: $(cat "${case_dir}/out.log")"
+"${python_bin}" -c 'import json,sys; c=json.load(open(sys.argv[1]))["connects"]; assert c[0]["user"]=="ADMIN" and c[0]["wallet_password"]=="Stub-App-Pass-22" and c[-1]["user"]=="ADB_AIDP_USER", c' \
+  "${case_dir}/state.json" || fail "AIDP の接続の引数"
+if grep -qF "${aidp_pass}" "${case_dir}/out.log"; then fail "log に AIDP 用のパスワードが出た"; fi
+assert_no_secret "${case_dir}"
+
+# 9c. 書き込みを外した再配備: quota 0 にし、付いている DWROLE を外す。付いていなければ REVOKE しない。
+case_dir="${task_dir}/aidp-read-only"
+write_aidp_case "${case_dir}" ADB_AIDP_USER false
+state="${base_state%\}}, \"existing\": [\"OPEN\", \"N\"], \"app_password\": \"${aidp_pass}\", \"roles\": [\"DWROLE\"], \"session_privs\": [\"CREATE SESSION\"]}"
+run_apply_aidp "${case_dir}" "${state}" || fail "書き込みなしで失敗した: $(cat "${case_dir}/out.log")"
+sql="$(executed "${case_dir}")"
+printf '%s\n' "${sql}" | grep -qxF "ALTER USER ADB_AIDP_USER DEFAULT TABLESPACE DATA QUOTA 0 ON DATA PROFILE ORA_APP_PROFILE" || fail "quota 0 にしていない: ${sql}"
+printf '%s\n' "${sql}" | grep -qxF "REVOKE DWROLE FROM ADB_AIDP_USER" || fail "DWROLE を外していない: ${sql}"
+if printf '%s\n' "${sql}" | grep -q "^GRANT DWROLE"; then fail "書き込みなしで DWROLE を付けた"; fi
+if printf '%s\n' "${sql}" | grep -q "IDENTIFIED BY"; then fail "合っているのにパスワードを変えた"; fi
+state="${base_state%\}}, \"existing\": [\"OPEN\", \"N\"], \"app_password\": \"${aidp_pass}\", \"session_privs\": [\"CREATE SESSION\"]}"
+run_apply_aidp "${case_dir}" "${state}" || fail "DWROLE が無い書き込みなしで失敗した"
+if executed "${case_dir}" | grep -q "^REVOKE"; then fail "付いていない DWROLE を REVOKE した"; fi
+
+# 9d. 3 製品の接続のユーザーと同じ名前は使えない（システムの表の schema を AIDP に渡さない）。使えない名前も同じ。
+for name in ADB_APP_USER ADMIN SYS; do
+  case_dir="${task_dir}/aidp-name-${name}"
+  write_aidp_case "${case_dir}" "${name}"
+  status=0
+  run_apply_aidp "${case_dir}" "${base_state}" || status=$?
+  [ "${status}" -eq 1 ] || fail "AIDP 用のユーザーに ${name} を受け入れた: $(cat "${case_dir}/out.log")"
+done
+grep -qF "3 製品の接続のユーザー（PLATFORM_ORACLE_USER）と同じです" "${task_dir}/aidp-name-ADB_APP_USER/out.log" \
+  || fail "同じ名前の案内: $(cat "${task_dir}/aidp-name-ADB_APP_USER/out.log")"
+
+# 9e. 書き込みありで権限が効いていなければ失敗する。
+case_dir="${task_dir}/aidp-missing-privs"
+write_aidp_case "${case_dir}"
+status=0
+run_apply_aidp "${case_dir}" "${base_state%\}}, \"session_privs\": [\"CREATE SESSION\"]}" || status=$?
+[ "${status}" -eq 1 ] && grep -qF "ADB_AIDP_USER に権限が付いていません: CREATE TABLE" "${case_dir}/out.log" \
+  || fail "AIDP の権限の不足を検出しない: $(cat "${case_dir}/out.log")"
 
 echo "suite-db-user: pass"

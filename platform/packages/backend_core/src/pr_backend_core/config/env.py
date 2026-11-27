@@ -118,6 +118,10 @@ PLATFORM_SETTING_FIELDS = frozenset(
         "oracle_wallet_password",
         "oracle_adb_ocid",
         "oracle_adb_region",
+        # Oracle AI Data Platform（任意の配備。stack が配備のときに書く。#5917）
+        "aidp_ocid",
+        "aidp_region",
+        "aidp_url",
         "oracle_tcp_connect_timeout_seconds",
         "oracle_db_test_timeout_seconds",
         # 共通認証（構成管理者・認証ポリシー・ログインの Cookie 名。環境と認証方式も共通）。
