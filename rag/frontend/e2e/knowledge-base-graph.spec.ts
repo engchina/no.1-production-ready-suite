@@ -1,4 +1,4 @@
-import { expect, test, type Page, type TestInfo } from "./fixtures/test";
+import { expect, test, type Locator, type Page, type TestInfo } from "./fixtures/test";
 import {
   apiEnvelope as ok,
   dbUser,
@@ -224,6 +224,11 @@ function detail(page: Page, phone: boolean) {
 function result(page: Page, n: number) {
   return page.getByRole("button", { name: new RegExp("合成の原文 " + n + " 合成資料") });
 }
+/** React Flow の画布の縮尺。 */
+function readableZoom(canvas: Locator) {
+  return canvas.locator(".react-flow__viewport").first().evaluate((el) =>
+    Number(/scale\(([\d.]+)\)/.exec((el as HTMLElement).style.transform)?.[1] ?? 0));
+}
 async function shot(page: Page, info: TestInfo, name: string) {
   if (process.env.WIKI_GRAPH_SHOTS)
     await page.screenshot({
@@ -338,14 +343,8 @@ test(
     expect(await nodes.count()).toBeLessThanOrEqual(13);
     await expect(canvas.locator('.react-flow__node[data-id="' + hash(161) + '"]')).toHaveCount(1);
     await page.getByRole("button", { name: "全体表示", exact: true }).click();
-    await expect.poll(() => canvas.evaluate((el) => {
-      const area = el.getBoundingClientRect();
-      return [...el.querySelectorAll(".react-flow__node")].every((node) => {
-        const box = node.getBoundingClientRect();
-        return box.width > 0 && box.left >= area.left - 1 && box.right <= area.right + 1 &&
-          box.top >= area.top - 1 && box.bottom <= area.bottom + 1;
-      });
-    })).toBe(true);
+    // 全体表示は読める縮尺（0.8）を下限にする（#5520・#5908）。
+    await expect.poll(() => readableZoom(canvas)).toBeGreaterThanOrEqual(0.8);
     await shot(page, info, "wiki");
     if (phone) await page.getByRole("button", { name: "一覧", exact: true }).click();
     await result(page, 2).click();
@@ -638,14 +637,9 @@ test("関係図は円と残件を描き、方向別に読み進めて元の表�
   await expect(group).toContainText("250");
   await page.getByRole("button", { name: "グループ表示", exact: true }).click();
   await expect(graph.locator(".react-flow__node")).toHaveCount(256);
+  // 256 節点でも全体表示は読める縮尺（0.8）を下限にし、極小にして収めない（#5520・#5908）。
   await graph.getByRole("button", { name: "全体表示", exact: true }).click();
-  await expect.poll(() => graph.evaluate(el => {
-    const box = el.getBoundingClientRect();
-    return [...el.querySelectorAll(".react-flow__node")].filter(node => {
-      const r = node.getBoundingClientRect();
-      return r.left >= box.left - 1 && r.right <= box.right + 1 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
-    }).length;
-  })).toBe(256);
+  await expect.poll(() => readableZoom(graph)).toBeGreaterThanOrEqual(0.8);
   await expectNoPageOverflow(page);
   if (process.env.WIKI_GRAPH_SHOTS) await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-all-256.png" });
 });

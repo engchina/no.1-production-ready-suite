@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { useReactFlow, useStore, type Edge, type Node, type NodeProps } from "@xyflow/react";
+import { useStore, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import {
   directedGraphBundles,
   GraphCanvas,
@@ -14,6 +14,7 @@ import {
   selectGraphEdgeHandles,
   GRAPH_EDGE_LABEL_PROPS,
   GRAPH_EDGE_MARKER,
+  useGraphReadableFit,
 } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
 import { Button } from "@production-ready/ui";
@@ -142,7 +143,7 @@ interface Props {
   onEdge: (e: Connection) => void;
 }
 function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom, camera, onNode, onEdge }: Props) {
-  const flow = useReactFlow();
+  const fit = useGraphReadableFit();
   const canvasWidth = useStore(s => s.width);
   const canvasHeight = useStore(s => s.height);
   const percent = useStore(s => Math.round(s.transform[2] * 100));
@@ -260,10 +261,10 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
     if (!root || !canvasWidth || !canvasHeight || lastRoot.current === root) return;
     const frame = requestAnimationFrame(() => {
       lastRoot.current = root;
-      void flow.fitView({ padding: 0.16, minZoom: 0, maxZoom: 1.1, duration: 0 });
+      fit({ padding: 24 });
     });
     return () => cancelAnimationFrame(frame);
-  }, [canvasWidth, canvasHeight, flow, root]);
+  }, [canvasWidth, canvasHeight, fit, root]);
   function pick(id: string) {
     const item = points.find(p => p.id === id);
     if (item) {
@@ -339,8 +340,9 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
             zoomOut: t("wiki.graph.zoomOut"),
             fit: t("wiki.graph.fitView"),
             reset: t("wiki.graph.reset"),
+            focus: t("wiki.search.focus"),
+            previous: t("wiki.graph.previousView"),
           }}
-          onFit={() => void flow.fitView({ padding: 0.15, minZoom: 0, maxZoom: 1 })}
         />
       </GraphCanvas>
     </GraphCanvasFrame>

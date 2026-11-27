@@ -558,15 +558,22 @@ async function mockApi(page: Page, options: MockApiOptions = {}) {
   );
 }
 
-async function expectEntireGraphInCanvas(playground: Locator) {
+/**
+ * 範囲を合わせた表示は読める縮尺（GRAPH_READABLE_MIN_ZOOM = 0.8）を下限にする（#5520・#5908）。
+ * 収まらない分は左上の端をそろえて動かして見るので、少なくとも 1 つのノードが画布に見えていればよい。
+ */
+async function expectReadableFit(playground: Locator) {
   const canvas = playground.getByTestId("ontology-graph-canvas");
   await expect.poll(() => canvas.evaluate(element => {
+    const transform = (element.querySelector(".react-flow__viewport") as HTMLElement | null)?.style.transform ?? "";
+    const zoom = Number(/scale\(([\d.]+)\)/.exec(transform)?.[1] ?? 0);
     const frame = element.getBoundingClientRect();
-    const content = [...element.querySelectorAll("[data-ontology-lane-label], .react-flow__node")];
-    return content.length > 0 && content.every(item => {
+    const nodes = [...element.querySelectorAll(".react-flow__node")];
+    const inside = nodes.filter(item => {
       const rect = item.getBoundingClientRect();
-      return rect.left >= frame.left && rect.right <= frame.right && rect.top >= frame.top && rect.bottom <= frame.bottom;
-    });
+      return rect.right > frame.left && rect.left < frame.right && rect.bottom > frame.top && rect.top < frame.bottom;
+    }).length;
+    return zoom >= 0.8 - 1e-6 && nodes.length > 0 && inside > 0;
   })).toBe(true);
 }
 
@@ -617,12 +624,12 @@ for (const theme of ["light", "dark"]) {
       const canvasRem = await canvas.evaluate(el => el.getBoundingClientRect().height / parseFloat(getComputedStyle(document.documentElement).fontSize));
       const viewportSize = page.viewportSize()!;
       expect(canvasRem).toBeCloseTo(viewportSize.width < 640 ? (viewportSize.height * 0.65) / 14 : 56, 0);
-      await expectEntireGraphInCanvas(playground);
+      await expectReadableFit(playground);
       await playground.getByRole("button", { name: "グラフを拡大", exact: true }).click();
       const fit = playground.getByRole("button", { name: "グラフ全体を表示", exact: true });
       await fit.focus();
       await page.keyboard.press("Enter");
-      await expectEntireGraphInCanvas(playground);
+      await expectReadableFit(playground);
       await canvas.screenshot({ path: testInfo.outputPath(`fit-labels-${theme}-${width}.png`) });
       await expect(canvas.locator(".react-flow__attribution")).toHaveCount(0);
       await filter.selectOption("object_type");
@@ -698,7 +705,7 @@ test("グラフ操作部は旧版の外観でモード・凡例・ズーム・�
   await canvas.evaluate(element => element.scrollIntoView({ block: "center" }));
   await expect(canvas.locator(".react-flow__node").first()).toBeVisible();
   await playground.getByRole("button", { name: "グラフ全体を表示", exact: true }).click();
-  await expectEntireGraphInCanvas(playground);
+  await expectReadableFit(playground);
   await canvas.screenshot({ path: testInfo.outputPath("ontology-controls-restored.png") });
 });
 
@@ -1843,37 +1850,45 @@ test("256 節点をグループで探索し、全体・選択・直前の視点�
   const camera = () => canvas.locator(".react-flow__viewport").evaluate((el) => (el as HTMLElement).style.transform);
   await expect(groups).toContainText("255");
   const groupPoint = canvas.getByTestId("ontology-group-point");
-  await expect(groupPoint).toContainText("255");
   const objects = canvas.locator(".react-flow__node:has([data-ontology-node-kind])");
-  const show = groups.getByRole("button", { name: /次の.*件を展開/ });
-  await canvas.locator('.react-flow__node[data-id="n0"]').click();
-  await fit.click();
-  const initial = await camera();
-  await show.click();
+  // 最初は先頭の 12 件を出し、残りを点の件数で示す（隣接を 0 件にして消さない。#5908）。
   await expect(objects).toHaveCount(13);
   await expect(groupPoint).toContainText("243");
-  expect(await camera()).toBe(initial);
-  await groups.getByRole("button", { name: "関連を折りたたむ" }).click();
+  const showButton = groups.getByRole("button", { name: /次の.*件を展開/ });
+  // 画布の上の行のボタンは、固定の見出しの下に隠れないようキーボードで押す。
+  const press = async (button: Locator) => { await button.focus(); await button.press("Enter"); };
+  const show = { click: () => press(showButton) };
+  // 画布を画面の中央に置き、固定の見出しの下に操作が隠れないようにしてから選ぶ。
+  const center = () => canvas.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await center();
+  await press(canvas.locator('.react-flow__node[data-id="n0"]'));
+  await center();
+  await fit.click();
+  await show.click();
+  await expect(objects).toHaveCount(25);
+  await expect(groupPoint).toContainText("231");
+  await press(groups.getByRole("button", { name: "関連を折りたたむ" }));
   await expect(objects).toHaveCount(1);
   await expect(groupPoint).toContainText("255");
-  await groups.getByRole("button", { name: "折りたたみを元に戻す" }).click();
-  await expect(objects).toHaveCount(13);
-  await expect(groupPoint).toContainText("243");
-  for (let i = 12; i < 255; i += 12) await show.click();
+  await press(groups.getByRole("button", { name: "折りたたみを元に戻す" }));
+  await expect(objects).toHaveCount(25);
+  await expect(groupPoint).toContainText("231");
+  for (let i = 24; i < 255; i += 12) await show.click();
+  // 256 節点は画面の外を描かない（onlyRenderVisibleElements）ので、残りの点が消えたことで全件の展開を確かめる。
+  await expect(groupPoint).toHaveCount(0);
+  await expect(groups.getByRole("button", { name: "すべて展開済み" })).toBeDisabled();
+  // 全体表示は読める縮尺を下限にし、256 節点を極小の縮尺で収めない（#5520・#5908）。
   await fit.click();
-  await expect(canvas.locator(".react-flow__node")).toHaveCount(256);
+  const zoomOf = async () => Number(/scale\(([\d.]+)\)/.exec(await camera())?.[1] ?? 0);
+  await expect.poll(zoomOf).toBeGreaterThanOrEqual(0.8);
+  await expect(canvas.locator(".react-flow")).not.toHaveAttribute("data-graph-overview", "");
+  // 手で縮めると総覧（点と束ねた関係）になる。
+  const zoomOut = canvas.getByRole("button", { name: "グラフを縮小", exact: true });
+  for (let i = 0; i < 4; i++) await zoomOut.click();
   await expect(canvas.locator(".react-flow")).toHaveAttribute("data-graph-overview", "");
   await expect(canvas.locator("[data-ontology-lane-label]").first()).toBeHidden();
-  await expect(canvas.locator(".react-flow__edge.graph-edge-count")).toHaveCount(2);
-  const withinCanvas = () => canvas.evaluate(el => {
-    const bounds = el.getBoundingClientRect();
-    return [...el.querySelectorAll(".react-flow__node")].filter(n => {
-      const box = n.getBoundingClientRect();
-      return box.left >= bounds.left - 1 && box.top >= bounds.top - 1 && box.right <= bounds.right + 1 && box.bottom <= bounds.bottom + 1;
-    }).length;
-  });
-  await expect.poll(withinCanvas).toBe(256);
   const allCamera = await camera();
+  expect(await zoomOf()).toBeGreaterThanOrEqual(0.1);
   if (process.env.GRAPH_ACCEPTANCE_DIR) await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/" + info.project.name + "-ontology-256.png" });
   await focus.click();
   await expect.poll(camera).not.toBe(allCamera);
@@ -1888,6 +1903,9 @@ test("256 節点をグループで探索し、全体・選択・直前の視点�
   await page.getByRole("option", { name: /third/ }).click();
   await expect(area.getByTestId("ontology-edge-details")).toContainText("third");
   await area.getByTestId("ontology-graph-mode-physical_er").click();
+  // 物理 ER は隣接をまとめて隠さない（まとまりの行も残りの点も出さない。#5908）。
+  await expect(groups).toHaveCount(0);
+  await expect(groupPoint).toHaveCount(0);
   await canvas.getByRole("button", { name: "グラフ全体を表示" }).click();
   await expect(canvas.locator(".react-flow")).not.toHaveAttribute("data-graph-overview", "");
   await area.getByTestId("ontology-graph-mode-all").click();

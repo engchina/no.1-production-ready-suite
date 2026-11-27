@@ -102,15 +102,36 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
  * 線を画面に入れてから、線の中点を画面の座標でクリックする（#1788）。
  */
 export async function clickOntologyEdge(page: Page, edge: Locator) {
-  const point = await edge.locator("path.react-flow__edge-path").evaluate((element) => {
+  // 最初の範囲合わせ（読める縮尺。#5908）が終わって視点が止まってから線の位置を測る。
+  const viewport = edge.locator("xpath=ancestor::*[contains(@class,'react-flow__viewport')]");
+  let previous = "";
+  await expect.poll(async () => {
+    const current = await viewport.evaluate((el) => (el as HTMLElement).style.transform);
+    const stable = current === previous;
+    previous = current;
+    return stable;
+  }, { intervals: [150] }).toBe(true);
+  const path = edge.locator("path.react-flow__edge-path");
+  await path.evaluate((element) => element.scrollIntoView({ block: "center" }));
+  const target = await path.evaluate((element) => {
     const path = element as SVGPathElement;
-    path.scrollIntoView({ block: "center" });
     const middle = path.getPointAtLength(path.getTotalLength() / 2);
     const matrix = path.getScreenCTM()!;
-    return {
+    const point = {
       x: middle.x * matrix.a + middle.y * matrix.c + matrix.e,
       y: middle.x * matrix.b + middle.y * matrix.d + matrix.f,
     };
+    const frame = path.closest(".react-flow")!.getBoundingClientRect();
+    const within = point.x > frame.left && point.x < frame.right && point.y > frame.top && point.y < frame.bottom;
+    // 中ほどにノードが重なるときもクリックは線に届かない。
+    const hit = within ? document.elementFromPoint(point.x, point.y) : null;
+    return { ...point, inside: Boolean(hit && path.closest(".react-flow__edge")?.contains(hit)) };
   });
-  await page.mouse.click(point.x, point.y);
+  // 読める縮尺の全体表示（#5908）で線の中ほどが画布の外にある・ノードに隠れるときは、キーボードで選ぶ（Enter で関係を選択）。
+  if (target.inside) {
+    await page.mouse.click(target.x, target.y);
+    return;
+  }
+  await edge.focus();
+  await edge.press("Enter");
 }

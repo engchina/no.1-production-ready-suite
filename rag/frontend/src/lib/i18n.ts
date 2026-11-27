@@ -2301,6 +2301,7 @@ export const ja = {
   "wiki.graph.zoomOut": "縮小",
   "wiki.graph.fitView": "全体表示",
   "wiki.graph.reset": "配置を戻す",
+  "wiki.graph.previousView": "前の表示に戻る",
   "wiki.graph.legend": "表示する関係",
   "wiki.graph.selectedNode": "選択したノード",
   "wiki.graph.selectedEdge": "選択した関係",
