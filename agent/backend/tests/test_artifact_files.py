@@ -596,6 +596,26 @@ def test_oracle_deletes_the_files_with_the_run_row() -> None:
     assert table.files == {("default", kept_run_id, kept_artifact.id): DATA}
 
 
+def test_oracle_refused_run_drops_its_files() -> None:
+    """拒答に置き換える Run は、ファイルの成果物と中身（表の行）を消す（#5912）。"""
+    table = CheckpointTable()
+    repository, run_id = _oracle_run(table)
+    _, kept_run_id = _oracle_run(table)
+    artifact = repository.save_file_artifact(run_id, file_name="a", mime_type=XLSX, data=DATA)
+    kept = AgentRuntimeOracleCheckpointRepository(connect_factory=table.connect)
+    kept_artifact = kept.save_file_artifact(kept_run_id, file_name="b", mime_type=XLSX, data=DATA)
+
+    repository.record_tool_grounding(run_id, "refused", "合成の回答")
+
+    # ほかの Run のファイルは残る。
+    assert table.files == {("default", kept_run_id, kept_artifact.id): DATA}
+    # 別のプロセス（同じ保存先を読み込んだ repository）からも、成果物・中身のどちらも読めない。
+    other = AgentRuntimeOracleCheckpointRepository(connect_factory=table.connect)
+    assert [item for item in other.list_artifacts(run_id) if item.kind == FILE_ARTIFACT_KIND] == []
+    with pytest.raises(KeyError):
+        other.read_artifact_file(run_id, artifact.id)
+
+
 def test_oracle_without_the_table_fails_the_save_and_keeps_run_deletes_working() -> None:
     table = CheckpointTable(files_table=False)
     repository, run_id = _oracle_run(table)

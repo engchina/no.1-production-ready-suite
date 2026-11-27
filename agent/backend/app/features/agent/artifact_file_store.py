@@ -16,7 +16,9 @@
 - **読み出し**: ダウンロードの API だけが読む（Run の詳細と同じ認可）。保存した sha256 と合わない
   中身は返さない。
 - **消え方**: Run の行を消すとき（`runtime_checkpoint_store.write_entities` の削除の印）に、同じ
-  transaction でその Run のファイルも消す。全再作成はテーブルごと消す。
+  transaction でその Run のファイルも消す。全再作成はテーブルごと消す。確かめていない回答を拒答に
+  置き換える Run（業務 Agent の設定が拒答）は、その Run のファイルの成果物と中身を消す（#5912。
+  `runtime_repository.record_tool_grounding`）。
 - **入口**: ツールの handler は `save_tool_file` を呼ぶ（参照だけを返す。失敗はツールのエラー）。
 """
 
