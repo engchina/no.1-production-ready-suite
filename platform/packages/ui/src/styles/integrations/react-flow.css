@@ -62,6 +62,7 @@
 
 /* ノードの計測枠を保ち、低倍率のときだけ点と中心の接続点を描く。 */
 .graph-overview-node { display: none; }
+[data-graph-overview] [data-graph-detail-only] { visibility: hidden; }
 [data-graph-overview] [data-graph-card] {
   background: transparent !important;
   border-color: transparent !important;
@@ -120,7 +121,8 @@
   vector-effect: non-scaling-stroke;
   stroke-width: 1px;
 }
-[data-graph-overview] .react-flow__edge.graph-edge-count .react-flow__edge-textwrapper {
+/* ラベルの位置を決める SVG の translate は保ち、文字と背景の大きさだけを戻す。 */
+[data-graph-overview] .react-flow__edge.graph-edge-count .react-flow__edge-textwrapper > :is(rect, text) {
   transform-box: fill-box;
   transform-origin: center;
   scale: var(--graph-inverse-zoom);

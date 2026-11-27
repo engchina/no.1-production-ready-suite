@@ -902,6 +902,10 @@ test("質問接地グラフで選択した物理オブジェクトの ER 詳細�
   await expect(columns).toContainText("DATE");
   await expect(columns).toContainText("PK");
   await expect(columns).toContainText("FK");
+  const keyCell = columns.getByRole("cell", { name: "PK", exact: true }).first();
+  const keyBounds = await keyCell.boundingBox();
+  const tableBounds = await columns.boundingBox();
+  expect(keyBounds!.x + keyBounds!.width).toBeLessThanOrEqual(tableBounds!.x + tableBounds!.width);
 
   const joins = details.getByTestId("ontology-er-joins");
   await expect(joins).toContainText("所属部署を参照");
@@ -1853,6 +1857,7 @@ test("256 節点をグループで探索し、全体・選択・直前の視点�
   await fit.click();
   await expect(canvas.locator(".react-flow__node")).toHaveCount(256);
   await expect(canvas.locator(".react-flow")).toHaveAttribute("data-graph-overview", "");
+  await expect(canvas.locator("[data-ontology-lane-label]").first()).toBeHidden();
   await expect(canvas.locator(".react-flow__edge.graph-edge-count")).toHaveCount(1);
   const withinCanvas = () => canvas.evaluate(el => {
     const bounds = el.getBoundingClientRect();

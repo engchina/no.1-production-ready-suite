@@ -345,7 +345,7 @@ function LaneOverlays({ lanes }: { lanes: OntologyGraphSemanticLane[] }) {
             width: 176,
           }}
         >
-          <span data-ontology-lane-label className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-semibold leading-4 text-fg-muted shadow-sm">
+          <span data-ontology-lane-label data-graph-detail-only className="rounded-md border border-border bg-surface px-2 py-1 text-xs font-semibold leading-4 text-fg-muted shadow-sm">
             {t(LANE_LABEL_KEYS[lane.id])}
           </span>
         </div>

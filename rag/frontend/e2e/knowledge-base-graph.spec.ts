@@ -419,6 +419,7 @@ test("検索の待ち時間を示し、チャットから現場に戻り、新�
   await page.getByRole("button", { name: "検索", exact: true }).click();
   const progress = page.getByTestId("wiki-wait-results");
   await expect(progress.getByRole("timer")).toHaveText(/00:0[1-9]/);
+  await expect(progress.getByRole("timer")).toBeInViewport({ ratio: 1 });
   await shot(page, info, "wiki-loading");
   release!();
   await result(page, 81).click();
@@ -477,8 +478,15 @@ test("二つの展開元を持つ原文を保持し、向き別の関係と折�
   await expect.poll(camera).not.toBe(previous);
   await graph.getByRole("button", { name: "前の表示に戻る" }).click();
   await expect.poll(camera).toBe(previous);
-  await graph.locator(".graph-edge-count").focus();
-  await graph.locator(".graph-edge-count").press("Enter");
+  const bundle = graph.locator(".graph-edge-count");
+  await expect.poll(() => bundle.evaluate(edge => {
+    const path = edge.querySelector<SVGPathElement>(".react-flow__edge-path")!;
+    const midpoint = path.getPointAtLength(path.getTotalLength() / 2).matrixTransform(path.getScreenCTM()!);
+    const label = edge.querySelector(".react-flow__edge-text")!.getBoundingClientRect();
+    return Math.hypot(label.x + label.width / 2 - midpoint.x, label.y + label.height / 2 - midpoint.y);
+  })).toBeLessThan(4);
+  await bundle.focus();
+  await bundle.press("Enter");
   await expect(panel.getByRole("heading", { name: "関係 3 件" })).toBeVisible();
   await expect(panel.getByRole("listitem")).toHaveCount(3);
   await shot(page, info, "direction");

@@ -64,35 +64,35 @@ export function OntologyErDetailsPanel({ details }: { details: OntologyErDetails
             {
               key: "columnName",
               header: t("ontologyPlayground.erColumnName"),
-              headerClassName: "w-[24%]",
+              headerClassName: "w-[23%]",
               className: "break-all py-3 font-mono leading-5",
               render: (column) => column.columnName,
             },
             {
               key: "dataType",
               header: t("ontologyPlayground.erDataType"),
-              headerClassName: "w-[16%]",
+              headerClassName: "w-[15%]",
               className: "break-all py-3 font-mono leading-5 text-fg-muted",
               render: (column) => column.dataType,
             },
             {
               key: "keyRole",
               header: t("ontologyPlayground.erKeyRole"),
-              headerClassName: "w-[12%]",
+              headerClassName: "w-[9%]",
               className: "py-3",
               render: (column) => erKeyRoleLabel(column.keyRole),
             },
             {
               key: "businessNameJa",
               header: t("ontologyPlayground.erBusinessName"),
-              headerClassName: "w-[22%]",
+              headerClassName: "w-[23%]",
               className: "break-words py-3",
               render: (column) => column.businessNameJa,
             },
             {
               key: "descriptionJa",
               header: t("ontologyPlayground.erDescription"),
-              headerClassName: "w-[26%]",
+              headerClassName: "w-[30%]",
               className: "break-words py-3 text-fg-muted",
               render: (column) => column.descriptionJa || "-",
             },
@@ -100,8 +100,10 @@ export function OntologyErDetailsPanel({ details }: { details: OntologyErDetails
           rows={details.columns}
           getRowKey={(column) => column.id}
           rowProps={(column) => ({ className: INFORMATION_TABLE_ROW_CLASS, "data-testid": `ontology-er-column-${column.id}` })}
-          tableClassName="w-full min-w-[48rem] table-fixed"
+          tableClassName="w-full min-w-[36rem] table-fixed"
+          className="[&_th]:px-2 [&_td]:px-2"
           scrollTestId="ontology-er-columns"
+          scrollAriaLabel={listScrollLabel(t("ontologyPlayground.erDetailsTitle"))}
           stickyHeader
           visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
         />
