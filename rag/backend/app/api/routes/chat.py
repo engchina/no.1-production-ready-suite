@@ -289,6 +289,7 @@ def _to_chat_message(
         answer_format=(message.answer_format if message.status == "COMPLETE" else None),
         approved_faq_answer=message.approved_faq_answer and message.status == "COMPLETE",
         answer_citation_missing=message.answer_citation_missing and message.status == "COMPLETE",
+        has_file_review=message.reviewed_answer is not None,
     )
 
 

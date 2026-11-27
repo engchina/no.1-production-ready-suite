@@ -61,6 +61,11 @@ interface Props {
   disabled?: boolean;
   loadingRating?: boolean;
   load: () => Promise<FileReviewState>;
+  /**
+   * mount のときに `load` で以前の版を読むか（既定 true）。回答し直した版が無いと分かっている回答は false にして、
+   * 利用者が資料を選び直す面を開くまで読まない（回答の多い会話で、回答の数だけ読まないため。#5938）。
+   */
+  loadOnMount?: boolean;
   original?: (task: string, documentId: string) => Promise<Record<string, string>>;
   change: (action: FileReviewAction) => Promise<FileReviewState>;
   vote: (id: string, value: AnswerRating) => Promise<void>;
@@ -78,6 +83,7 @@ export function AnswerFileReview({
   disabled,
   loadingRating,
   load,
+  loadOnMount = true,
   original,
   change,
   vote,
@@ -91,7 +97,7 @@ export function AnswerFileReview({
   const [rating, setRating] = useState<AnswerRating | null>(initialRating ?? null);
   const [error, setError] = useState("");
   const [activity, setActivity] = useState<Activity | null>(null);
-  const [loadingHistory, setLoadingHistory] = useState(true);
+  const [loadingHistory, setLoadingHistory] = useState(loadOnMount);
   const running = useRef(false);
   const retryFailed = useRef<(() => void) | undefined>(undefined);
   const busy = activity !== null;
@@ -121,6 +127,11 @@ export function AnswerFileReview({
   useEffect(() => {
     active.current = true;
     let cancelled = false;
+    if (!loadOnMount) {
+      return () => {
+        active.current = false;
+      };
+    }
     const initialAction = userAction.current;
     void loader
       .current()
@@ -133,7 +144,7 @@ export function AnswerFileReview({
       cancelled = true;
       active.current = false;
     };
-  }, [rootId]);
+  }, [rootId, loadOnMount]);
   const hasHistory = (state?.versions.length ?? 0) > 1;
   useEffect(() => {
     if (hasHistory) onHistory(rootId);
