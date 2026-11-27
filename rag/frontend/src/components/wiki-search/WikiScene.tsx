@@ -186,8 +186,6 @@ function Canvas({ scene, root, selected, edge, onNode, onEdge }: Props) {
         nodes={nodes}
         edges={edges}
         fitView={false}
-        minZoom={0.45}
-        maxZoom={1.8}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         nodesDraggable={false}
@@ -208,7 +206,7 @@ function Canvas({ scene, root, selected, edge, onNode, onEdge }: Props) {
             fit: t("wiki.graph.fitView"),
             reset: t("wiki.graph.reset"),
           }}
-          onFit={() => void flow.fitView({ padding: 0.15, minZoom: 0.52, maxZoom: 1 })}
+          onFit={() => void flow.fitView({ padding: 0.15, minZoom: 0, maxZoom: 1 })}
         />
       </GraphCanvas>
     </GraphCanvasFrame>

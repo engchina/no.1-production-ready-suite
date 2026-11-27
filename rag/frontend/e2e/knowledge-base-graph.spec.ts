@@ -284,8 +284,19 @@ test(
       )
       .toBe(true);
     await panel.getByRole("button", { name: "関連を展開" }).click();
-    await expect(page.locator(".react-flow__node").first()).toBeVisible();
-    expect(await page.locator(".react-flow__node").count()).toBeLessThanOrEqual(10);
+    const canvas = page.locator(".react-flow");
+    const nodes = canvas.locator(".react-flow__node");
+    await expect(nodes.first()).toBeVisible();
+    expect(await nodes.count()).toBeLessThanOrEqual(10);
+    await page.getByRole("button", { name: "全体表示", exact: true }).click();
+    await expect.poll(() => canvas.evaluate((el) => {
+      const area = el.getBoundingClientRect();
+      return [...el.querySelectorAll(".react-flow__node")].every((node) => {
+        const box = node.getBoundingClientRect();
+        return box.width > 0 && box.left >= area.left - 1 && box.right <= area.right + 1 &&
+          box.top >= area.top - 1 && box.bottom <= area.bottom + 1;
+      });
+    })).toBe(true);
     await shot(page, info, "wiki");
     if (phone) await page.getByRole("button", { name: "一覧", exact: true }).click();
     await result(page, 2).click();
