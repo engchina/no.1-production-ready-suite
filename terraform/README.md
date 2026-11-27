@@ -266,7 +266,13 @@ RAG・NL2SQL・Agent の機能は 3 製品のまま使い、AIDP の Knowledge B
 
 - **最初の配備で決めてください。** `deploy_aidp` と AIDP の入力は Compute の cloud-init に入るため、後から切り替えると **Compute は作り直されます**（製品の選択と同じ。Compute の中のローカルの保存が失われる）。
   `aidp_default_workspace_name` と `aidp_ai_feature_enabled` は、後から変えると AIDP の instance が作り直されます（workspace・Notebook・AIDP が管理する表が失われる）。
-- AIDP の作成は 20〜40 分かかることがあります（stack の timeout は 90 分）。Compute は AIDP の OCID を共通 `.env` に書くため、AIDP の後に作られます。
+- AIDP の作成は 20〜40 分かかることがあります（Osaka の実測は約 13 分。stack の timeout は 90 分）。Compute は AIDP の OCID を共通 `.env` に書くため、AIDP の後に作られます。
+- **AI 機能を有効にすると、AIDP は ADB の ADMIN の資格情報を持ちます。** AIDP は ADB に自分の schema（`AIDP_<id>_KB_WRITE` など）を作り、
+  ADMIN で接続する External Catalog（`vector_db_<DB 名>`）とプライベートの workspace（`Pvt_vector_db_<DB 名>`）を自動で作ります（実環境で確認）。
+  この catalog を使える AIDP の利用者は、ADMIN の権限で ADB（3 製品のシステムの表を含む）を読み書きできます。**`vector_db_<DB 名>` の catalog の権限を、AIDP の管理者以外に付けないでください**
+  （利用者には下の AIDP 用の DB ユーザーの catalog を使わせる）。ADMIN を AIDP に渡したくないときは `aidp_ai_feature_enabled=false` にします（AIDP の Knowledge Base・Agent は使えません）。
+- 既定の workspace には Spark の「Default Master Catalog Compute」（driver 2 OCPU / 16 GB と worker 1 台）が自動で作られて起動します。
+  Workbench REST API では停止できません（`Stop Operation on Default Cluster is not allowed.`。実環境で確認）。AIDP を配備している間の費用に入れてください。
 - `deploy_aidp=false` の配備は、この機能を入れる前と同じです（cloud-init も変わりません）。
 
 ### 配備の前に
@@ -359,9 +365,9 @@ output（Resource Manager の「Outputs」）:
 
 | output | 内容 |
 |---|---|
-| `aidp_url` | AIDP の画面を開く URL |
+| `aidp_url` | AIDP の画面を開く URL（`https://<alias key><リージョンの符号>.datalake.oci.oraclecloud.com/`。符号は Osaka `kix`・Tokyo `nrt`・Chicago `ord`） |
 | `aidp_ocid` / `aidp_alias_key` / `aidp_default_workspace_name` | instance の OCID・alias key・既定の workspace の名前 |
-| `aidp_api_endpoint` | Workbench REST API（workspace・catalog・Agent）の基点 |
+| `aidp_api_endpoint` | Workbench REST API（workspace・catalog・Agent）の基点（`https://aidp.<region>.oci.oraclecloud.com/20260430/aiDataPlatforms/<OCID>`。OCI のリクエスト署名で呼ぶ。公式文書の例にある `/api/` を挟むと 404 になる） |
 | `aidp_web_socket_endpoint` | WebSocket の endpoint |
 | `aidp_external_catalog_info` | External Catalog の登録に要る値（ADB の OCID・DB 名・サービス名・ユーザー名。パスワードは出さない） |
 
@@ -370,6 +376,22 @@ output（Resource Manager の「Outputs」）:
   AIDP 用の DB ユーザーの名前・パスワードを入力します。ADB がプライベート・エンドポイントのときは「Enable private network」をオンにし、ADB の subnet に接続するプライベートの workspace を選びます
   （既定の workspace はプライベート・ネットワークにできません）。Wallet を使うときは instance wallet を使います（regional wallet は使えません）。
 - ADB の側で表を作った・AIDP から書いた後は、AIDP の catalog のメタデータを更新（refresh）すると新しい表が見えます。
+
+### 実環境で確かめたこと（2026-11-27、Osaka）
+
+新規の ADB（Lakehouse・プライベート・エンドポイント・mTLS 必須）と `deploy_aidp=true` で stack を配備して確かめました。
+
+| 確かめたこと | 結果 |
+|---|---|
+| Terraform での作成 | ADB 約 2 分 → AIDP 約 13 分 → Compute。`ACTIVE` になり、既定の workspace とプライベートの workspace（`Pvt_vector_db_<DB 名>`）ができる |
+| プライベート・エンドポイント・mTLS 必須の ADB の AI 機能の関連付け | できる。External Catalog `vector_db_<DB 名>`（ADMIN で接続）が `ACTIVE`、メタデータの更新も成功。ADB に `AIDP_<id>_KB_WRITE` ができる |
+| AIDP 用の DB ユーザー | `[suite-init] check: aidp db user OK`。role は `DWROLE`、system privilege は `CREATE SESSION` だけ（ANY 権限なし）。自分の schema に表を作って書ける。アプリ用の DB ユーザーの表は見えず（`ORA-00942`）、ほかの schema に表を作れない（`ORA-01031`） |
+| AIDP 用の DB ユーザーでの External Catalog の接続 | Workbench REST API の接続テスト（`actions/testConnection`。source は Oracle Autonomous AI Lakehouse、instance wallet・TNS の別名 `<db>_high`）が成功。誤ったパスワードでは `logon denied` で失敗する（プライベート・エンドポイントの ADB に実際に接続している）。catalog の作成そのものは未実施 |
+| Workbench REST API | `https://aidp.<region>.oci.oraclecloud.com/20260430/…` が API キーの署名で応答する（`/api/20260430/…` は 404） |
+| 画面の URL | host は「alias key ＋ リージョンの符号」（画面の実装で確認）。**ブラウザでのログインは未確認** |
+
+要った前提: 上の IAM policy（tenancy の範囲の 3 つは既にあり、コンパートメントの範囲とプライベート・ネットワーク用を足した）、
+ADB の subnet の security list の「VCN の CIDR → すべての port」、その subnet の route table の NAT Gateway。
 
 ### 配備済みの環境で使うとき
 
