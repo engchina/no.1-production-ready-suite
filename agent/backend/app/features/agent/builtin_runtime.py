@@ -1301,15 +1301,12 @@ def discover_mcp_tools(
         try:
             listed = list_mcp_connection_tools(server_id, context=context)
         except ExternalToolError as exc:
-            warnings.append(
-                f"MCP 接続「{config.label or server_id}」のツールを取得できません: {exc}"
-            )
+            # 接続の URL が未設定（組み込みの `aidp` の endpoint を入れる前など）もここに来る。
+            warnings.append(f"{config.display_name()}のツールを取得できません: {exc}")
             continue
         available = {tool.name for tool in listed.tools}
         if not available or (allowed is not None and not set(allowed).issubset(available)):
-            warnings.append(
-                f"MCP 接続「{config.label or server_id}」の必須ツールを取得できません。"
-            )
+            warnings.append(f"{config.display_name()}の必須ツールを取得できません。")
         for tool in listed.tools:
             if allowed is not None and tool.name not in allowed:
                 continue
@@ -3168,7 +3165,7 @@ def build_sdk_agent(
         # 必須の接続が一部でも使えなければ、欠けたツールのまま回答させない。
         raise BuiltinRuntimeError(
             "runtime.mcp_unavailable",
-            "必要な MCP 接続を利用できません。" + "\n" + "\n".join(warnings),
+            "必要な外部接続を利用できません。" + "\n" + "\n".join(warnings),
         )
     output_entries = [record_output_tool(run_id, output_fields)] if output_fields else []
     if output_contract is not None:

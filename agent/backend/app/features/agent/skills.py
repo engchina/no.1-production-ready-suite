@@ -278,6 +278,11 @@ BUILTIN_SKILL_IDS: tuple[str, ...] = (
     PPTX_CREATE_SKILL_ID,
     MARKDOWN_CREATE_SKILL_ID,
 )
+# AIDP を配備した構成（`PLATFORM_AIDP_OCID` がある）にだけ出す組み込みのスキル（#5932）。組み込みの
+# 接続 `aidp`（AI Data Platform の Agent）のツールを宣言する。業務 Agent には自動で付けない
+# （組み込みの業務 Agent・業種テンプレートは使わない）ので、`BUILTIN_SKILL_IDS` には入れない。
+AIDP_AGENT_SKILL_ID = "aidp-agent"
+AIDP_BUILTIN_SKILL_IDS: tuple[str, ...] = (AIDP_AGENT_SKILL_ID,)
 
 
 def _kana_folded(text: str) -> str:
@@ -440,17 +445,21 @@ skill_registry = SkillRegistry()
 BUILTIN_SKILLS_DIR = Path(__file__).resolve().parents[5] / "skills"
 
 
-def register_builtin_skills(directory: Path = BUILTIN_SKILLS_DIR) -> list[str]:
-    """`skills/<name>/SKILL.md` の組み込みのスキルを登録する。
+def builtin_skills(directory: Path = BUILTIN_SKILLS_DIR) -> list[AgentSkillDefinition]:
+    """`skills/<name>/SKILL.md` の組み込みのスキル（登録する順）。
 
     指示・説明・使うツールはコードに持たず、SKILL.md を正本にする。
 
     組み込みの Agent・業種テンプレートが使う `BUILTIN_SKILL_IDS` が欠けたら起動を止める（配備で
-    `skills/` が読めないまま、スキルの無い業務 Agent を動かさない）。
+    `skills/` が読めないまま、スキルの無い業務 Agent を動かさない）。AIDP のスキル
+    （`AIDP_BUILTIN_SKILL_IDS`）は、AIDP を配備した構成にだけ出す（#5932）。
     """
+    from app.features.agent.config import aidp_deployed
     from app.features.agent.skills_loader import load_skills_from_dir
 
     skills = load_skills_from_dir(str(directory), source="builtin")
+    if not aidp_deployed():
+        skills = [skill for skill in skills if skill.id not in AIDP_BUILTIN_SKILL_IDS]
     missing = sorted(set(BUILTIN_SKILL_IDS) - {skill.id for skill in skills})
     if missing:
         raise RuntimeError(
@@ -460,7 +469,7 @@ def register_builtin_skills(directory: Path = BUILTIN_SKILLS_DIR) -> list[str]:
     # 並びの順は `BUILTIN_SKILL_IDS` の順（ID の文字の順に頼らない。#1866）。`skills/` に足した
     # ほかの組み込みのスキルは、その後に表示名の順で並べる。
     rank = {skill_id: index for index, skill_id in enumerate(BUILTIN_SKILL_IDS)}
-    ordered = sorted(
+    return sorted(
         skills,
         key=lambda skill: (
             rank.get(skill.id, len(rank)),
@@ -468,6 +477,11 @@ def register_builtin_skills(directory: Path = BUILTIN_SKILLS_DIR) -> list[str]:
             skill.id,
         ),
     )
+
+
+def register_builtin_skills(directory: Path = BUILTIN_SKILLS_DIR) -> list[str]:
+    """組み込みのスキル（`builtin_skills`）を登録する。"""
+    ordered = builtin_skills(directory)
     for skill in ordered:
         skill_registry.register(skill)
     return [skill.id for skill in ordered]

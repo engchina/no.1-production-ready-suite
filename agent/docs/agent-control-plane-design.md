@@ -146,6 +146,7 @@ Skill は AgentSkills 互換の指示本体であり、次の内部依存を持�
 | `docx-create` | Word 作成 | Control Plane のツール `docx_create`（#5837。Word のファイルを新しく作る。MCP 接続を使わないので、外部の Agent では使えない） |
 | `pptx-create` | PowerPoint 作成 | Control Plane のツール `pptx_create`（#5837。PowerPoint のファイルを新しく作る。MCP 接続を使わないので、外部の Agent では使えない） |
 | `markdown-create` | Markdown 作成 | Control Plane のツール `markdown_create`（#5867。Markdown のファイル（.md）を新しく作る。MCP 接続を使わないので、外部の Agent では使えない） |
+| `aidp-agent` | AI Data Platform の Agent | 接続 `aidp` の `send_message`（#5932。Oracle AI Data Platform に配備した Agent に依頼を送る。`PLATFORM_AIDP_OCID` がある構成にだけ登録し、組み込みの業務 Agent・業種テンプレートは使わない。§4.3） |
 
 `business-rag-research`・`rag-and-structured-data`・`article-catalog-lookup` は #5342 で消した（互換なし。選んでいた
 業務 Agent は `unavailable_skill_ids` で画面が示し、下書き・常に最新の版の Run は `runtime.skill_unavailable` で失敗する）。
@@ -362,7 +363,8 @@ RAG の会話のチャットは MCP で提供しない（#787）。RAG の MCP �
 画面の一覧は `GET /api/settings/tool-policy/tools`（#1814。`tool_policy_catalog`）で、組み込みのツールに、URL を設定した
 MCP 接続の `tools/list`（ログイン中の利用者として取る）を足し、「既定に従う」の判定（Run と同じ `ToolPolicy.decide`）を
 添える。取れない接続は理由を出し、その接続のツールで保存したポリシーは「一覧にありません」の行として残す（保存し直しても
-消さない）。各行に判定の理由（ツール権限で指定 / 標準の接続の既定 / 読み取り専用 / 注釈を信頼しない接続 / 既定の動作）を出す。
+消さない）。各行に判定の理由（ツール権限で指定 / 標準の接続の既定 / 信頼した接続の外部の Agent〔§4.3〕/ 読み取り専用 /
+注釈を信頼しない接続 / 既定の動作）を出す。
 
 既定の判定（`ToolPolicy.explain`。#1832）は、ツール権限の個別の指定（deny → ask → allow）→ 標準の接続で Agent が承認なしと
 決めたツール（`STANDARD_AUTO_APPROVED_TOOLS`。今は `nl2sql_query` だけ）→ 読み取り専用（Control Plane のツールの宣言、MCP の
@@ -552,7 +554,59 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
   超えたら `API_KEY_RUN_LIMIT`・`status` 429・`details.retry_after_seconds`）。
 - スキルの書き出し（`agent_skill_export`）: 使える業務 Agent の公開中の版が使うスキルを、Agent Skills の形のファイル（`skill_export.export_skill`。画面の `GET /api/skills/{skill_id}/export` と同じ）で返す。
 - 向きは「外部のクライアント → Agent → RAG / NL2SQL」。RAG / NL2SQL は Agent の MCP を呼ばない。A2A（Agent2Agent）
-  プロトコルは持たない。
+  は、client として外部の A2A の Agent を呼べる（§4.3。#5932）。server は持たない（自分を A2A の Agent として
+  公開しない。外向けの公開はこの節の MCP だけ）。
+
+### 4.3 外部の Agent を A2A で呼ぶ（#5932）
+
+外部の Agent は「接続」（§4.1 の `McpConnectionConfig`）の 1 つのプロトコルとして扱う。接続の `protocol` は `mcp`（既定）か
+`a2a`。保存の kind（`mcp_connection`）・API path（`/api/settings/mcp-connections`）・route・権限の名前は変えず、
+画面の名前だけ「外部接続」にする。sub-agent / handoff の概念は足さない（業務 Agent → Skill → ツールのまま）。
+
+- **1 つの Agent を 1 つのツールにする。** `a2a` の接続は Agent の endpoint の URL を持つ。`list_mcp_connection_tools`
+  は Agent card（`a2a.agent_card_url`。指定が無ければ `<endpoint>/.well-known/agent-card.json`）を読み、その Agent に
+  テキストのメッセージを送るツール `send_message`（モデルに渡す名前は `<接続>__send_message`）を返す。ツールの説明は
+  Agent card の `name`・`description`・`skills` から作り（必須は `name` と `description`）、表示名は `name`。Skill は
+  MCP のツールと同じ形（`mcp_requirements` の `<接続>:send_message`）で宣言し、呼び出しは `tool_registry.invoke` を通る。
+  送り先は接続の endpoint だけで、Agent card の `url` へは送らない。
+- **呼び出しは `message/send`（非ストリーミング）だけで、呼び出しごとに独立**（`contextId`・`taskId` を引き継がない）。
+  結果は `status`（`completed` / `input_required` / `incomplete`）と `text`。応答が `message` ならその本文、`task` なら
+  `completed` は成果物の text（無ければ状態の文）、`input-required` は相手の問い（聞き返しをツールの結果として返す）、
+  `submitted` / `working` は `incomplete`（`tasks/get` で待たない）。`failed` / `rejected` / `canceled` /
+  `auth-required` は失敗（`a2a.task_failed`）。text 以外の part は受け取らず、種類と数を `content_omitted` に残す。
+  状態で変わる案内（聞き返しへの答え方・完了しなかったときにすること）は結果の `next_step` に置く。
+- **認証**は なし / API キー / OAuth client credentials / OCI 署名（`oci_signature`）。OCI 署名は
+  「システム設定 › OCI 認証」の API キーで httpx のリクエストに署名する（platform の
+  `pr_system_settings.oci_signing`。Agent card の取得にも付ける。https の URL でだけ使う）。接続ごとの secret を持たない。
+  instance principal は対象外。3 製品の間のサービストークン（Run の利用者の身元）は外部の Agent へ渡さない（`a2a` + `service_token` と
+  `mcp` + `oci_signature` は API が 400）。利用者ごとの身元は渡さず、誰が使えるかは業務 Agent の権限で決める。
+- **再送と取消**: `message/send` は相手が書き込むことがあるので、書き込みのツールと同じ扱い（`McpRetryKind.UNSAFE`）。
+  送信前の失敗と 429 / 503 だけ再試行し、届いた後の失敗（500 / 502 / 504・切断・読み取りの timeout）は再送せず
+  結果不明にする（§4.1 の `external_writes` の規則。論理操作の ID はメッセージの `messageId` に入れる）。Run の取消の
+  後は送らず、送った後は結果を待つ。締切は接続の timeout。
+- **ツールの権限**: A2A のツールは注釈を持たないので、常に副作用のあるツール。信頼した接続（組み込みの `aidp` と、
+  管理者が接続の画面で信頼にした接続。`trust_tool_annotations`）だけ既定で承認なしにする
+  （`ToolDefinition.trusted_auto_approve`。理由は `trusted_connection`）。読み取り専用にはしないので、送信後の失敗で
+  再送する対象にも、結果不明の後の呼び直しを素通しする対象にもならない。信頼しない接続は外部の MCP と同じ既定
+  （承認を要求 / 拒否）。どちらもツール権限の個別の指定が優先する。
+- **失敗の案内**（OCI 署名の接続。接続のテストとツールの失敗の両方。実環境の AIDP の gateway の応答で確かめた）:
+  401 は署名が無い・受け付けられない応答なので、「システム設定 › OCI 認証」の API キーの設定を確かめる文にする。
+  404 は、署名が通っても Agent が無いときと権限が無いときに同じ応答（`NotAuthorizedOrNotFound`）で区別できないので、
+  endpoint の URL の誤り・Agent が未配備・権限の不足（署名に使う OCI ユーザーの IAM の `use ai-data-platforms` と、
+  AIDP の中のその Agent の USE 権限）をすべて挙げる。403 は権限の不足。署名のヘッダー・鍵は log・結果に出さない。
+- **Oracle AI Data Platform（AIDP）の既定**（`PLATFORM_AIDP_OCID` がある構成だけ。プロトコルの実装は汎用で、AIDP に
+  固有なのは認証方式と次の既定値だけ）:
+  - 組み込みの接続 `aidp`（名前は「AI Data Platform の Agent」。プロトコル A2A・認証 OCI 署名・名前・信頼は固定）。
+    管理者が Agent の endpoint の URL（`https://gateway.aidp.<PLATFORM_AIDP_REGION>.oci.oraclecloud.com/agentendpoint/<agentId>/a2a`。
+    この host の https だけを受ける）を入れる。Agent card は `<endpoint>/agent-card.json`。接続 ID `aidp` は予約。
+  - 接続の追加の画面の既定値「AI Data Platform の Agent」（一覧の API の `presets`。プロトコル・認証・timeout と URL の雛形）。
+  - 組み込みのスキル `aidp-agent`（`skills/aidp-agent/SKILL.md`。`aidp:send_message` を宣言する）。業務 Agent には
+    自動で付けない。endpoint が未設定の間は、このスキルを使う Run は始まらない（§4.1 の取得できない接続と同じ
+    `runtime.mcp_unavailable`。ツールをモデルに渡さない）。
+  - `PLATFORM_AIDP_OCID` が空なら 3 つとも出さない（汎用の A2A の接続は使える）。保存済みの `aidp` の URL は消さない。
+- 対象外: A2A の server、ストリーミング（`message/stream`）、多ターン、file / data の part、push 通知、完了しない task の
+  ポーリング、A2A v1.0 の形（method の名前・part の形が違う。相手の版は接続のテストに出る Agent card の
+  `protocolVersion`）、AIDP の Agent・AI Compute の作成、逆向き（AIDP の Agent が 3 製品の MCP を呼ぶ）。
 
 ## 5. Dispatcher and persistence
 
