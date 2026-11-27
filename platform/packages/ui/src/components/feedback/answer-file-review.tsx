@@ -1,10 +1,10 @@
-import { BookOpen, RotateCcw, Search, ThumbsDown, ThumbsUp } from "lucide-react";
+import { BookOpen, CheckCircle2, PencilLine, RotateCcw, Search, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { ListSkeleton, Skeleton } from "../ui/skeleton";
 import { ProcessingIndicator, TimedLoadingState, staleContentClass, REFRESH_REVEAL_DELAY_MS } from "./processing-state";
 import { Button } from "../ui/button";
-import { Disclosure } from "../ui/disclosure";
+import { useConfirm } from "../ui/confirm-dialog";
 import { RadioOptionGroup } from "../ui/radio-option-group";
 import { SearchField } from "../ui/search-field";
 import { SelectedSources } from "../ui/selected-sources";
@@ -34,7 +34,7 @@ type Mode = "only" | "mix" | "replace";
 type Activity = FileReviewAction["action"] | "more" | "open" | "reload" | "original" | "vote" | "details";
 
 /**
- * 「未解決」の理由・コメント・修正した回答の入力（#5906）。評価そのものは `vote` が先に保存し、ここは任意で足す。
+ * 「解決しなかった」の理由・コメント・修正した回答の入力（#5906）。評価そのものは `vote` が先に保存し、ここは任意で足す。
  * 修正した回答は品質評価のケースと登録済み Q&A の元になるので、資料の選び直しとは別に残せるようにする。
  */
 export interface AnswerFileReviewDetails {
@@ -105,6 +105,10 @@ export function AnswerFileReview({
   const [manage, setManage] = useState(false);
   const [reset, setReset] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  // この画面で理由を保存した版。製品が保存済みの内容を返せない版（回答し直した後の版）でも、消す前に確かめるために持つ。
+  const [recorded, setRecorded] = useState<string[]>([]);
+  const [voting, setVoting] = useState<AnswerRating | null>(null);
+  const confirm = useConfirm();
   const list = useRef<HTMLDivElement>(null);
   const opener = useRef<HTMLButtonElement | null>(null);
   const selectionId = useId();
@@ -179,20 +183,37 @@ export function AnswerFileReview({
       if (active.current) setActivity(null);
     }
   }
-  function mark(value: AnswerRating) {
-    void operation(value === "not_helpful" ? "open" : "vote", async () => {
+  const hasDetails = (id: string) => {
+    const saved = details?.value?.(id);
+    return recorded.includes(id) || !!(saved && (saved.reason || saved.comment || saved.correctedAnswer));
+  };
+  /** 評価だけを保存する。資料の選び直しと理由の入力は、評価の後に出る別のボタンから開く（1 つのボタンに 1 つの処理。#5906）。 */
+  async function mark(value: AnswerRating) {
+    const current = latest ? latest.rating : (rating ?? initialRating);
+    const id = latest?.id ?? rootId;
+    if (current === value || running.current) return;
+    // 「解決した」は理由・コメント・修正した回答を持たないので、変える前に確かめる（保存は同じ行の上書き）。
+    if (
+      value === "helpful" &&
+      hasDetails(id) &&
+      !(await confirm({
+        title: t("fileReview.clearDetailsTitle"),
+        description: t("fileReview.clearDetailsDescription"),
+        confirmLabel: t("fileReview.clearDetailsConfirm"),
+        tone: "warning",
+      }))
+    )
+      return;
+    setVoting(value);
+    void operation("vote", async () => {
       userAction.current += 1;
-      if (value === "not_helpful") {
-        setOpen(true);
-        setPreview("");
-        setManage(false);
-        setReset(false);
-      }
-      const current = latest ? latest.rating : (rating ?? initialRating);
-      const id = latest?.id ?? rootId;
-      if (current !== value) await vote(id, value);
+      await vote(id, value);
       if (!active.current) return;
       setRating(value);
+      if (value === "helpful") {
+        setDetailsOpen(false);
+        setRecorded((previous) => previous.filter((key) => key !== id));
+      }
       setState(
         (previous) =>
           previous && {
@@ -200,23 +221,32 @@ export function AnswerFileReview({
             versions: previous.versions.map((v) => (v.id === id ? { ...v, rating: value } : v)),
           },
       );
-      if (value === "not_helpful") {
-        const s = await load();
-        if (!active.current) return;
-        if (!s?.versions?.length) throw new Error(t("fileReview.error"));
-        setState(s);
-        setOpen(true);
-        const keys = Object.keys(s.versions.at(-1)?.sources ?? {});
-        choose(s, keys.length === 1 ? keys[0] : "");
-      }
-    }, () => mark(value));
+    }, () => void mark(value));
+  }
+  /** 資料を選び直す面を開く。 */
+  function review() {
+    void operation("open", async () => {
+      userAction.current += 1;
+      setOpen(true);
+      setPreview("");
+      setManage(false);
+      setReset(false);
+      const s = await load();
+      if (!active.current) return;
+      if (!s?.versions?.length) throw new Error(t("fileReview.error"));
+      setState(s);
+      const keys = Object.keys(s.versions.at(-1)?.sources ?? {});
+      choose(s, keys.length === 1 ? keys[0] : "");
+    }, review);
   }
   function saveDetails(submission: FeedbackControlsSubmission) {
     if (!details) return;
     const id = latest?.id ?? rootId;
     void operation("details", async () => {
       await details.save(id, submission);
-      if (active.current) setDetailsOpen(false);
+      if (!active.current) return;
+      setRecorded((previous) => (previous.includes(id) ? previous : [...previous, id]));
+      setDetailsOpen(false);
     }, () => saveDetails(submission));
   }
   function readOriginal(documentId: string) {
@@ -349,25 +379,49 @@ export function AnswerFileReview({
                 size="sm"
                 variant="secondary"
                 icon={value === "helpful" ? ThumbsUp : ThumbsDown}
-                loading={value === "helpful" && activity === "vote"}
+                loading={activity === "vote" && voting === value}
                 disabled={busy || disabled || loadingRating}
                 aria-pressed={currentRating === value}
                 className={currentRating === value ? "border-primary bg-primary-subtle ring-1 ring-primary" : undefined}
-                onClick={() => mark(value)}
+                onClick={() => void mark(value)}
               >
                 {t(value === "helpful" ? "fileReview.helpful" : "fileReview.notHelpful")}
               </Button>
             ))}
           </div>
-          {details && currentRating === "not_helpful" && (
-            <Disclosure
-              variant="plain"
-              size="sm"
-              summary={t("fileReview.details")}
-              open={detailsOpen}
-              onOpenChange={setDetailsOpen}
-            >
-              {detailsOpen && (
+          {currentRating === "not_helpful" && (
+            <>
+              <div className="flex flex-wrap items-center gap-2" data-testid="file-review-next">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={Search}
+                  loading={activity === "open"}
+                  disabled={busy || disabled}
+                  onClick={review}
+                >
+                  {t("fileReview.title")}
+                </Button>
+                {details && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    icon={PencilLine}
+                    disabled={busy || disabled}
+                    aria-expanded={detailsOpen}
+                    onClick={() => setDetailsOpen((previous) => !previous)}
+                  >
+                    {t(details.correctedAnswer ? "fileReview.detailsWithAnswer" : "fileReview.details")}
+                  </Button>
+                )}
+                {details && hasDetails(latest?.id ?? rootId) && (
+                  <span className="inline-flex items-center gap-1 text-xs text-fg-muted" role="status">
+                    <CheckCircle2 size={14} className="text-success-fg" aria-hidden />
+                    {t("fileReview.detailsSaved")}
+                  </span>
+                )}
+              </div>
+              {details && detailsOpen && (
                 <FeedbackDetailsForm
                   reasons={details.reasons}
                   labels={details.labels}
@@ -380,7 +434,7 @@ export function AnswerFileReview({
                   onCancel={() => setDetailsOpen(false)}
                 />
               )}
-            </Disclosure>
+            </>
           )}
         </div>
       )}

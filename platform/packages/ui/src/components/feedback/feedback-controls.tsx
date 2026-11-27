@@ -291,7 +291,7 @@ export interface FeedbackDetailsFormProps<R extends string = string> {
 
 /**
  * 「役に立たなかった」の理由（必須）・コメント（任意）・修正した回答（任意）の入力（#531・#5906）。
- * `FeedbackControls` の 👎 と、資料を選び直す評価（`AnswerFileReview`）の「未解決」の後で同じものを使う。
+ * `FeedbackControls` の 👎 と、資料を選び直す評価（`AnswerFileReview`）の「解決しなかった」の後で同じものを使う。
  * 修正した回答は品質評価のケースと登録済み Q&A の元になる。
  */
 export function FeedbackDetailsForm<R extends string = string>({
