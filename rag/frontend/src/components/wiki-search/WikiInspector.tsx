@@ -254,7 +254,7 @@ export function WikiInspector({
           </TabPanel>
         )}
       </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border p-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border px-3 py-2">
         {unit && toggle && original && (
           <Button
             variant="secondary"

@@ -6,7 +6,9 @@ from pytest import MonkeyPatch
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profile_knowledge as knowledge_route
 from app.main import app
+from app.rag.pipeline import AnswerFlow
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
+from app.schemas.search import SearchRequest
 from tests import test_search_search_answer_profile as search_tests
 from tests.support import AsgiTestClient
 from tests.test_search_answer_profile_domain_keywords import FakeKnowledgeOracle
@@ -66,10 +68,14 @@ def test_registered_rules_are_not_editable_or_returned(fake_oracle: FakeKnowledg
     assert removed.status_code in {404, 405}
 
 
-def test_search_context_carries_search_answer_profile_runtime_knowledge(
+@pytest.fixture
+def profile_knowledge(
     monkeypatch: MonkeyPatch,
-) -> None:
-    payload = {"schema_version": 1, "terms": [{"term": "受注", "aliases": ["注文"]}]}
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "terms": [{"term": "用語 A", "aliases": ["別名 A"]}],
+    }
 
     class KnowledgeViewOracle(search_tests.FakeViewOracle):
         async def get_search_answer_profile_knowledge(
@@ -84,16 +90,47 @@ def test_search_context_carries_search_answer_profile_runtime_knowledge(
         "OracleClient",
         lambda *_args, **_kwargs: KnowledgeViewOracle({"bv-1": config}),
     )
+    return payload
 
+
+def test_search_context_carries_search_answer_profile_runtime_knowledge(
+    profile_knowledge: dict[str, object],
+) -> None:
     response = client.post(
-        "/api/search", json={"query": "注文の登録", "search_answer_profile_id": "bv-1"}
+        "/api/search", json={"query": "別名 A の確認", "search_answer_profile_id": "bv-1"}
     )
 
     assert response.status_code == 200
     settings = search_tests.RecordingPipeline.captured_settings
     assert settings is not None
-    assert settings.rag_runtime_knowledge == payload
+    assert settings.rag_runtime_knowledge == profile_knowledge
     # 回答の記録に残す検索・回答プロファイルの版（#1276）。
     revision = settings.rag_search_answer_profile_revision
     assert revision["id"] == "bv-1"
     assert isinstance(revision["updated_at"], str) and revision["config_sha256"]
+
+
+@pytest.mark.parametrize("flow", ["basic", "expanded"])
+@pytest.mark.parametrize(
+    "filter_name,generate", [("exclude_document_ids", False), ("include_document_ids", True)]
+)
+@pytest.mark.usefixtures("system_access")
+@pytest.mark.anyio
+async def test_file_review_keeps_profile_terms(
+    profile_knowledge: dict[str, object], flow: AnswerFlow, filter_name: str, generate: bool
+) -> None:
+    request = SearchRequest(
+        query="別名 A の確認",
+        search_answer_profile_id="bv-1",
+        generate_answer=generate,
+        filters={filter_name: '["doc-a"]'},
+    )
+    effective, settings, _, profile = await search_route._resolve_query_context(
+        request, search_route.get_settings(), flow=flow
+    )
+    assert profile == "bv-1"
+    assert effective.filters[filter_name] == request.filters[filter_name]
+    assert effective.knowledge_base_ids == ["kb-1"]
+    assert settings.rag_runtime_knowledge == profile_knowledge
+    assert settings.rag_approved_faq_selected == {}
+    assert not settings.rag_support_guide_enabled

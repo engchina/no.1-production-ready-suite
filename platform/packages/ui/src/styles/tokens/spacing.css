@@ -55,6 +55,7 @@
   --field-width-sm: 12rem;
   --field-width-md: 20rem;
   --field-width-lg: 28rem;
+  --searchable-field-max-width: 40rem; /* 検索付きの選択欄と候補一覧の上限。 */
   /* フォームの本文（欄の並び）の読みやすい最大幅（#1891）。840px。2 列の grid のセル（約 29rem）に lg の欄が入り、
      1920px の画面でも 1 つの欄が 1,500px を超えて伸びない（GOV.UK の 2/3 の列・Baymard の欄の幅の研究）。
      カード・Section などのコンテナには付けない（FormGrid だけが使う）。 */

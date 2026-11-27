@@ -90,6 +90,7 @@ export function SearchAnswerProfileSelectSkeleton({
 }: { compact?: boolean; testId?: string } = {}) {
   return (
     <FieldSkeleton
+      searchable
       size={compact ? "sm" : "md"}
       fieldLabel={compact ? false : t("searchAnswerProfiles.scope.label")}
       testId={testId}

@@ -8,8 +8,8 @@ import { SearchField } from "./search-field";
 
 /**
  * 検索つきの選択（`SearchableSelectField` / `SearchableMultiSelect`）の開いた popover の幅の範囲（rem。#5267）。
- * popover はトリガーと同じ幅にし、この範囲に収める（40rem を超えるトリガーではトリガーの左端にそろえて 40rem）。
- * sm（640px）未満の画面では、画面の幅から左右の余白（1rem）を引いた幅にする。
+ * トリガーは最大 40rem。候補もその幅にそろえ、20rem 未満の欄だけ読みやすい幅に広げる。
+ * どの画面でも左右の余白を確保する。上限は spacing.css の --searchable-field-max-width と共通。
  */
 export const SEARCHABLE_POPOVER_WIDTH_REM = { min: 20, max: 40 } as const;
 

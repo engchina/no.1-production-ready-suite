@@ -360,7 +360,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   ) : null;
   const left = (
     <div className="flex min-h-0 min-w-0 flex-col">
-      <h3 className="shrink-0 border-b border-border p-2 text-sm font-semibold">
+      <h3 className="flex min-h-[var(--control-height-lg)] shrink-0 items-center border-b border-border px-3 py-1 text-sm font-semibold">
         {t(search ? "wiki.search.hits" : "wiki.search.documents")}
       </h3>
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -395,39 +395,41 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
           );
         })}
       </div>
-      {total !== undefined ? (
-        <OffsetPagination
-          offset={offset}
-          limit={RESULT_PAGE}
-          count={rows.length}
-          total={total}
-          onPageChange={(_, n) => changePage(n)}
-          ariaLabel={t("wiki.search.hits")}
-        />
-      ) : (
-        !search &&
-        docs.data?.has_more && (
-          <div className="flex justify-end gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              iconOnly
-              icon={ChevronLeft}
-              aria-label={t("pager.prev")}
-              disabled={!offset}
-              onClick={() => changePage(offset - RESULT_PAGE)}
-            />
-            <Button
-              size="sm"
-              variant="ghost"
-              iconOnly
-              icon={ChevronRight}
-              aria-label={t("pager.next")}
-              onClick={() => changePage(offset + RESULT_PAGE)}
-            />
-          </div>
-        )
-      )}
+      <div className="shrink-0 border-t border-border px-3 py-2 empty:hidden">
+        {total !== undefined ? (
+          <OffsetPagination
+            offset={offset}
+            limit={RESULT_PAGE}
+            count={rows.length}
+            total={total}
+            onPageChange={(_, n) => changePage(n)}
+            ariaLabel={t("wiki.search.hits")}
+          />
+        ) : (
+          !search &&
+          docs.data?.has_more && (
+            <div className="flex justify-end gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                iconOnly
+                icon={ChevronLeft}
+                aria-label={t("pager.prev")}
+                disabled={!offset}
+                onClick={() => changePage(offset - RESULT_PAGE)}
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                iconOnly
+                icon={ChevronRight}
+                aria-label={t("pager.next")}
+                onClick={() => changePage(offset + RESULT_PAGE)}
+              />
+            </div>
+          )
+        )}
+      </div>
     </div>
   );
   return (
@@ -532,13 +534,13 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
         ) : (
           <div
             aria-busy={reloadList || undefined}
-            className={`grid min-h-80 ${columns} ${staleContentClass(mainResult.isPlaceholderData)} ${full ? "flex-1" : "h-[clamp(26rem,65dvh,60rem)]"}`}
+            className={`grid min-h-80 divide-x divide-border ${columns} ${staleContentClass(mainResult.isPlaceholderData)} ${full ? "flex-1" : "h-[clamp(26rem,65dvh,60rem)]"}`}
           >
             {(view === "list" || !small) && left}
             {view === "graph" && (
-              <div className="flex min-h-0 min-w-0 flex-col border-x border-border">
-                <div className="flex items-center justify-between gap-2 border-b border-border p-2 text-xs text-fg-muted">
-                  <strong>{t("wiki.search.graph")}</strong>
+              <div className="flex min-h-0 min-w-0 flex-col">
+                <div className="flex min-h-[var(--control-height-lg)] shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-1 text-xs text-fg-muted">
+                  <strong className="text-sm font-semibold text-fg">{t("wiki.search.graph")}</strong>
                   {!!Object.keys(removed).length && <Button variant="ghost" size="sm" onClick={undoCollapse}>{t("wiki.search.undoCollapse")}</Button>}
                   {!graphPending && !graphError && t("wiki.search.figures", { nodes: scene.nodes.length, edges: scene.edges.length })}
                 </div>
@@ -564,10 +566,10 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
             {!small && inspector && (
               <aside
                 aria-label={t("wiki.search.detail")}
-                className="flex min-h-0 min-w-0 flex-col border-l border-border"
+                className="flex min-h-0 min-w-0 flex-col"
               >
-                <div className="flex items-center justify-between border-b border-border px-2">
-                  <strong className="text-sm">{t("wiki.search.detail")}</strong>
+                <div className="flex min-h-[var(--control-height-lg)] shrink-0 items-center justify-between border-b border-border px-3 py-1">
+                  <strong className="text-sm font-semibold">{t("wiki.search.detail")}</strong>
                   <Button
                     iconOnly
                     icon={X}

@@ -683,7 +683,7 @@ export function SqlChatPage() {
 
           {profilesLoading ? (
             // ツールバーの欄の寸法だけを予約する。文言と経過時間は会話の欄の先頭の 1 か所に出す（#4649）。
-            <FieldSkeleton fieldLabel={false} size="sm" testId="sql-chat-profiles-skeleton" />
+            <FieldSkeleton searchable fieldLabel={false} size="sm" testId="sql-chat-profiles-skeleton" />
           ) : profilesFailed ? (
             <ApiErrorBanner
               error={profiles.error}

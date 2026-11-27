@@ -15,8 +15,6 @@ const MENU_GAP = 4;
 const MENU_VIEWPORT_PADDING = 8;
 /** `--z-dropdown` を読めないとき（テスト環境など）の既定値。elevation.css と同じ値。 */
 const DEFAULT_DROPDOWN_Z_INDEX = 850;
-/** 狭い画面の境目（Tailwind の sm = 40rem。メディアクエリの rem はブラウザの既定の 16px なので 640px）。 */
-const NARROW_VIEWPORT_PX = 640;
 
 export type FloatingMenuPlacement = "top" | "bottom";
 /**
@@ -43,15 +41,12 @@ export interface SearchablePopoverWidthRange {
   max: number;
   /** 画面の左右の余白（px）。 */
   gutter: number;
-  /** この幅（px）未満の画面では、画面の幅から左右の余白を引いた幅にする。 */
-  narrowBelow: number;
 }
 
 /** トリガーの幅に合わせた popover の幅（`widthRange`。DOM を読まない）。 */
 export function rangedMenuWidth(triggerWidth: number, viewportWidth: number, range: SearchablePopoverWidthRange) {
   const available = Math.max(0, viewportWidth - range.gutter * 2);
-  if (viewportWidth < range.narrowBelow) return Math.floor(available);
-  return Math.floor(Math.min(available, Math.max(range.min, Math.min(range.max, triggerWidth))));
+  return Math.min(Math.floor(available), Math.max(range.min, Math.min(range.max, triggerWidth)));
 }
 
 type RectLike = Pick<DOMRect, "top" | "bottom" | "left" | "right" | "width">;
@@ -63,7 +58,7 @@ export interface FloatingMenuLayoutInput {
   menuWidth: number;
   /**
    * トリガーの幅に合わせ、決まった範囲に収める幅（px。検索つきの選択の popover。#5267）。
-   * 幅は「トリガーの幅を min〜max に収めた値」、`narrowBelow` 未満の画面では画面の幅から左右の `gutter` を引いた値。
+   * 幅は「トリガーの幅を min〜max に収めた値」。どの画面でも左右の余白を確保する。
    * 左端はトリガーに合わせ、画面（左右の `gutter` の内側）に入らなければずらす。
    */
   widthRange?: SearchablePopoverWidthRange;
@@ -167,7 +162,7 @@ export function computeFloatingMenuLayout({
     constrained,
     placement,
     style: {
-      left: Math.round(left),
+      left: widthRange ? left : Math.round(left),
       ...(constrained ? { maxHeight: Math.floor(renderedHeight) } : {}),
       top: Math.round(top),
       ...(widthRange
@@ -270,11 +265,10 @@ export function useFloatingMenuPosition({
             max: widthRangeRem.max * rootFontSize,
             // 本文の左右の余白（PageBody の px-4）と同じ 1rem。
             gutter: rootFontSize,
-            narrowBelow: NARROW_VIEWPORT_PX,
           }
         : undefined,
       maxHeight: maxHeightRem ? maxHeightRem * rootFontSize : undefined,
-      viewportWidth: window.innerWidth,
+      viewportWidth: widthRangeRem ? document.documentElement.clientWidth : window.innerWidth,
       viewportHeight: window.innerHeight,
       boundaryRect: scrollableAncestor?.getBoundingClientRect(),
     });

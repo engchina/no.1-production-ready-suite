@@ -1,5 +1,5 @@
 import { Info } from "lucide-react";
-import { useEffect, useId, useRef, type ButtonHTMLAttributes } from "react";
+import { useEffect, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 import {
@@ -34,6 +34,8 @@ export interface InfoTipProps
   extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "content" | "aria-label" | "type"> {
   /** 説明の文（翻訳済み。1〜3 文。リンク・ボタンなど操作できる要素は入れない）。 */
   content: string;
+  /** 説明を開くラベルを表示する場合に渡す。省略時は Info アイコン。 */
+  children?: ReactNode;
   /**
    * アイコンのボタンの読み上げ名（翻訳済み）。何の説明かが分かる名前にする（例「回答するモデルの説明」）。
    * 説明の文は `aria-describedby` で読まれる。
@@ -56,6 +58,7 @@ export interface InfoTipProps
  */
 export function InfoTip({
   content,
+  children,
   label,
   placement = "top",
   contentId,
@@ -75,6 +78,7 @@ export function InfoTip({
   const bubbleRef = useRef<HTMLDivElement | null>(null);
   const { controller, state } = useTooltipController({ showDelayMs: INFO_TIP_SHOW_DELAY_MS });
   const pinned = state.open && state.reason === "press";
+  const describes = content !== label;
 
   // 押して開いている間は、外側を押したら閉じる（クリックでフォーカスが移らないブラウザ・タッチ端末でも閉じる）。
   useEffect(() => {
@@ -99,14 +103,17 @@ export function InfoTip({
         ref={triggerRef}
         type="button"
         aria-label={label}
-        aria-describedby={[props["aria-describedby"], id].filter(Boolean).join(" ")}
+        aria-describedby={[props["aria-describedby"], describes && id].filter(Boolean).join(" ") || undefined}
         disabled={disabled}
         data-info-tip=""
         data-state={state.open ? "open" : "closed"}
         className={cn(
           // 見た目は 24px（WCAG 2.5.8 の当たり判定）。タッチ端末では見た目を変えずに当たり判定だけを 44px にする（#364）。
           // アイコン（16px）の周りに 4px の余白があるので、フォーカスの outline は offset 0 で円に沿わせ、隣のラベルに重ねない。
-          "pr-touch-target relative inline-flex h-[24px] w-[24px] shrink-0 cursor-pointer items-center justify-center rounded-full align-middle text-fg-muted transition-colors focus-visible:outline-offset-0 hover:bg-surface-hover hover:text-fg data-[state=open]:text-fg disabled:cursor-not-allowed disabled:opacity-50 forced-colors:text-[ButtonText]",
+          "relative inline-flex cursor-pointer items-center transition-colors focus-visible:outline-offset-0 hover:bg-surface-hover hover:text-fg data-[state=open]:text-fg disabled:cursor-not-allowed disabled:opacity-50 forced-colors:text-[ButtonText]",
+          children == null
+            ? "pr-touch-target h-[24px] w-[24px] shrink-0 justify-center rounded-full align-middle text-fg-muted"
+            : "min-w-0 rounded-control",
           className
         )}
         onPointerEnter={(event) => {
@@ -130,12 +137,12 @@ export function InfoTip({
           if (!event.defaultPrevented && !disabled) controller.press();
         }}
       >
-        <Info size={INFO_TIP_ICON_SIZE} aria-hidden />
+        {children ?? <Info size={INFO_TIP_ICON_SIZE} aria-hidden />}
       </button>
       <TooltipBubble
         id={id}
         open={state.open && !disabled}
-        describes
+        describes={describes}
         reason={state.reason}
         placement={placement}
         controller={controller}
@@ -144,7 +151,7 @@ export function InfoTip({
         content={content}
         data-testid={contentTestId}
         // 文で読む説明なので、Tooltip（12px / 500・16rem）より広く、行間を空け、太さは本文の 400 にする。
-        className="max-w-[min(20rem,calc(100vw-1rem))] px-3 py-2 font-normal leading-relaxed"
+        className="max-h-[50dvh] max-w-[min(20rem,calc(100vw-1rem))] overflow-y-auto whitespace-pre-line px-3 py-2 font-normal leading-relaxed [overflow-wrap:anywhere]"
       />
     </>
   );

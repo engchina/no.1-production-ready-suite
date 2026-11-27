@@ -583,7 +583,7 @@ export function SearchableMultiSelect({
         onKeyDown={handleButtonKeyDown}
         className={cn(
           CONTROL_HEIGHT_CLASS.md,
-          "flex w-full cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 text-left text-sm text-fg transition-colors",
+          "flex w-[min(100%,var(--searchable-field-max-width))] cursor-pointer items-center justify-between gap-3 rounded-control border bg-surface px-3 text-left text-sm text-fg transition-colors",
           "enabled:hover:bg-surface-hover forced-colors:border-[CanvasText] focus-visible:border-focus-ring focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring",
           "disabled:cursor-not-allowed disabled:bg-surface-disabled disabled:text-fg-disabled",
           error || invalid ? "border-danger-fg" : "border-border-control"
@@ -629,7 +629,7 @@ export function SearchableMultiSelect({
       {chips.length > 0 ? (
         <ul
           aria-label={labels.selectedList(label)}
-          className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto [scrollbar-gutter:stable]"
+          className="flex max-h-32 max-w-[var(--searchable-field-max-width)] flex-wrap gap-1.5 overflow-y-auto [scrollbar-gutter:stable]"
           data-searchable-chips=""
         >
           {chips.map((option) => (
