@@ -864,11 +864,11 @@ test("解決しなかったを直ちに保存し、戻った後に選んだ資�
   await expect(bad).toHaveAttribute("aria-pressed", "true");
   if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ animations: "disabled", path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-vote-"+testInfo.project.name+".png" });
   await review.click();
-  await drawer.getByRole("radio", { name:"選んだ資料だけで答え直す" }).check();
+  await drawer.getByRole("radio", { name:"選んだ資料だけで回答" }).check();
   await drawer.getByRole("checkbox", { name:"操作ガイド A.pdf" }).check();
-  await drawer.getByRole("button", { name:"選んだ資料だけで再回答" }).click();
+  await drawer.getByRole("button", { name:"選んだ資料で再回答" }).click();
   await expect(page.getByText(nextAnswer, {exact:true})).toBeVisible();
-  await page.getByText("回答 1 · 解決しなかった", {exact:true}).click();
+  await page.getByText("回答 1・解決しなかった", {exact:true}).click();
   await expect(page.getByText(firstAnswer, {exact:true})).toBeVisible();
   await expect(drawer).toHaveCount(0);
   if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ animations: "disabled", path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-history-"+testInfo.project.name+".png" });

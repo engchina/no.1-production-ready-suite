@@ -774,7 +774,8 @@ export function SearchClient() {
                     {conditionChips}
                     {originalVisible && (answer.trim() ? <ChatAnswerBody testId="search-answer-body">{answerBody}</ChatAnswerBody> : answerBody)}
                     {/* 回答を読むときに要る案内（資料では決まらない値など）は回答の本文の直下（「詳細」に畳まない。#2096）。 */}
-                    {meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} extra={[guardrailItem]} /> : null}
+                    {/* 回答し直した後は、元の回答の本文・根拠と同じく隠す（残すと新しい回答の案内に見える。#5930）。 */}
+                    {originalVisible && meta && phase === "done" ? <AnswerNotices diagnostics={meta.diagnostics?.answer} extra={[guardrailItem]} /> : null}
                     {/*
                       回答の下は 3 製品のチャットと同じ共通の並び（#2707）: 回答の注意書き（#2405）→ 根拠の一覧 → 評価
                       （評価は回答の枠の最後。根拠を確かめてから評価できるよう、その後に置く。#1202 / #1420。
