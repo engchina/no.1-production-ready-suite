@@ -409,7 +409,8 @@ provision_db_app_user() {
 }
 
 # Oracle AI Data Platform 用の DB ユーザー（#5917）。props の adb_aidp_user.env が無ければ（deploy_aidp=false）何もしない。
-# AIDP の External Catalog が ADB に接続するためのユーザーで、3 製品は使わない（platform/.env に書かない）。
+# AIDP の External Catalog が ADB に接続するためのユーザーで、3 製品は使わない（platform/.env に書くのは、システム設定に
+# 出す名前の PLATFORM_AIDP_DB_USER だけ。パスワードは書かない。#5931）。
 # 失敗しても製品の配備と起動は続ける（アプリ用の DB ユーザーと同じ。#1756）。
 provision_db_aidp_user() {
   local aidp_env="${PROPS_DIR}/adb_aidp_user.env" status=0

@@ -262,7 +262,7 @@ RAG・NL2SQL・Agent の機能は 3 製品のまま使い、AIDP の Knowledge B
 | AIDP の instance と既定の workspace（`oci_ai_data_platform_ai_data_platform`。置き場所は ADB のコンパートメント） | workspace の追加・Spark の cluster・Notebook・Workflow |
 | AI 機能（Knowledge Base・Agent）の vector DB としての ADB の関連付け（`aidp_ai_feature_enabled`、既定 on） | External Catalog（下の「External Catalog の登録」の値を入力して作る） |
 | AIDP 用の DB ユーザー（既定の名前 `ADB_AIDP_USER`。Compute が ADMIN で作る） | AIDP の Agent・AI Compute、AIDP の中のロールと権限 |
-| 共通 `.env` の `PLATFORM_AIDP_OCID` / `PLATFORM_AIDP_REGION` / `PLATFORM_AIDP_URL` | IAM policy・security list・NAT Gateway（下の「配備の前に」） |
+| 共通 `.env` の `PLATFORM_AIDP_OCID` / `PLATFORM_AIDP_REGION` / `PLATFORM_AIDP_URL` / `PLATFORM_AIDP_DB_USER`（3 製品の「システム設定 › データベース」に出る。#5931） | IAM policy・security list・NAT Gateway（下の「配備の前に」） |
 
 - **最初の配備で決めてください。** `deploy_aidp` と AIDP の入力は Compute の cloud-init に入るため、後から切り替えると **Compute は作り直されます**（製品の選択と同じ。Compute の中のローカルの保存が失われる）。
   `aidp_default_workspace_name` と `aidp_ai_feature_enabled` は、後から変えると AIDP の instance が作り直されます（workspace・Notebook・AIDP が管理する表が失われる）。
@@ -332,7 +332,7 @@ External Catalog は登録した 1 組のユーザーで接続し、AIDP を使�
 - **作り方**: アプリ用の DB ユーザーと同じです。cloud-init が `/u01/aipoc/props/adb_aidp_user.env`（root の 0600。ADMIN のパスワードと、AIDP 用のユーザーの名前・パスワード）を置き、
   `platform/deploy/suite-init.sh` がアプリ用の DB ユーザーの後・製品の配備の前に、Compute から ADMIN で接続して `platform/deploy/suite-db-user.py apply-aidp` を実行します（冪等。再配備のたびに権限を合わせ直す）。
   失敗すると `/var/log/suite-init.log` に `[suite-init] check: aidp db user NG` を出し、製品の配備と起動を続けて、最後に失敗（0 以外）を返します。
-- **パスワード**: stack の入力 `aidp_db_user_password` です。props のファイルにだけ置き、`platform/.env`・各製品の `backend/.env`・画面・output には出しません。値は Terraform の state と cloud-init の user_data にも入ります。
+- **パスワード**: stack の入力 `aidp_db_user_password` です。props のファイルにだけ置き、`platform/.env`・各製品の `backend/.env`・画面・output には出しません（`platform/.env` に書くのは名前の `PLATFORM_AIDP_DB_USER` だけ）。値は Terraform の state と cloud-init の user_data にも入ります。
 - **ADMIN のパスワード**: `deploy_aidp=true` のときは、既存の ADB でアプリ用の DB ユーザーを使わない構成でも `existing_adb_admin_password` が必須です（AI 機能の関連付けと、このユーザーの作成に使う）。
 - **名前**: `aidp_db_user_name`（既定 `ADB_AIDP_USER`）。3 製品の接続のユーザーと同じ名前にはできません。
 
@@ -365,6 +365,8 @@ output（Resource Manager の「Outputs」）:
 | `aidp_web_socket_endpoint` | WebSocket の endpoint |
 | `aidp_external_catalog_info` | External Catalog の登録に要る値（ADB の OCID・DB 名・サービス名・ユーザー名。パスワードは出さない） |
 
+- **3 製品の画面**: 「システム設定 › データベース」の「Oracle AI Data Platform」の区画に、AIDP の URL（開くリンク）・OCID・リージョンと、External Catalog の登録に要る値
+  （ADB の DB 名・サービス名・AIDP 用の DB ユーザーの名前）、そのユーザーが ADB に在るかが出ます（読み取り専用。パスワードは出ません。`PLATFORM_AIDP_OCID` が空なら区画は出ません。#5931）。
 - **利用者の権限**: AIDP を開く利用者は、OCI IAM の `use ai-data-platforms` に加えて、AIDP の中のロール・workspace・catalog の権限が要ります（AIDP を作った利用者が管理者になり、ほかの利用者に付ける）。
 - **External Catalog の登録**（AIDP の画面）: Master Catalog › Create catalog › External catalog › Oracle Autonomous AI Lakehouse を選び、`aidp_external_catalog_info` の ADB・サービス名と、
   AIDP 用の DB ユーザーの名前・パスワードを入力します。ADB がプライベート・エンドポイントのときは「Enable private network」をオンにし、ADB の subnet に接続するプライベートの workspace を選びます
@@ -379,9 +381,11 @@ output（Resource Manager の「Outputs」）:
 PLATFORM_AIDP_OCID=<Workbench の OCID>
 PLATFORM_AIDP_REGION=<リージョン>
 PLATFORM_AIDP_URL=<Workbench の画面の URL>
+PLATFORM_AIDP_DB_USER=<AIDP 用の DB ユーザーの名前>
 ```
 
-AIDP 用の DB ユーザーは、`python3 platform/deploy/suite-db-user.py plan-aidp` の SQL を ADMIN で実行して作ります。
+AIDP 用の DB ユーザーは、`python3 platform/deploy/suite-db-user.py plan-aidp` の SQL を ADMIN で実行して作ります
+（`PLATFORM_AIDP_DB_USER` にはその名前を書く。パスワードは書かない）。
 
 ## 製品ごとの入力と instance 上の構成
 
