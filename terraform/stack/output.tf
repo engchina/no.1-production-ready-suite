@@ -58,6 +58,12 @@ output "aidp_url" {
   value       = var.deploy_aidp ? local.aidp_url : null
 }
 
+# Oracle Analytics Cloud（#5933）。配備しないときは null。
+output "oac_url" {
+  description = "Oracle Analytics Cloud URL. Sign in with a user of the identity domain (the administrator is oac_admin_user)."
+  value       = var.deploy_oac ? oci_analytics_analytics_instance.suite[0].service_url : null
+}
+
 output "ca_certificate_url" {
   description = "Private root CA certificate of the HTTPS server certificate. Import it as a trusted root CA on client PCs to remove the browser warning (also available from System settings > Appearance and certificate)."
   value       = var.https_enabled ? "${local.application_base_url}/platform/ca.crt" : null
@@ -121,4 +127,9 @@ output "aidp_external_catalog_info" {
     "Service: ${local.effective_oracle_dsn}",
     "User name: ${local.aidp_db_user}",
   ]) : null
+}
+
+output "oac_ocid" {
+  description = "Oracle Analytics Cloud instance OCID."
+  value       = var.deploy_oac ? oci_analytics_analytics_instance.suite[0].id : null
 }

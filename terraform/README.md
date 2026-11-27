@@ -13,6 +13,7 @@
 - 3製品で共通のサービス間 token の署名鍵（`random_password`。共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。#233）
 - 任意で bastion の Compute を 1 台（`bastion_enabled`、既定 off。VNC のデスクトップと Google Chrome 入り。製品は入れない。下の「bastion の Compute」。#2670）
 - 任意で Oracle AI Data Platform Workbench を 1 つ（`deploy_aidp`、既定 off。この stack の ADB と関連付け、External Catalog 用の DB ユーザーを作る。下の「[Oracle AI Data Platform](#oracle-ai-data-platform任意5917)」。#5917）
+- 任意で Oracle Analytics Cloud を 1 つ（`deploy_oac`、既定 off。ADB との接続は stack で作らない。下の「[Oracle Analytics Cloud](#oracle-analytics-cloud任意5933)」。#5933）
 
 ```text
               ┌──────────────────────────────┐
@@ -51,9 +52,10 @@
 4. bastion の作成、専用の構成、ネットワークと接続（コンパートメントは 1 の配備先を継承）
 5. アプリケーション管理者、NL2SQL Deep Data Security
 6. Oracle AI Data Platform（配備するか、IAM policy の確認、表示名、既定の workspace、AI 機能、AIDP 用の DB ユーザー）
+7. Oracle Analytics Cloud（配備するか、名前、Identity Domain、管理者のユーザー名、エディション、ライセンス、OCPU の数）
 
 非表示の内部設定と製品の選択は表示しません。主 Compute と bastion の image 候補は大阪・東京・Chicago の順で、既定はどちらも大阪です。
-配備後の output は、アプリケーションの入口（Oracle AI Data Platform の URL を含む）、接続、ADB 情報、Oracle AI Data Platform の接続の情報の順に表示します。
+配備後の output は、アプリケーションの入口（Oracle AI Data Platform・Oracle Analytics Cloud の URL を含む）、接続、ADB 情報、Oracle AI Data Platform の接続の情報、Oracle Analytics Cloud の OCID の順に表示します。
 
 ## 配備する製品
 
@@ -404,6 +406,38 @@ PLATFORM_AIDP_URL=<Workbench の画面の URL>
 ```
 
 AIDP 用の DB ユーザーは、`python3 platform/deploy/suite-db-user.py plan-aidp` の SQL を ADMIN で実行して作ります。
+
+## Oracle Analytics Cloud（任意。#5933）
+
+`deploy_oac` をオンにすると、Oracle Analytics Cloud（OAC）の instance を ADB のコンパートメントに 1 つ作ります（既定はオフ）。
+ADB のデータ（3 製品の表・Oracle AI Data Platform で加工した結果）の可視化（dataset・workbook）に使います。
+
+- **stack が作るもの**: OAC の instance（公開の endpoint。容量は OCPU の数で指定）。
+- **stack が作らないもの**: IAM policy、ADB との接続、Private Access Channel、dataset・workbook。接続は OAC の画面で作ります（下の「配備の後」）。
+- **認証は Identity Domain**。`oac_identity_domain_ocid`（Identity Domain の OCID）と `oac_admin_user`（その domain の利用者のユーザー名。OCID ではない）を入力します。IDCS の access token は使いません。
+- 3 製品と Compute は OAC を使いません（`platform/.env` と cloud-init には何も書きません）。
+- **最初の配備で決めてください。** 今は、stack を再 apply すると入力に関わらず Compute が作り直されます（#5945）。配備済みの環境では、OAC を OCI コンソールで作ってください（stack の入力と同じ項目を指定する）。
+- `oac_name`・`oac_identity_domain_ocid`・`oac_feature_set` は、後から変えると OAC が作り直されます（dataset・workbook が失われる）。
+
+### 配備の前に
+
+- stack を apply する利用者に、OAC を作る権限が要ります（stack は IAM policy を作りません）。
+
+  ```text
+  Allow group <group> to manage analytics-instances in compartment <ADB のコンパートメント>
+  ```
+
+- `oac_admin_user` は、`oac_identity_domain_ocid` の Identity Domain に居る利用者にします（別の domain の利用者は指定できません）。
+- 費用は OCPU の数とエディション・ライセンスで決まります。`oac_capacity_ocpus = 1` は試用だけに使えます（本番は 2 以上）。使わない間は OCI コンソールで一時停止できます。
+
+### 配備の後
+
+output の `oac_url` を開き、`oac_admin_user` でサインインします。ADB との接続は次の手順で作ります。
+
+1. ADB の Wallet を用意します（OCI コンソールの ADB の「データベース接続」からダウンロードする。mTLS のとき）。
+2. OAC の「作成 › 接続 › Oracle Autonomous AI Lakehouse」で、Wallet（クライアント資格証明）・ユーザー名・パスワード・サービス名を入力します。
+   - **3 製品の接続のユーザー（アプリ用の DB ユーザー）と ADMIN は入力しないでください。** Oracle AI Data Platform を配備しているときは、AIDP 用の DB ユーザー（既定 `ADB_AIDP_USER`。自分の schema だけを使える）を使うと、AIDP で加工した結果をそのまま可視化できます。ほかの schema の表を見せるときは、ADMIN が `GRANT SELECT` で個別に付けます。
+3. **ADB がプライベート・エンドポイントのとき**は、公開の endpoint の OAC からは届きません。OAC の instance に Private Access Channel を作り（Enterprise Edition だけ。ADB の VCN・subnet と、ADB のプライベート・エンドポイントの DNS zone を指定する）、接続を作ります。Private Access Channel は stack で作りません。
 
 ## 製品ごとの入力と instance 上の構成
 

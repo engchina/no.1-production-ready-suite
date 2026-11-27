@@ -43,6 +43,8 @@ REQUIRED_ENTRIES = {
     "bastion.tf",
     # 任意の Oracle AI Data Platform（#5917）。
     "aidp.tf",
+    # 任意の Oracle Analytics Cloud（#5933）。
+    "oac.tf",
     "cloud_init/bastion.sh",
 }
 FORBIDDEN_NAMES = {".terraform.lock.hcl", "wallet_full.zip", "wallet_small.zip"}
@@ -591,7 +593,7 @@ def _verify_schema(schema: str, variables: str) -> None:
         "New Autonomous AI Database", "ADB のネットワーク",
         "主 Compute の構成", "主 Compute のネットワークと SSH", "HTTPS", "Bastion", "bastion の構成",
         "bastion のネットワークと接続", "アプリケーション管理者",
-        "NL2SQL Deep Data Security", "AI Data Platform", "配備する製品", "Hidden",
+        "NL2SQL Deep Data Security", "AI Data Platform", "Oracle Analytics Cloud", "配備する製品", "Hidden",
     ]
     if list(groups) != expected_groups:
         raise AssertionError(f"Resource Manager groups must follow the deployment flow: {list(groups)}")
@@ -1543,6 +1545,7 @@ def verify(package_path: Path) -> None:
                 "output.tf",
                 "bastion.tf",
                 "aidp.tf",
+                "oac.tf",
             )
         }
         bootstrap = archive.read("cloud_init/bootstrap.template.yaml").decode()
@@ -1572,6 +1575,7 @@ def verify(package_path: Path) -> None:
         sources["output.tf"],
         bootstrap,
     )
+    _verify_oac(sources["schema.yaml"], sources["variables.tf"], sources["oac.tf"], sources["output.tf"], "\n".join([sources["locals.tf"], sources["compute.tf"], bootstrap]))
     stack_sources = "\n".join([*sources.values(), bootstrap, bastion_script])
     # ADB には Compute からしか接続できない（プライベート・エンドポイント・ACL）。アプリ用の DB ユーザーの作成などの
     # DB の操作は Compute の suite-init.sh が行い、Terraform の provisioner（local-exec など）では行わない（#1668）。
@@ -1611,6 +1615,65 @@ def verify(package_path: Path) -> None:
             "cloud_init/bastion.sh": bastion_script,
         },
     )
+
+
+# 任意の Oracle Analytics Cloud（#5933）の入力（フォームの group の並び）。
+OAC_GROUP = "Oracle Analytics Cloud"
+OAC_VARIABLES = [
+    "deploy_oac",
+    "oac_name",
+    "oac_identity_domain_ocid",
+    "oac_admin_user",
+    "oac_feature_set",
+    "oac_license_type",
+    "oac_capacity_ocpus",
+]
+
+
+def _verify_oac(schema: str, variables: str, oac: str, outputs: str, cloud_init_sources: str) -> None:
+    """任意の Oracle Analytics Cloud（#5933）: 入力・資源・output。cloud-init には何も書かない。"""
+    visible, group = _schema_groups(schema)[OAC_GROUP]
+    if visible != "true" or group != OAC_VARIABLES:
+        raise AssertionError(f"{OAC_GROUP} group: visible={visible}, variables={group}")
+    _require_all(_terraform_variable(variables, "deploy_oac"), ["default     = false"], context="deploy_oac")
+    _require_all(_schema_variable(schema, "deploy_oac"), ["visible: true", "default: false"], context="deploy_oac schema")
+    for name in OAC_VARIABLES[1:]:
+        _terraform_variable(variables, name)
+        _require_all(_schema_variable(schema, name), ["visible: deploy_oac"], context=f"{name} schema")
+    normalized = re.sub(r"[ \t]+", " ", oac)
+    _require_all(
+        normalized,
+        [
+            "count = var.deploy_oac ? 1 : 0",
+            "compartment_id = var.adb_compartment_ocid",
+            "domain_id = trimspace(var.oac_identity_domain_ocid)",
+            "admin_user = trimspace(var.oac_admin_user)",
+            'capacity_type = "OLPU_COUNT"',
+            'condition = trimspace(var.oac_identity_domain_ocid) != ""',
+            'condition = trimspace(var.oac_admin_user) != ""',
+        ],
+        context="oac.tf",
+    )
+    if len(re.findall(r'(?m)^resource "', oac)) != 1:
+        raise AssertionError("oac.tf must create only the Oracle Analytics Cloud instance")
+    # IDCS の access token は入力させない（期限が短い）。IAM policy も作らない。
+    for forbidden in ("idcs_access_token", "oci_identity_policy"):
+        if forbidden in re.sub(r"(?m)^\s*#.*$", "", oac) or f'variable "{forbidden}"' in variables:
+            raise AssertionError(f"the stack must not use {forbidden} for Oracle Analytics Cloud")
+    # cloud-init に入れない（deploy_oac の切り替えで user_data を変えない）。
+    if "deploy_oac" in cloud_init_sources or "oci_analytics_analytics_instance" in cloud_init_sources:
+        raise AssertionError("Oracle Analytics Cloud must not be written to cloud-init or platform/.env")
+    _require_all(
+        re.sub(r"[ \t]+", " ", outputs),
+        [
+            "value = var.deploy_oac ? oci_analytics_analytics_instance.suite[0].service_url : null",
+            "value = var.deploy_oac ? oci_analytics_analytics_instance.suite[0].id : null",
+        ],
+        context="output.tf",
+    )
+    for name in ("oac_url", "oac_ocid"):
+        if not re.search(rf"(?m)^  {name}:\n(?:    [^\n]*\n)*?    visible: deploy_oac", schema):
+            raise AssertionError(f"{name} output must be shown only when deploy_oac is true")
 
 
 # 任意の Oracle AI Data Platform（#5917）の入力（フォームの group の並び）と既定値（利用者の決定。2026-11-27）。
@@ -1790,8 +1853,10 @@ def _verify_aidp(schema: str, variables: str, aidp: str, locals_source: str, out
     output_names = re.findall(r"(?m)^  ([a-z0-9_]+):\n", _schema_section(schema, "outputs"))
     if output_names.index("aidp_url") > output_names.index("ca_certificate_url"):
         raise AssertionError("aidp_url must be listed with the application URLs")
-    if output_names[-len(AIDP_OUTPUTS[1:]) :] != AIDP_OUTPUTS[1:]:
-        raise AssertionError(f"AIDP connection outputs must be the last outputs in order: {output_names}")
+    # 末尾は AIDP の接続の情報、その後に Oracle Analytics Cloud の OCID（#5933）。
+    tail = [*AIDP_OUTPUTS[1:], "oac_ocid"]
+    if output_names[-len(tail) :] != tail:
+        raise AssertionError(f"AIDP connection outputs and oac_ocid must be the last outputs in order: {output_names}")
 
 
 def _verify_bastion(schema: str, variables: str, bastion: str, outputs: str, script: str) -> None:
