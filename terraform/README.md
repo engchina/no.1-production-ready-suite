@@ -385,6 +385,7 @@ output（Resource Manager の「Outputs」）:
 | Terraform での作成 | ADB 約 2 分 → AIDP 約 13 分 → Compute。`ACTIVE` になり、既定の workspace とプライベートの workspace（`Pvt_vector_db_<DB 名>`）ができる |
 | プライベート・エンドポイント・mTLS 必須の ADB の AI 機能の関連付け | できる。External Catalog `vector_db_<DB 名>`（ADMIN で接続）が `ACTIVE`、メタデータの更新も成功。ADB に `AIDP_<id>_KB_WRITE` ができる |
 | AIDP 用の DB ユーザー | `[suite-init] check: aidp db user OK`。role は `DWROLE`、system privilege は `CREATE SESSION` だけ（ANY 権限なし）。自分の schema に表を作って書ける。アプリ用の DB ユーザーの表は見えず（`ORA-00942`）、ほかの schema に表を作れない（`ORA-01031`） |
+| AIDP 用の DB ユーザーでの External Catalog の接続 | Workbench REST API の接続テスト（`actions/testConnection`。source は Oracle Autonomous AI Lakehouse、instance wallet・TNS の別名 `<db>_high`）が成功。誤ったパスワードでは `logon denied` で失敗する（プライベート・エンドポイントの ADB に実際に接続している）。catalog の作成そのものは未実施 |
 | Workbench REST API | `https://aidp.<region>.oci.oraclecloud.com/20260430/…` が API キーの署名で応答する（`/api/20260430/…` は 404） |
 | 画面の URL | host は「alias key ＋ リージョンの符号」（画面の実装で確認）。**ブラウザでのログインは未確認** |
 
