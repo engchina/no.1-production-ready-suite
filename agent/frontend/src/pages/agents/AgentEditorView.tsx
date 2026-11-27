@@ -970,33 +970,37 @@ export function AgentEditorView({
               </Card>
             </Section>
             {/* 資料・データで確かめていない回答（#5859）。資料・業務データのツールを宣言したスキルを選んだときだけ出す。 */}
-            {usesGroundingSkills ? (
-              <Section
-                title={t("agent.ungroundedAnswer.title")}
-                description={t("agent.ungroundedAnswer.description")}
-              >
-                <Card className="min-w-0">
-                  <CardContent className="pt-5">
-                    <FormGrid data-testid="agent-ungrounded-answer">
-                      <SelectField
-                        id={`${fieldId}-agent-ungrounded-answer-policy`}
-                        // 区画の見出しと同じ名前（見せるラベルは置かない）。
-                        label={t("agent.ungroundedAnswer.title")}
-                        labelHidden
-                        helper={ungroundedNotice ? t("agent.ungroundedAnswer.policyHint", { notice: ungroundedNotice }) : undefined}
-                        width="lg"
-                        value={ungroundedAnswerPolicy}
-                        options={[
-                          { value: "annotate", label: t("agent.ungroundedAnswer.policy.annotate") },
-                          { value: "refuse", label: t("agent.ungroundedAnswer.policy.refuse") },
-                        ]}
-                        onValueChange={(value) => setUngroundedAnswerPolicy(value === "refuse" ? "refuse" : "annotate")}
-                      />
-                    </FormGrid>
-                  </CardContent>
-                </Card>
-              </Section>
-            ) : null}
+            {/* 区画の出し入れは、fieldset の子を増減させずにこの枠の中で行う（Chromium で fieldset の子を足し引きすると、
+                同時に中身が変わった先頭の FormGrid の箱が消えることがある。#5910）。空のときは space-y の間隔を打ち消す。 */}
+            <div className={usesGroundingSkills ? "min-w-0" : "-mt-6"}>
+              {usesGroundingSkills ? (
+                <Section
+                  title={t("agent.ungroundedAnswer.title")}
+                  description={t("agent.ungroundedAnswer.description")}
+                >
+                  <Card className="min-w-0">
+                    <CardContent className="pt-5">
+                      <FormGrid data-testid="agent-ungrounded-answer">
+                        <SelectField
+                          id={`${fieldId}-agent-ungrounded-answer-policy`}
+                          // 区画の見出しと同じ名前（見せるラベルは置かない）。
+                          label={t("agent.ungroundedAnswer.title")}
+                          labelHidden
+                          helper={ungroundedNotice ? t("agent.ungroundedAnswer.policyHint", { notice: ungroundedNotice }) : undefined}
+                          width="lg"
+                          value={ungroundedAnswerPolicy}
+                          options={[
+                            { value: "annotate", label: t("agent.ungroundedAnswer.policy.annotate") },
+                            { value: "refuse", label: t("agent.ungroundedAnswer.policy.refuse") },
+                          ]}
+                          onValueChange={(value) => setUngroundedAnswerPolicy(value === "refuse" ? "refuse" : "annotate")}
+                        />
+                      </FormGrid>
+                    </CardContent>
+                  </Card>
+                </Section>
+              ) : null}
+            </div>
           </fieldset>
           {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
           <SaveErrorBanner
