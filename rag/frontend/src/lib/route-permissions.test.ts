@@ -45,9 +45,14 @@ describe("権限コードの対応表", () => {
   });
 
   // Issue 399 / 402 / 409（テスト名に「#」付きの番号を書くと、lint が生の hex 色として検出するため、ここに書く）。
-  it("利用の画面はチャット → RAG 検索 → 実行履歴、検索・回答プロファイルはナレッジベースの直下（文書の分類はナレッジベースの直上）、品質評価とフィードバックは「改善・運用」", () => {
+  it("利用の画面はチャット → RAG 検索 → Wiki 検索 → 実行履歴、検索・回答プロファイルはナレッジベースの直下（文書の分類はナレッジベースの直上）、品質評価とフィードバックは「改善・運用」", () => {
     const hrefs = (key: string) => NAV_SECTIONS.find((section) => section.titleKey === key)?.items.map((item) => item.href);
-    expect(hrefs("nav.section.use")).toEqual([APP_ROUTES.chat, APP_ROUTES.search, APP_ROUTES.history]);
+    expect(hrefs("nav.section.use")).toEqual([
+      APP_ROUTES.chat,
+      APP_ROUTES.search,
+      APP_ROUTES.wikiSearch,
+      APP_ROUTES.history,
+    ]);
     expect(hrefs("nav.section.ingestion")).toEqual([
       APP_ROUTES.upload,
       APP_ROUTES.fileList,
@@ -158,6 +163,7 @@ describe("visibleNavSections", () => {
 describe("ルートの権限", () => {
   it("ナビの URL は項目の権限、詳細画面は開く導線の権限のどれかで開ける", () => {
     expect(routeRequiredPermissions(APP_ROUTES.feedback)).toEqual([MENU_PERMISSIONS.feedback]);
+    expect(routeRequiredPermissions(APP_ROUTES.wikiSearch)).toEqual([MENU_PERMISSIONS.wikiSearch]);
     expect(routeRequiredPermissions(APP_ROUTES.securityPermissions)).toEqual([
       MENU_PERMISSIONS.securityPermissions,
     ]);

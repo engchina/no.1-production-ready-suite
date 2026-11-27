@@ -532,16 +532,19 @@ test("管理画面の読込表示は対象を短く示して一覧の幅に収�
   } finally { release(); }
 });
 
-test("Wiki 検索の権限を通常検索と別に付与する",{tag:"@responsive"},async({page},info)=>{
-  const api=await mockSecurityApi(page);
+test("Wiki 検索の権限を通常検索と別に付与する", { tag: "@responsive" }, async ({ page }, info) => {
+  const api = await mockSecurityApi(page);
   await page.goto("/settings/security/permissions?role=role-hr");
-  const editor=page.getByTestId("security-permissions-editor");
-  const wiki=editor.getByRole("checkbox",{name:/^Wiki 検索/});
+  const editor = page.getByTestId("security-permissions-editor");
+  const wiki = editor.getByRole("checkbox", { name: /^Wiki 検索/ });
   await expect(wiki).not.toBeChecked();
-  await expect(editor.getByRole("checkbox",{name:/^RAG 検索/})).toBeChecked();
+  await expect(editor.getByRole("checkbox", { name: /^RAG 検索/ })).toBeChecked();
   await wiki.check();
-  if(process.env.WIKI_GRAPH_SHOTS)await page.screenshot({path:process.env.WIKI_GRAPH_SHOTS+"/"+info.project.name+"-permissions.png"});
+  if (process.env.WIKI_GRAPH_SHOTS)
+    await page.screenshot({
+      path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-permissions.png",
+    });
   await page.getByTestId("security-permissions-submit").click();
-  await expect.poll(()=>api.saved.length).toBe(1);
-  expect(api.saved[0].permissions).toEqual(expect.arrayContaining(["menu.wiki_search","menu.search"]));
+  await expect.poll(() => api.saved.length).toBe(1);
+  expect(api.saved[0].permissions).toEqual(expect.arrayContaining(["menu.wiki_search", "menu.search"]));
 });

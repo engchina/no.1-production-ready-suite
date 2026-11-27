@@ -207,49 +207,95 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-search-answer-"+testInfo.project.name+".png"});
 });
 
-test("55 ファイル・4400 件の根拠で選択した資料を 2 行以内に保つ", {tag:"@responsive"}, async ({page},info)=>{
-  const names=Array.from({length:60},(_,i)=>"合成資料 "+String(i+1).padStart(2,"0")+"."+["md","txt","docx","pptx","json"][i%5]);
-  const hits=Array.from({length:4400},(_,i)=>{
-    const doc=Math.floor(i/80),n=i%80+1;
-    return {...originalHits[0],document_id:"f-"+doc,chunk_id:"c-"+i,file_name:names[doc],text:"合成の根拠 "+(i+1),
-      metadata:{...originalHits[0].metadata,page_start:n,page_end:n,evidence_model_used:n===1}};
-  });
-  const fresh=names.slice(55).map((name,i)=>({...hits[0],document_id:"f-"+(55+i),chunk_id:"new-"+i,file_name:name}));
-  const base=reviewSnapshots("trace-model","question").unresolved;
-  const source={...base.versions[0].sources.question,citations:hits};
-  let state={...base,versions:[{...base.versions[0],sources:{question:source}}]};
-  const commands:string[]=[];
-  await mockApi(page,0,true,hits);
-  await page.route("**/api/feedback/current**",r=>r.fulfill({json:envelope([])}));
-  await page.route("**/api/feedback",r=>r.fulfill({json:envelope(r.request().postDataJSON())}));
-  await page.route("**/api/search/answers/trace-model/review",r=>{
-    if(r.request().method()==="POST"){
-      const command=r.request().postDataJSON();commands.push(command.action);
-      expect(command.selected).toHaveLength(39);
-      state={...state,revision:1,kept:{question:command.selected},pending:{question:{...source,citations:[...hits.filter(h=>command.selected.includes(h.document_id)),...fresh]}}};
-    }
-    return r.fulfill({json:envelope(state)});
-  });
-  await ask(page); await page.getByRole("button",{name:"未解決",exact:true}).click();
-  const panel=page.getByRole("dialog"), selected=panel.getByRole("list",{name:"選択した資料"});
-  await panel.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
-  for(const name of names.slice(0,40)) await panel.getByRole("checkbox",{name,exact:true}).check();
-  await expect(selected.getByRole("listitem")).toHaveCount(40);
-  const size=await selected.evaluate(el=>({height:el.clientHeight,total:el.scrollHeight,row:el.firstElementChild!.getBoundingClientRect().height,gap:parseFloat(getComputedStyle(el).rowGap)}));
-  expect(size.height).toBeLessThanOrEqual(size.row*2+size.gap+1);
-  expect(size.total).toBeGreaterThan(size.height);
-  await panel.getByPlaceholder("ファイル名の一部を入力").fill("55");
-  await expect(selected.getByRole("listitem")).toHaveCount(40);
-  await selected.getByRole("button").first().click();
-  expect(commands).toHaveLength(0);
-  await expect(selected.getByRole("listitem")).toHaveCount(39);
-  await panel.getByPlaceholder("ファイル名の一部を入力").fill("");
-  await expect(panel.getByRole("checkbox",{name:names[0]})).not.toBeChecked();
-  if(process.env.RAG_E2E_SCREENSHOT_DIR)await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/"+info.project.name+"-review.png"});
-  await panel.getByRole("button",{name:"選んだ資料を残して、ほかの候補を探す"}).click();
-  await expect(panel.getByRole("checkbox",{name:names[55]})).not.toBeChecked();
-  await panel.getByRole("checkbox",{name:names[55]}).check();
-  await expect(selected.getByRole("listitem")).toHaveCount(40);
-  await expectNoPageOverflow(page);
-  if(process.env.RAG_E2E_SCREENSHOT_DIR)await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/"+info.project.name+"-candidates.png"});
-});
+test(
+  "55 ファイル・4400 件の根拠で選択した資料を 2 行以内に保つ",
+  { tag: "@responsive" },
+  async ({ page }, info) => {
+    const names = Array.from(
+      { length: 60 },
+      (_, i) =>
+        "合成資料 " + String(i + 1).padStart(2, "0") + "." + ["md", "txt", "docx", "pptx", "json"][i % 5],
+    );
+    const hits = Array.from({ length: 4400 }, (_, i) => {
+      const doc = Math.floor(i / 80),
+        n = (i % 80) + 1;
+      return {
+        ...originalHits[0],
+        document_id: "f-" + doc,
+        chunk_id: "c-" + i,
+        file_name: names[doc],
+        text: "合成の根拠 " + (i + 1),
+        metadata: { ...originalHits[0].metadata, page_start: n, page_end: n, evidence_model_used: n === 1 },
+      };
+    });
+    const fresh = names
+      .slice(55)
+      .map((name, i) => ({
+        ...hits[0],
+        document_id: "f-" + (55 + i),
+        chunk_id: "new-" + i,
+        file_name: name,
+      }));
+    const base = reviewSnapshots("trace-model", "question").unresolved;
+    const source = { ...base.versions[0].sources.question, citations: hits };
+    let state = { ...base, versions: [{ ...base.versions[0], sources: { question: source } }] };
+    const commands: string[] = [];
+    await mockApi(page, 0, true, hits);
+    await page.route("**/api/feedback/current**", (r) => r.fulfill({ json: envelope([]) }));
+    await page.route("**/api/feedback", (r) => r.fulfill({ json: envelope(r.request().postDataJSON()) }));
+    await page.route("**/api/search/answers/trace-model/review", (r) => {
+      if (r.request().method() === "POST") {
+        const command = r.request().postDataJSON();
+        commands.push(command.action);
+        expect(command.selected).toHaveLength(39);
+        state = {
+          ...state,
+          revision: 1,
+          kept: { question: command.selected },
+          pending: {
+            question: {
+              ...source,
+              citations: [...hits.filter((h) => command.selected.includes(h.document_id)), ...fresh],
+            },
+          },
+        };
+      }
+      return r.fulfill({ json: envelope(state) });
+    });
+    await ask(page);
+    await page.getByRole("button", { name: "未解決", exact: true }).click();
+    const panel = page.getByRole("dialog"),
+      selected = panel.getByRole("list", { name: "選択した資料" });
+    await panel.getByRole("radio", { name: "選んだ資料を残し、ほかも探す" }).check();
+    for (const name of names.slice(0, 40)) await panel.getByRole("checkbox", { name, exact: true }).check();
+    await expect(selected.getByRole("listitem")).toHaveCount(40);
+    const size = await selected.evaluate((el) => ({
+      height: el.clientHeight,
+      total: el.scrollHeight,
+      row: el.firstElementChild!.getBoundingClientRect().height,
+      gap: parseFloat(getComputedStyle(el).rowGap),
+    }));
+    expect(size.height).toBeLessThanOrEqual(size.row * 2 + size.gap + 1);
+    expect(size.total).toBeGreaterThan(size.height);
+    await panel.getByPlaceholder("ファイル名の一部を入力").fill("55");
+    await expect(selected.getByRole("listitem")).toHaveCount(40);
+    await selected.getByRole("button").first().click();
+    expect(commands).toHaveLength(0);
+    await expect(selected.getByRole("listitem")).toHaveCount(39);
+    await panel.getByPlaceholder("ファイル名の一部を入力").fill("");
+    await expect(panel.getByRole("checkbox", { name: names[0] })).not.toBeChecked();
+    if (process.env.RAG_E2E_SCREENSHOT_DIR)
+      await page.screenshot({
+        path: process.env.RAG_E2E_SCREENSHOT_DIR + "/" + info.project.name + "-review.png",
+      });
+    await panel.getByRole("button", { name: "選んだ資料を残して、ほかの候補を探す" }).click();
+    await expect(panel.getByRole("checkbox", { name: names[55] })).not.toBeChecked();
+    await panel.getByRole("checkbox", { name: names[55] }).check();
+    await expect(selected.getByRole("listitem")).toHaveCount(40);
+    await expectNoPageOverflow(page);
+    if (process.env.RAG_E2E_SCREENSHOT_DIR)
+      await page.screenshot({
+        path: process.env.RAG_E2E_SCREENSHOT_DIR + "/" + info.project.name + "-candidates.png",
+      });
+  },
+);
