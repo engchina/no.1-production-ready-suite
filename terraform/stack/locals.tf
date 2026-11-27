@@ -160,6 +160,8 @@ EOT
   # （データは /u01/data/production-ready-<製品>、model-settings.json は platform/.env と同じ場所で 3 製品が共有）。
   # Cookie は HTTPS が on なら Secure にする（3 製品で同じ。#1316）。
   # 時間帯（PLATFORM_TIMEZONE。#3255）は suite-init.sh が Compute の OS の時間帯にも使う。
+  # Oracle AI Data Platform（PLATFORM_AIDP_*。#5917）は deploy_aidp=true のときだけ書く（false の配備の cloud-init を
+  # 変えない。変えると既存の stack の Compute が作り直される）。
   platform_env = <<-EOT
 PLATFORM_ENVIRONMENT=${var.platform_environment}
 PLATFORM_AUTH_MODE=authenticated
@@ -192,6 +194,12 @@ PLATFORM_SERVICE_TOKEN_SECRET=${random_password.service_token_secret.result}
 PLATFORM_AUTH_COOKIE_SECURE=${var.https_enabled}
 PLATFORM_AUTH_SESSION_COOKIE_NAME=pr_session
 PLATFORM_AUTH_CSRF_COOKIE_NAME=pr_csrf
+%{if var.deploy_aidp~}
+
+PLATFORM_AIDP_OCID=${local.aidp_ocid}
+PLATFORM_AIDP_REGION=${var.region}
+PLATFORM_AIDP_URL=${local.aidp_url}
+%{endif~}
 EOT
 
   # ---------------------------------------------------------------- アプリ用の DB ユーザー（#1668）
@@ -206,6 +214,19 @@ SUITE_DB_ADMIN_PASSWORD='${local.effective_adb_admin_password}'
 SUITE_DB_APP_USER='${local.adb_app_user}'
 EOT
 
+  # ---------------------------------------------------------------- Oracle AI Data Platform 用の DB ユーザー（#5917）
+
+  # Compute の suite-init.sh が、ADMIN で接続して AIDP 用の DB ユーザー（External Catalog の接続のユーザー）を作るための
+  # 入力（/u01/aipoc/props/adb_aidp_user.env。root の 0600）。3 製品はこのユーザーを使わないため、platform/.env・
+  # 各製品の backend/.env には書かない。再配備で権限を付け直すため、props に残す。
+  adb_aidp_user_env = <<-EOT
+SUITE_DB_ADMIN_USER=ADMIN
+SUITE_DB_ADMIN_PASSWORD='${local.effective_adb_admin_password}'
+SUITE_DB_AIDP_USER='${local.aidp_db_user}'
+SUITE_DB_AIDP_PASSWORD='${var.aidp_db_user_password}'
+SUITE_DB_AIDP_WRITE=${var.aidp_db_user_write_enabled}
+EOT
+
   # ---------------------------------------------------------------- cloud-init
 
   # 製品ごとの backend/.env（配備する製品だけ。/u01/aipoc/props/<製品>.backend.env）。
@@ -217,6 +238,7 @@ EOT
 
   cloud_init_user_data = base64gzip(templatefile("${path.module}/cloud_init/bootstrap.template.yaml", {
     adb_admin_env       = var.adb_app_user_enabled ? base64gzip(local.adb_admin_env) : ""
+    adb_aidp_user_env   = var.deploy_aidp ? base64gzip(local.adb_aidp_user_env) : ""
     adb_name            = local.effective_adb_name
     adb_ocid            = local.effective_adb_ocid
     application_git_ref = var.application_git_ref

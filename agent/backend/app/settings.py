@@ -188,6 +188,10 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     oracle_wallet_password: str | None = None
     oracle_adb_ocid: str | None = None
     oracle_adb_region: str | None = None
+    # Oracle AI Data Platform（任意の配備。PLATFORM_AIDP_*。未設定なら連携の機能を出さない。#5917）
+    aidp_ocid: str = ""
+    aidp_region: str = ""
+    aidp_url: str = ""
     oracle_tcp_connect_timeout_seconds: float = 10.0
     oracle_db_test_timeout_seconds: float = 15.0
     # PLATFORM_ORACLE_* の接続 pool の大きさ（Agent 固有。`app.oracle_connection`。#793）。
