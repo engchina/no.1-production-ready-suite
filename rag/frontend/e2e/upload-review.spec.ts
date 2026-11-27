@@ -382,6 +382,32 @@ test("KB 一覧を取得できないときは、その場で再読み込みで�
   await expect(searchableMultiSelectTrigger(page, "所属させるナレッジベース")).toBeVisible();
 });
 
+test("受け付ける形式の設定を読み込めないときは、その場で失敗を示して再試行できる（#5925）", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockAuthUser(page, { permissions: ["menu.upload"], allowed_knowledge_base_ids: ["kb-1"] });
+  await mockUploadPage(page);
+  let failing = true;
+  await page.route("**/api/documents/upload-policy", (route) =>
+    failing
+      ? route.fulfill({
+          status: 503,
+          json: { data: null, error_messages: ["一時的なエラー"], warning_messages: [] },
+        })
+      : route.fulfill({ json: apiEnvelope({ allowed_content_types: ["application/pdf"] }) }),
+  );
+
+  await page.goto("/upload");
+  // TanStack Query の既定の再試行を終えてから失敗を表示する。既定の拡張子の案内だけにしない。
+  const failure = page.getByTestId("upload-policy-load-failed");
+  await expect(failure.getByRole("alert")).toHaveText("受け付ける形式の設定を読み込めませんでした。", { timeout: 15_000 });
+  await expectNoPageOverflow(page);
+  if (process.env.RAG_E2E_SCREENSHOT_DIR)
+    await page.screenshot({ path: process.env.RAG_E2E_SCREENSHOT_DIR + "/upload-policy-failed-" + testInfo.project.name + ".png" });
+  failing = false;
+  await failure.getByRole("button", { name: "再試行" }).click();
+  await expect(failure).toHaveCount(0);
+  await expect(page.getByText("この環境で許可されている MIME タイプ: application/pdf")).toBeVisible();
+});
+
 test("アップロードだけを許可された利用者には、設定とナレッジベース管理への導線を出さない", async ({ page }) => {
   await mockAuthUser(page, { permissions: ["menu.upload"], allowed_knowledge_base_ids: null });
   await mockUploadPage(page, { knowledgeBaseCount: 0 });
@@ -766,7 +792,7 @@ test("MIME 設定で制限したファイルは送信前に理由を示す @resp
     { name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("sample") },
   ]);
   const selection = page.getByTestId("upload-selection");
-  await expect(selection.getByRole("listitem").filter({ hasText: "sample.json" })).toContainText("この環境のアップロード設定で許可されていません");
+  await expect(selection.getByRole("listitem").filter({ hasText: "sample.json" })).toContainText("この環境のアップロード設定で受け付けていません。管理者に確認してください。");
   await expect(selection.getByRole("button", { name: /1 件/ })).toBeEnabled();
   await expectNoPageOverflow(page);
 });
