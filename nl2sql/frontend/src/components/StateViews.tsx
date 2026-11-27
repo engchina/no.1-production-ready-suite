@@ -1,9 +1,7 @@
 import type { ReactNode } from "react";
-import { AlertCircle, RefreshCw } from "lucide-react";
 import {
-  Button,
+  ErrorState as UiErrorState,
   EmptyState,
-  MessageText,
   TimedLoadingState,
   type ProcessingActivityIcon,
   type ProcessingPlacement,
@@ -55,21 +53,5 @@ export function ErrorState({
   onRetry?: () => void;
   retryLabel?: string;
 }) {
-  return (
-    <div
-      data-surface-tint="danger"
-      role="alert"
-      className="flex flex-col items-center gap-3 rounded-lg border border-danger-border bg-danger-subtle p-8 text-center"
-    >
-      <AlertCircle size={24} className="text-danger-fg" aria-hidden />
-      <p className="text-sm leading-relaxed text-fg">
-        <MessageText text={message} />
-      </p>
-      {onRetry ? (
-        <Button type="button" variant="secondary" size="sm" onClick={onRetry} icon={RefreshCw}>
-          {retryLabel}
-        </Button>
-      ) : null}
-    </div>
-  );
+  return <UiErrorState message={message} onRetry={onRetry} retryLabel={retryLabel} />;
 }

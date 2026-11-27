@@ -4276,7 +4276,7 @@ test("DeepSec 実行計画の取得失敗は標準 ErrorState で余白と再試
     };
   });
   expect(errorStateLayout.parentLabelledBy).toBe("security-deepsec-foundation-plan-title");
-  expect(errorStateLayout.paddingTop).toBeGreaterThanOrEqual(24);
+  expect(errorStateLayout.paddingTop).toBeCloseTo(await remToPx(page, 0.5), 0);
   await expectNoPageHorizontalScroll(page);
   await page.screenshot({
     path: testInfo.outputPath(`deepsec-plan-error-${testInfo.project.name}.png`),

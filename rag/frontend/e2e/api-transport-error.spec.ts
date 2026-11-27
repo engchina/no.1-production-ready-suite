@@ -16,6 +16,8 @@ test.beforeEach(async ({ page }) => {
 /** 要約・次の操作は日本語で、ブラウザの英語の文は開いた「詳細」の中にだけある。 */
 async function expectEnglishOnlyInDetails(failure: Locator, request: string) {
   const details = failure.locator("details");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator("summary").click();
   await expect(details).toHaveAttribute("open", "");
   await expect(details).toContainText(request);
   const outside = await failure.evaluate((element) => {

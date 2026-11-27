@@ -20,7 +20,7 @@ const sources = tsxFiles(sourceRoot).map((url) => ({
 
 test("business pages do not create raw alert live regions", () => {
   const violations = sources.flatMap(({ path, source }) =>
-    path !== "src/components/StateViews.tsx" && /role\s*=\s*(?:"alert"|\{[^}]*["']alert["'][^}]*\})/gu.test(source) ? [path] : []
+    /role\s*=\s*(?:"alert"|\{[^}]*["']alert["'][^}]*\})/gu.test(source) ? [path] : []
   );
   assert.deepEqual(
     violations,
@@ -37,7 +37,6 @@ test("handwritten danger surfaces stay limited to structured state and field con
     // 危険な操作の区画（WorkSection の tone="danger"）は packages/ui の Disclosure の tone に移した（#397）。
     ["src/features/nl2sql/components/WorkflowProgressStrip.tsx", 1],
     ["src/features/nl2sql/pages/DataManagementPage.tsx", 1],
-    ["src/components/StateViews.tsx", 1],
   ]);
   const dangerSurface = /(?:border-danger[^"'\n]*bg-danger|bg-danger[^"'\n]*border-danger)/gu;
   const actual = new Map<string, number>();

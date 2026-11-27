@@ -20,6 +20,8 @@ async function expectNetworkFailure(failure: Locator, request: string) {
   await expect(failure).toContainText("サーバーに接続できませんでした。");
   await expect(failure).toContainText("ネットワークの接続とサーバーの起動状態を確かめてから");
   const details = failure.locator("details");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator("summary").click();
   await expect(details).toHaveAttribute("open", "");
   await expect(details).toContainText(request);
   await expect(details).toContainText("TypeError");
@@ -43,6 +45,10 @@ for (const viewport of VIEWPORTS) {
 
     const failure = page.getByRole("alert").filter({ hasText: "サーバーに接続できませんでした。" }).first();
     await expect(failure).toBeVisible(AFTER_RETRIES);
+    await expect(failure.locator("details")).not.toHaveAttribute("open", "");
+    await failure.screenshot({ path: testInfo.outputPath(`agents-collapsed-${viewport.name}.png`) });
+    const height = (await failure.boundingBox())?.height;
+    testInfo.annotations.push({ type: "collapsed-height", description: String(height) });
     await expectNetworkFailure(failure, "GET /api/agents");
     await expect(failure.getByRole("button", { name: "再試行" })).toBeVisible();
     await expectNoPageHorizontalOverflow(page);

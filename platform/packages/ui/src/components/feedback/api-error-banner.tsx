@@ -26,11 +26,11 @@ export interface ApiErrorDetailListProps {
 export function ApiErrorDetailItems({ details }: { details: readonly ApiErrorDetail[] }) {
   if (details.length === 0) return null;
   return (
-    <dl className="grid min-w-0 gap-x-4 gap-y-1 text-xs text-fg-muted sm:grid-cols-2">
+    <dl className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-xs text-fg-muted">
       {details.map((item) => (
-        <div key={item.label} className="min-w-0">
+        <div key={item.label} className="flex min-w-0 max-w-full flex-wrap items-baseline gap-x-1.5">
           <dt className="break-words font-medium text-fg">{item.label}</dt>
-          <dd className="whitespace-pre-line break-all">{item.value}</dd>
+          <dd className="min-w-0 whitespace-pre-line [overflow-wrap:anywhere]">{item.value}</dd>
         </div>
       ))}
     </dl>
@@ -48,7 +48,14 @@ export function ApiErrorDetailList({
 }: ApiErrorDetailListProps) {
   if (details.length === 0) return null;
   return (
-    <Disclosure variant="plain" size="sm" summary={label} defaultOpen={defaultOpen}>
+    <Disclosure
+      className="max-w-full open:basis-full"
+      summaryClassName="whitespace-nowrap"
+      variant="plain"
+      size="sm"
+      summary={label}
+      defaultOpen={defaultOpen}
+    >
       <ApiErrorDetailItems details={details} />
     </Disclosure>
   );
@@ -109,6 +116,7 @@ export interface ApiErrorStateProps {
   fallback: string;
   onRetry?: () => void;
   retryLabel?: string;
+  detailsDefaultOpen?: boolean;
   labels?: ApiErrorDetailLabels;
 }
 
@@ -121,6 +129,7 @@ export function ApiErrorState({
   fallback,
   onRetry,
   retryLabel,
+  detailsDefaultOpen = false,
   labels = DEFAULT_API_ERROR_DETAIL_LABELS,
 }: ApiErrorStateProps) {
   const presentation = presentApiError(error, fallback, labels);
@@ -129,7 +138,7 @@ export function ApiErrorState({
       message={[presentation.summary, presentation.nextAction].filter(Boolean).join("")}
       onRetry={onRetry}
       retryLabel={retryLabel}
-      details={<ApiErrorDetailList details={presentation.details} label={labels.details} />}
+      details={<ApiErrorDetailList details={presentation.details} label={labels.details} defaultOpen={detailsDefaultOpen} />}
     />
   );
 }

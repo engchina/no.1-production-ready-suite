@@ -66,15 +66,16 @@ export function ErrorState({
     <div
       role="alert"
       data-surface-tint="danger"
-      className="flex flex-col items-center gap-3 rounded-lg border border-danger-border bg-danger-subtle p-8 text-center"
+      className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-danger-border bg-danger-subtle px-3 py-2 text-left"
     >
-      <AlertCircle size={24} className="text-danger-fg" aria-hidden />
-      <p className="text-sm leading-relaxed text-fg">
-        <MessageText text={message} />
-      </p>
-      {details ? <div className="w-full min-w-0 text-left">{details}</div> : null}
+      <div className="flex min-w-0 items-start gap-2">
+        <AlertCircle size={16} className="mt-0.5 shrink-0 text-danger-fg" aria-hidden />
+        <p className="min-w-0 text-sm leading-relaxed text-fg [overflow-wrap:anywhere]">
+          <MessageText text={message} />
+        </p>
+      </div>
       {action || onRetry ? (
-        <div className="flex flex-wrap items-center justify-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {action}
           {onRetry ? (
             <Button ref={retryRef} type="button" variant="secondary" size="sm" icon={RefreshCw} loading={retrying} onClick={onRetry}>
@@ -83,6 +84,7 @@ export function ErrorState({
           ) : null}
         </div>
       ) : null}
+      {details}
     </div>
   );
 }

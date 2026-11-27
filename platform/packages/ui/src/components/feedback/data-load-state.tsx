@@ -115,7 +115,7 @@ export function DataLoadFailureState({
         focusRetry
         retrying={retrying}
         action={action}
-        details={<ApiErrorDetailList details={presentation.details} label={detailLabels.details} />}
+        details={<ApiErrorDetailList details={presentation.details} label={detailLabels.details} defaultOpen={false} />}
       />
     </div>
   );
