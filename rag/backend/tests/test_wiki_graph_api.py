@@ -121,18 +121,20 @@ class FakeOracle:
                 for source, name, _, relation in REFERENCES
                 if source in by_id
             ]
-        if "FROM visible s JOIN rag_wiki_graph_deps e" in statement:
-            sources = {v for k, v in binds.items() if k.startswith("graph_conn_s")}
-            targets = {v for k, v in binds.items() if k.startswith("graph_conn_t")}
+        if "SELECT page_id,unit_id,document_id FROM visible WHERE" in statement:
+            wanted = {v for k, v in binds.items() if k.startswith("graph_conn_u")}
             return [
-                {"source_id": src, "target_id": dep.unit_id, "relation": dep.relation}
+                {"page_id": uid, "unit_id": uid, "document_id": by_id[uid].unit.document_id}
+                for uid in by_id
+                if uid in wanted
+            ]
+        if any(key.startswith("graph_conn_p") for key in binds):
+            pages = {v for k, v in binds.items() if k.startswith("graph_conn_p")}
+            return [
+                {"page_id": src, "target_id": dep.unit_id, "relation": dep.relation}
                 for src, page in by_id.items()
                 for dep in page.navigation.dependencies
-                if src in sources
-                and dep.unit_id in targets
-                and dep.unit_id in by_id
-                and src != dep.unit_id
-                and page.unit.document_id == by_id[dep.unit_id].unit.document_id
+                if src in pages and dep.unit_id in by_id
             ]
         if "SELECT s.unit_id AS source_id,s.document_id,r.target_name" in statement:
             sources = {v for k, v in binds.items() if k.startswith("graph_conn_s")}

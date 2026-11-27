@@ -522,20 +522,32 @@ class WikiGraphStore:
         if len(ids) < 2:
             return []
         cte, binds = visible_pages_cte(kb_id)
-        source_clause, source_binds = _oracle_in_predicate("s.unit_id", "graph_conn_s", ids)
-        target_clause, target_binds = _oracle_in_predicate("t.unit_id", "graph_conn_t", ids)
+        # 範囲の中の選んだ単位（関係の照会と同じ形で、案内と文書を引く）。
+        unit_clause, unit_binds = _oracle_in_predicate("unit_id", "graph_conn_u", ids)
+        selected = await self.oracle._fetch_all(
+            f"WITH {cte} SELECT page_id,unit_id,document_id FROM visible WHERE {unit_clause}",
+            {**binds, **unit_binds},
+        )
+        if len(selected) < 2:
+            return []
+        by_page = {str(row["page_id"]): row for row in selected}
+        documents = {str(row["unit_id"]): str(row["document_id"]) for row in selected}
+        page_clause, page_binds = _oracle_in_predicate("e.page_id", "graph_conn_p", list(by_page))
         deps = await self.oracle._fetch_all(
             f"""WITH {cte}
-            SELECT s.unit_id AS source_id,t.unit_id AS target_id,e.relation
-            FROM visible s JOIN rag_wiki_graph_deps e ON e.page_id=s.page_id
-            JOIN visible t ON t.unit_id=e.target_unit_id AND t.document_id=s.document_id
-            WHERE {source_clause} AND {target_clause} AND s.unit_id<>t.unit_id""",
-            {**binds, **source_binds, **target_binds},
+            SELECT e.page_id,other.unit_id AS target_id,e.relation
+            FROM rag_wiki_graph_deps e JOIN visible other ON other.unit_id=e.target_unit_id
+            WHERE {page_clause}""",
+            {**binds, **page_binds},
         )
-        found = {
-            (str(row["source_id"]), str(row["target_id"]), str(row["relation"])): "same_document"
-            for row in deps
-        }
+        found: dict[tuple[str, str, str], str] = {}
+        for row in deps:
+            source = str(by_page[str(row["page_id"])]["unit_id"])
+            target = str(row["target_id"])
+            # 案内の依存は同じ文書の中だけ（別の文書は下の参照で解く）。
+            if target != source and documents.get(target) == documents[source]:
+                found[(source, target, str(row["relation"]))] = "same_document"
+        source_clause, source_binds = _oracle_in_predicate("s.unit_id", "graph_conn_s", ids)
         references = await self.oracle._fetch_all(
             f"""WITH {cte}
             SELECT s.unit_id AS source_id,s.document_id,r.target_name,r.target_section,r.relation
@@ -561,10 +573,10 @@ class WikiGraphStore:
             units = await self._unit_refs([page for _, page in pages])
             wanted = set(ids)
             for row, page in pages:
-                target = units.get(page, {}).get("id")
-                if target in wanted and target != row["source_id"]:
+                linked = units.get(page, {}).get("id")
+                if linked in wanted and linked != row["source_id"]:
                     found.setdefault(
-                        (str(row["source_id"]), str(target), str(row["relation"])),
+                        (str(row["source_id"]), str(linked), str(row["relation"])),
                         "cross_document",
                     )
         return [
