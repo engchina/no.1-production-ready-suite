@@ -403,11 +403,13 @@ test(
 test("検索の待ち時間を示し、チャットから現場に戻り、新しい検索で条件を引き継ぐ", { tag: "@responsive" }, async ({ page }, info) => {
   const phone = info.project.name === "mobile";
   await data(page);
-  let release: (() => void) | undefined;
+  // 開発時は検索の購読を張り直すため、再送したリクエストも同じ応答を待たせる。
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
   await page.route(/\/wiki-search\/profiles\/[^/]+\/search\?/, async r => {
-    await new Promise<void>(done => { release = done; });
+    await pending;
     return r.fallback();
-  }, { times: 1 });
+  });
   await page.goto("/wiki-search");
   await selectSearchAnswerProfile(page, profiles[0].name);
   await page.getByText("詳細条件", { exact: true }).click();
@@ -421,7 +423,7 @@ test("検索の待ち時間を示し、チャットから現場に戻り、新�
   await expect(progress.getByRole("timer")).toHaveText(/00:0[1-9]/);
   await expect(progress.getByRole("timer")).toBeInViewport({ ratio: 1 });
   await shot(page, info, "wiki-loading");
-  release!();
+  release();
   await result(page, 81).click();
   await detail(page, phone).getByRole("button", { name: "質問に追加" }).click();
   if (phone) await detail(page, phone).getByRole("button", { name: "選択を解除" }).click();

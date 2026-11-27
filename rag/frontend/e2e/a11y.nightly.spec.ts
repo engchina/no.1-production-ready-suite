@@ -365,6 +365,7 @@ interface Screen {
 const SCREENS: Screen[] = [
   { path: "/chat?search_answer_profile_id=bv-1" },
   { path: "/search" },
+  { path: "/wiki-search" },
   { path: "/history" },
   { path: "/upload" },
   { path: "/file-list" },
