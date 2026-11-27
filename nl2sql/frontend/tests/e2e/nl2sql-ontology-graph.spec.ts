@@ -345,6 +345,16 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(size.scrollWidth).toBeLessThanOrEqual(size.width + 1);
 }
 
+/**
+ * 表のカードで描く表示（React Flow）を開く。概念図の「全体」は Cytoscape の探索の画布になったので（#5922）、
+ * カード・線・ドラッグを確かめる検査は、質問を入れていない接地の表示（グラフの全体をカードで描く）で見る。
+ */
+async function openCardGraph(page: Page, playground: Locator) {
+  await openGraphIfCollapsed(page, playground);
+  const grounding = playground.getByTestId("ontology-graph-mode-grounding");
+  if ((await grounding.getAttribute("aria-pressed")) !== "true") await grounding.click();
+}
+
 async function openGraphIfCollapsed(page: Page, playground: Locator) {
   await expect(playground.getByTestId("ontology-playground-question")).toBeVisible();
   const viewportWidth = page.viewportSize()?.width ?? 0;
@@ -601,7 +611,7 @@ for (const theme of ["light", "dark"]) {
       expect(Math.abs(headingBox!.x - bodyBox!.x)).toBeLessThanOrEqual(1);
       await page.getByTestId("ontology-view-fetch").click();
       const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
-      await openGraphIfCollapsed(page, playground);
+      await openCardGraph(page, playground);
       await expectGraphSearchFieldLayout(page, playground);
       const toolbar = playground.getByTestId("ontology-graph-toolbar");
       const filter = toolbar.getByRole("combobox", { name: "概念の種類", exact: true });
@@ -666,7 +676,7 @@ test("グラフ操作部は旧版の外観でモード・凡例・ズーム・�
   await page.goto("/ontology-build?profile=default");
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
   await expectLegacyOntologyControls(page, playground);
   await expectGraphSearchFieldLayout(page, playground);
 
@@ -737,10 +747,10 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expect(playground.getByTestId("ontology-playground-clear")).toBeDisabled();
   await expectQuestionActionLayoutWithClear(page, playground);
   await expectNoHorizontalScroll(page);
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
   await expectLegacyOntologyControls(page, playground);
   await expect(playground.getByTestId("ontology-graph-view-mode")).toBeVisible();
-  await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
+  await expect(playground.getByTestId("ontology-graph-mode-grounding")).toHaveAttribute("aria-pressed", "true");
   await expect(playground.getByTestId("ontology-graph-lane-business")).toContainText("業務概念");
   await expect(playground.getByTestId("ontology-graph-lane-attribute")).toContainText("属性・指標");
   // 詳細(列・列挙値)ノードが畳まれている間は空レーンのラベルを出さない
@@ -748,7 +758,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expectGraphSearchFieldLayout(page, playground);
   await expectNoHorizontalScroll(page);
 
-  // 概念の点は業務名、詳細と読み上げは技術名も示す。
+  // カードは業務名と技術名を示す（概念図の全体の点は探索の画布。#5922）。
   const customer = playground.locator(".react-flow__node", { hasText: "顧客" }).first();
   await expect(customer).toBeVisible();
   await expect(customer).toContainText("APP.CUSTOMERS");
@@ -757,7 +767,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await customer.focus();
   await customer.press("Enter");
   await playground.getByRole("button", { name: "選択を中心に表示" }).click();
-  await expect(entity.locator(".graph-point-symbol")).toHaveCSS(
+  await expect(entity).toHaveCSS(
     "background-color",
     "rgb(23, 58, 94)"
   );
@@ -765,7 +775,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
     "color",
     "rgb(239, 243, 247)"
   );
-  await expect(playground.getByTestId("ontology-node-card-m1").locator(".graph-point-symbol")).toHaveCSS(
+  await expect(playground.getByTestId("ontology-node-card-m1")).toHaveCSS(
     "background-color",
     "rgb(54, 42, 89)"
   );
@@ -776,7 +786,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expect(playground.locator(".react-flow__node")).toHaveCount(5);
   // 展開すると詳細レーンのラベルが現れる
   await expect(playground.getByTestId("ontology-graph-lane-detail")).toContainText("物理列・列挙値");
-  await expect(playground.getByTestId("ontology-node-card-c1").locator(".graph-point-symbol")).toHaveCSS(
+  await expect(playground.getByTestId("ontology-node-card-c1")).toHaveCSS(
     "background-color",
     "rgb(36, 43, 53)"
   );
@@ -812,7 +822,7 @@ test("同じ物理名の業務概念と物理表をカード上で区別でき�
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
 
   const businessCard = playground.getByTestId("ontology-node-card-employee-business");
   await expect(businessCard).toBeVisible();
@@ -864,7 +874,7 @@ test("大文字小文字だけが異なる物理表は別カード・別 cluster
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
 
   const upperCard = playground.getByTestId("ontology-node-card-upper-table");
   const quotedCard = playground.getByTestId("ontology-node-card-quoted-table");
@@ -886,7 +896,7 @@ test("質問接地グラフで選択した物理オブジェクトの ER 詳細�
 
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
   await expect(playground.getByTestId("ontology-er-details-panel")).toHaveCount(0);
 
   await expect(playground.getByTestId("ontology-inspector-node-picker")).toBeVisible();
@@ -1002,8 +1012,9 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(playground.getByTestId("ontology-playground-question")).toHaveValue("");
   await expect(playground.getByTestId("ontology-playground-ready-state")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
+  // 質問を消すと全体の表示（Cytoscape の探索の画布。#5922）に戻る。
   await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
-  await expect(metricCard).toHaveCSS("opacity", "1");
+  await expect(playground.getByTestId("ontology-concept-graph-canvas")).toBeVisible();
   await expect(playground.getByTestId("ontology-selection-details-panel")).toContainText(
     "グラフ上のノードや関係の線を選択"
   );
@@ -1023,8 +1034,9 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(playground.getByTestId("ontology-playground-question")).toHaveValue("");
   await expect(playground.getByTestId("ontology-playground-ready-state")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
+  // 質問を消すと全体の表示（Cytoscape の探索の画布。#5922）に戻る。
   await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
-  await expect(metricCard).toHaveCSS("opacity", "1");
+  await expect(playground.getByTestId("ontology-concept-graph-canvas")).toBeVisible();
   await expect(playground.getByTestId("ontology-selection-details-panel")).toContainText(
     "グラフ上のノードや関係の線を選択"
   );
@@ -1095,11 +1107,11 @@ test("Ontology グラフはデスクトップとモバイルで主要ノード�
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
   await expect(playground.getByTestId("ontology-playground-inspector")).toBeVisible();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
   await expect(playground.locator(".react-flow")).toBeVisible();
   await expect(playground.locator(".react-flow__node")).toHaveCount(3);
   await expect(playground.getByTestId("ontology-graph-lane-business")).toContainText("業務概念");
-  await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
+  await expect(playground.getByTestId("ontology-graph-mode-grounding")).toHaveAttribute("aria-pressed", "true");
   await expect(playground.getByTestId("ontology-graph-legend")).toBeVisible();
   await expect(playground.locator(".react-flow__node", { hasText: "顧客" })).toBeVisible();
   await expect(playground.locator(".react-flow__node", { hasText: "注文" })).toBeVisible();
@@ -1112,7 +1124,7 @@ test("業務概念→物理表の対応エッジは縦ハンドルで自己ル�
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
 
   // maps_to(業務概念→物理表)エッジは縦方向ハンドル(下→上)で接続される
   const mappingEdge = playground.locator(
@@ -1138,7 +1150,7 @@ test("FK エッジは hover なしでカーディナリティ短縮ラベルを�
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
 
   // many_to_one の FK は hover なしで "N:1" を表示する(ラベルはエッジ SVG 内の text)
   await expect(
@@ -1261,7 +1273,7 @@ test("schema→表エッジは縦 smoothstep で貫通せず、並行エッジ�
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
 
   // schema ノードは表と同じ行ではなく専用上段行に置かれる
   const schemaBox = await playground
@@ -1364,7 +1376,7 @@ test("ノードはドラッグで移動でき、リセットで決定論レイ�
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
 
   const node = playground.locator('.react-flow__node[data-id="employee-table"]');
   await expect(node).toBeVisible();
@@ -1415,7 +1427,7 @@ test("ノードを hover してもエッジが 1 フレームも消えない(点
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
   const node = playground.locator('.react-flow__node[data-id="employee-table"]');
   await expect(node).toBeVisible();
   await page.waitForTimeout(700);
@@ -1555,7 +1567,7 @@ for (const theme of ["light", "dark"]) {
       await expect(page.getByRole("link", { name: "本文へスキップ" })).toBeFocused();
       await page.getByTestId("ontology-view-fetch").click();
       const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
-      await openGraphIfCollapsed(page, playground);
+      await openCardGraph(page, playground);
       await expect(playground.locator('.react-flow__edge[data-id="domain"]')).toHaveCount(1);
       await expect(playground.locator('.react-flow__edge[data-id="range"]')).toHaveCount(1);
       await playground.getByTestId("ontology-graph-details-toggle").check();
@@ -1648,7 +1660,7 @@ test("ノード種別は共有バッジで長い日本語名を欠けずに表�
   await page.goto("/ontology-build?profile=default");
   await page.getByTestId("ontology-view-fetch").click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
   for (const width of testInfo.project.name === "desktop" ? [1280, 1920] : [375]) {
     await page.setViewportSize({ width, height: 1000 });
     for (const theme of ["light", "dark"]) {
@@ -1763,7 +1775,7 @@ test("線をクリックすると関係の詳細をノードと同じ詳細の�
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const playground = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await playground.scrollIntoViewIfNeeded();
-  await openGraphIfCollapsed(page, playground);
+  await openCardGraph(page, playground);
 
   const details = playground.getByTestId("ontology-selection-details-panel");
   await expect(details.getByRole("heading", { name: "詳細", exact: true })).toBeVisible();
@@ -1824,7 +1836,7 @@ test("線をクリックすると関係の詳細をノードと同じ詳細の�
   await page.screenshot({ path: testInfo.outputPath("node-details.png") });
 });
 
-test("256 節点をグループで探索し、全体・選択・直前の視点を復元する", { tag: "@responsive" }, async ({ page }, info) => {
+test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter で 25 件ずつ足し、全体表示は読める縮尺", { tag: "@responsive" }, async ({ page }, info) => {
   test.setTimeout(75000);
   const synthetic = Array.from({ length: 256 }, (_, i) => ({
     id: "n" + i, kind: "table", business_name_ja: "合成の対象 " + i, technical_name: "T_" + i,
@@ -1843,72 +1855,34 @@ test("256 節点をグループで探索し、全体・選択・直前の視点�
   await page.getByRole("button", { name: "情報を取得", exact: true }).click();
   const area = page.getByRole("region", { name: "質問のオントロジー接地確認用グラフ" });
   await openGraphIfCollapsed(page, area);
-  const canvas = area.getByTestId("ontology-graph-canvas");
-  const groups = area.getByTestId("ontology-neighbors");
-  const fit = canvas.getByRole("button", { name: "グラフ全体を表示", exact: true });
-  const focus = canvas.getByRole("button", { name: "選択を中心に表示" });
-  const camera = () => canvas.locator(".react-flow__viewport").evaluate((el) => (el as HTMLElement).style.transform);
-  await expect(groups).toContainText("255");
-  const groupPoint = canvas.getByTestId("ontology-group-point");
-  const objects = canvas.locator(".react-flow__node:has([data-ontology-node-kind])");
-  // 最初は先頭の 12 件を出し、残りを点の件数で示す（隣接を 0 件にして消さない。#5908）。
-  await expect(objects).toHaveCount(13);
-  await expect(groupPoint).toContainText("243");
-  const showButton = groups.getByRole("button", { name: /次の.*件を展開/ });
-  // 画布の上の行のボタンは、固定の見出しの下に隠れないようキーボードで押す。
-  const press = async (button: Locator) => { await button.focus(); await button.press("Enter"); };
-  const show = { click: () => press(showButton) };
-  // 画布を画面の中央に置き、固定の見出しの下に操作が隠れないようにしてから選ぶ。
-  const center = () => canvas.evaluate((el) => el.scrollIntoView({ block: "center" }));
-  await center();
-  await press(canvas.locator('.react-flow__node[data-id="n0"]'));
-  await center();
-  await fit.click();
-  await show.click();
-  await expect(objects).toHaveCount(25);
-  await expect(groupPoint).toContainText("231");
-  await press(groups.getByRole("button", { name: "関連を折りたたむ" }));
-  await expect(objects).toHaveCount(1);
-  await expect(groupPoint).toContainText("255");
-  await press(groups.getByRole("button", { name: "折りたたみを元に戻す" }));
-  await expect(objects).toHaveCount(25);
-  await expect(groupPoint).toContainText("231");
-  for (let i = 24; i < 255; i += 12) await show.click();
-  // 256 節点は画面の外を描かない（onlyRenderVisibleElements）ので、残りの点が消えたことで全件の展開を確かめる。
-  await expect(groupPoint).toHaveCount(0);
-  await expect(groups.getByRole("button", { name: "すべて展開済み" })).toBeDisabled();
-  // 全体表示は読める縮尺を下限にし、256 節点を極小の縮尺で収めない（#5520・#5908）。
-  await fit.click();
-  const zoomOf = async () => Number(/scale\(([\d.]+)\)/.exec(await camera())?.[1] ?? 0);
-  await expect.poll(zoomOf).toBeGreaterThanOrEqual(0.8);
-  await expect(canvas.locator(".react-flow")).not.toHaveAttribute("data-graph-overview", "");
-  // 手で縮めると総覧（点と束ねた関係）になる。
-  const zoomOut = canvas.getByRole("button", { name: "グラフを縮小", exact: true });
-  for (let i = 0; i < 4; i++) await zoomOut.click();
-  await expect(canvas.locator(".react-flow")).toHaveAttribute("data-graph-overview", "");
-  await expect(canvas.locator("[data-ontology-lane-label]").first()).toBeHidden();
-  const allCamera = await camera();
-  expect(await zoomOf()).toBeGreaterThanOrEqual(0.1);
+  // 全体の表示は Cytoscape の探索の画布（#5922）。canvas の中は属性で数える。
+  const canvas = area.getByTestId("ontology-concept-graph-canvas");
+  const count = (key: "graphNodes" | "graphEdges" | "graphZoom") => canvas.evaluate((el, name) => Number((el as HTMLElement).dataset[name] ?? 0), key);
+  // n0 と同じ種類の隣接 12 件と「さらに展開」の点（隣接 255 件を 0 件にして消さない。#5908）。
+  await expect.poll(() => count("graphNodes")).toBe(14);
+  await expect(area.getByTestId("ontology-concept-graph-node-kinds")).toContainText("物理表・ビュー 13");
+  await expect(area.getByTestId("ontology-neighbors")).toHaveCount(0);
+  // 図内検索で n0 を選び、Enter で隣接を 25 件足す。
+  await area.getByTestId("ontology-graph-search").fill("合成の対象 0");
+  await area.getByTestId("ontology-graph-search-next").click();
+  await expect(area.getByTestId("ontology-graph-selection-announcement")).toContainText("合成の対象 0");
+  await canvas.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => count("graphNodes")).toBe(14 + 25);
+  // 右クリック（Shift+F10）のメニュー。
+  await page.keyboard.press("Shift+F10");
+  const menu = area.getByRole("menu", { name: "ノードの操作" });
+  await expect(menu.getByRole("menuitem", { name: /関係の種類を選んで展開/ })).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "選択したノードだけ残す" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  // 全体表示は読める縮尺（0.8）を下限にし、極小の縮尺で収めない（#5520・#5908）。
+  await area.getByRole("button", { name: "グラフ全体を表示", exact: true }).click();
+  await expect.poll(() => count("graphZoom")).toBeGreaterThanOrEqual(0.8);
   if (process.env.GRAPH_ACCEPTANCE_DIR) await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/" + info.project.name + "-ontology-256.png" });
-  await focus.click();
-  await expect.poll(camera).not.toBe(allCamera);
-  await canvas.getByRole("button", { name: "前の表示に戻る" }).click();
-  await expect.poll(camera).toBe(allCamera);
-  const bundle = canvas.locator(".react-flow__edge.graph-edge-count").filter({ hasText: "関係 3 件" });
-  await bundle.focus();
-  await bundle.press("Enter");
-  const members = area.getByTestId("ontology-selection-details-panel").getByRole("combobox", { name: "関係 3 件" });
-  await expect(members).toBeVisible();
-  await members.click();
-  await page.getByRole("option", { name: /third/ }).click();
-  await expect(area.getByTestId("ontology-edge-details")).toContainText("third");
+  // 物理 ER は表のカード（React Flow）で、隣接をまとめて隠さない。
   await area.getByTestId("ontology-graph-mode-physical_er").click();
-  // 物理 ER は隣接をまとめて隠さない（まとまりの行も残りの点も出さない。#5908）。
-  await expect(groups).toHaveCount(0);
-  await expect(groupPoint).toHaveCount(0);
-  await canvas.getByRole("button", { name: "グラフ全体を表示" }).click();
-  await expect(canvas.locator(".react-flow")).not.toHaveAttribute("data-graph-overview", "");
+  await expect(area.locator(".react-flow")).toBeVisible();
+  await expect(area.getByTestId("ontology-group-point")).toHaveCount(0);
   await area.getByTestId("ontology-graph-mode-all").click();
-  await expect.poll(camera).toBe(allCamera);
-  await expect(area.getByTestId("ontology-edge-details")).toContainText("third");
+  await expect(area.getByTestId("ontology-concept-graph-canvas")).toBeVisible();
 });

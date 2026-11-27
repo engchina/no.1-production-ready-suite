@@ -392,15 +392,21 @@ function OntologyFlow({
   const readableFit = useGraphReadableFit();
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [canvasVisible, setCanvasVisible] = useState(false);
+  // カードの画布は全体の表示（探索の画布）から切り替えたときに作られるので、要素ごとに測り直す。
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(null);
+  const attachCanvas = useCallback((element: HTMLDivElement | null) => {
+    canvasRef.current = element;
+    setCanvasElement(element);
+    if (!element) setCanvasVisible(false);
+  }, []);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvasElement) return;
     const observer = new ResizeObserver(([entry]) => {
       setCanvasVisible(entry.contentRect.width > 0 && entry.contentRect.height > 0);
     });
-    observer.observe(canvas);
+    observer.observe(canvasElement);
     return () => observer.disconnect();
-  }, []);
+  }, [canvasElement]);
   const stateKey = `ontology-graph:${workspaceKey}:${graph.revision?.id ?? graph.revision_id ?? "current"}`;
   const [search, setSearch] = useWorkspaceState(`${stateKey}:search`, "");
   const [conceptKind, setConceptKind] = useWorkspaceState(`${stateKey}:concept`, "");
@@ -991,7 +997,7 @@ function OntologyFlow({
           />
         </div>
       ) : (
-      <GraphCanvasFrame ref={canvasRef} data-testid="ontology-graph-canvas">
+      <GraphCanvasFrame ref={attachCanvas} data-testid="ontology-graph-canvas">
       {canvasVisible && <GraphCanvas
         nodes={nodes}
         edges={edges}

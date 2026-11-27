@@ -57,7 +57,8 @@ export async function expectLegacyOntologyControls(page: Page, scope: Locator) {
   await page.keyboard.press("Space");
   await expect(physical).toHaveAttribute("aria-pressed", "true");
   await expect(all).toHaveAttribute("aria-pressed", "false");
-  await all.click();
+  // 種類の絞り込みの凡例はカードの表示（React Flow）にある。全体は Cytoscape の画布の凡例（#5922）。
+  await scope.getByTestId("ontology-graph-mode-grounding").click();
 
   const legend = scope.getByTestId("ontology-graph-legend").getByRole("button").first();
   // 補助テキストの下限は 12px（README §3）。
