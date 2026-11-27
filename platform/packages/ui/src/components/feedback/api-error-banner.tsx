@@ -116,6 +116,7 @@ export interface ApiErrorStateProps {
   fallback: string;
   onRetry?: () => void;
   retryLabel?: string;
+  detailsDefaultOpen?: boolean;
   labels?: ApiErrorDetailLabels;
 }
 
@@ -128,6 +129,7 @@ export function ApiErrorState({
   fallback,
   onRetry,
   retryLabel,
+  detailsDefaultOpen = false,
   labels = DEFAULT_API_ERROR_DETAIL_LABELS,
 }: ApiErrorStateProps) {
   const presentation = presentApiError(error, fallback, labels);
@@ -136,7 +138,7 @@ export function ApiErrorState({
       message={[presentation.summary, presentation.nextAction].filter(Boolean).join("")}
       onRetry={onRetry}
       retryLabel={retryLabel}
-      details={<ApiErrorDetailList details={presentation.details} label={labels.details} defaultOpen={false} />}
+      details={<ApiErrorDetailList details={presentation.details} label={labels.details} defaultOpen={detailsDefaultOpen} />}
     />
   );
 }

@@ -30,16 +30,19 @@ export function ErrorState({
 export function ApiErrorState({
   error,
   fallback,
+  detailsDefaultOpen,
   onRetry,
 }: {
   error: unknown;
   fallback: string;
+  detailsDefaultOpen?: boolean;
   onRetry?: () => void;
 }) {
   return (
     <UiApiErrorState
       error={error}
       fallback={fallback}
+      detailsDefaultOpen={detailsDefaultOpen}
       onRetry={onRetry}
       retryLabel={t("common.retry")}
     />

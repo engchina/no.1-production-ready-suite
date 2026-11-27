@@ -739,6 +739,7 @@ export function SearchClient() {
           ) : phase === "error" ? (
             <ApiErrorState
               error={searchError}
+              detailsDefaultOpen={answerMode}
               fallback={t("search.error.failed")}
               onRetry={() => void resubmit()}
             />
