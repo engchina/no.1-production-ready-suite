@@ -32,8 +32,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { Button, SelectField, fieldControlClassName, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
-import { directedGraphBundles, graphNeighborGroups, expandedGraphNeighborhood, applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasFrame, GraphCanvasProvider, GraphCanvasControls, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphPointNode, GraphParallelEdge, GraphSearchNavigation, normalizeGraphSearch, selectGraphEdgeHandles, useGraphReadableFit, type GraphEdgeHandleSelection, type GraphNodeDimensions } from "@production-ready/ui/graph";
+import { Button, fieldControlClassName, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
+import { directedGraphBundles, applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasFrame, GraphCanvasProvider, GraphCanvasControls, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphPointNode, GraphParallelEdge, GraphSearchNavigation, normalizeGraphSearch, selectGraphEdgeHandles, useGraphReadableFit, type GraphEdgeHandleSelection, type GraphNodeDimensions } from "@production-ready/ui/graph";
 import { cn } from "@/lib/utils";
 import { useValuesChanged } from "@/lib/render-sync";
 
@@ -56,7 +56,9 @@ import {
   ontologyGraphWithDetailVisibility,
   type OntologyGraphViewMode,
 } from "./graphView";
-import { ontologyNodeDisplay, ontologyNodeSearchValues, ontologyRelationshipKindLabel } from "./nodeDisplay";
+import { ontologyNodeDisplay, ontologyNodeSearchValues } from "./nodeDisplay";
+import { OntologyConceptExplorer } from "./OntologyConceptExplorer";
+import type { GraphExplorerHandle } from "@production-ready/ui/graph-explorer";
 import type { OntologyGraph, OntologyNode } from "./types";
 import { collapsedListLabels } from "@/lib/pagination-labels";
 
@@ -76,7 +78,6 @@ interface OntologyGraphCanvasProps {
   onViewModeChange?: (mode: OntologyGraphViewMode) => void;
 }
 
-const NEIGHBOR_BATCH = 12;
 const NODE_WIDTH = GRAPH_NODE_CARD_SIZE.width;
 const NODE_HEIGHT = GRAPH_NODE_CARD_SIZE.height;
 const GRAPH_VIEW_MODES: Array<{ id: OntologyGraphViewMode; labelKey: string; icon: LucideIcon }> = [
@@ -389,7 +390,6 @@ function OntologyFlow({
 }: OntologyGraphCanvasProps) {
   const flow = useReactFlow();
   const readableFit = useGraphReadableFit();
-  const groupSelectId = useId();
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [canvasVisible, setCanvasVisible] = useState(false);
   useEffect(() => {
@@ -511,61 +511,22 @@ function OntologyFlow({
     disabledKinds,
   ]);
 
-  // 隣接のまとめ（点の「残り N」）は全体の表示だけで使う。物理 ER と接地の表示は表・接地の対象を隠さない（#5908）。
-  const groups = useMemo(() => currentViewMode !== "all" ? [] : graphNeighborGroups(filteredGraph.edges.map((e) => ({
-    source: e.source_node_id, target: e.target_node_id, kind: e.kind || e.relationship_name_ja,
-  })), NEIGHBOR_BATCH), [filteredGraph.edges, currentViewMode]);
-  const relationNames = useMemo(() => {
-    const names = new Map<string, string>();
-    for (const e of filteredGraph.edges) {
-      const kind = e.kind || e.relationship_name_ja;
-      if (!names.has(kind)) names.set(kind, e.relationship_name_ja);
-    }
-    return names;
-  }, [filteredGraph.edges]);
-  const groupRelationLabel = useCallback((kind: string) => ontologyRelationshipKindLabel(kind, relationNames.get(kind)), [relationNames]);
-  const [limitsByMode, setLimitsByMode] = useState<Partial<Record<OntologyGraphViewMode, Map<string, number>>>>({});
-  const [activeGroupId, setActiveGroupId] = useState("");
-  const [undo, setUndo] = useState<{ mode: OntologyGraphViewMode; id: string; count: number } | null>(null);
-  const limits = useMemo(() => limitsByMode[currentViewMode] ?? new Map<string, number>(), [limitsByMode, currentViewMode]);
-  const activeGroup = groups.find((g) => g.id === activeGroupId) ?? groups.find((g) => g.owner === selectedNodeId) ?? groups[0];
-  // 最初は先頭の 1 まとまり分を出し、残りを点の件数で示す（0 件にして隣接を消さない。#5908）。
-  const limitOf = useCallback((id: string) => limits.get(id) ?? NEIGHBOR_BATCH, [limits]);
-  const groupLimit = activeGroup ? limitOf(activeGroup.id) : 0;
-  const groupLabels = useMemo(() => {
-    const names = new Map(filteredGraph.nodes.map((n) => [n.id, ontologyNodeDisplay(n).primaryLabel]));
-
-    return groups.map((g) => ({ value: g.id, label: t(g.outgoing ? "nl2sql.ontology.graphGroupOut" : "nl2sql.ontology.graphGroupIn", {
-      name: names.get(g.owner) ?? g.owner, relation: groupRelationLabel(g.kind), count: g.neighbors.length,
-    }) }));
-  }, [groups, filteredGraph, groupRelationLabel]);
-  // 展開で足したノード。表示範囲の外に出たときだけ、展開元と合わせて読める縮尺で見せる（#5908）。
-  const revealAfterExpand = useRef<{ owner: string; before: Set<string> } | null>(null);
-  function changeLimit(id: string, count: number) {
-    const group = groups.find((g) => g.id === id);
-    if (group && count > limitOf(id)) revealAfterExpand.current = { owner: group.owner, before: new Set(flow.getNodes().map((n) => n.id)) };
-    setLimitsByMode((prev) => ({ ...prev, [currentViewMode]: new Map(prev[currentViewMode]).set(id, count) }));
-  }
-  const visibleGraph = useMemo(() => {
-    if (!groups.length) return filteredGraph;
+  // 全体の表示は Cytoscape の探索の画布（OntologyConceptExplorer）が隣接のまとめと展開を持つ（#5922）。
+  // 物理 ER と接地の表示は表・接地の対象を隠さない（#5908）。
+  const visibleGraph = filteredGraph;
+  const explorerPinned = useMemo(() => {
     const keep = new Set([...(highlightNodeIds ?? []), ...searchMatchedNodeIds]);
     if (selectedNodeId) keep.add(selectedNodeId);
-    const pinnedEdges = new Set(highlightEdgeIds);
-    if (selectedEdgeId) pinnedEdges.add(selectedEdgeId);
     for (const edge of filteredGraph.edges) {
-      if (pinnedEdges.has(edge.id) || (query && normalize(edge.relationship_name_ja).includes(query))) {
-        pinnedEdges.add(edge.id);
+      if (edge.id === selectedEdgeId || (highlightEdgeIds ?? []).includes(edge.id) || (query && normalize(edge.relationship_name_ja).includes(query))) {
         keep.add(edge.source_node_id);
         keep.add(edge.target_node_id);
       }
     }
-    const shown = new Map(groups.map((g) => [g.id, limitOf(g.id)]));
-    const { nodes: ids, showsRelation } = expandedGraphNeighborhood(filteredGraph.nodes.map((n) => n.id), groups, shown, keep);
-    return { ...filteredGraph, nodes: filteredGraph.nodes.filter((n) => ids.has(n.id)),
-      edges: filteredGraph.edges.filter((e) => ids.has(e.source_node_id) && ids.has(e.target_node_id) && (
-        pinnedEdges.has(e.id) || showsRelation(e.source_node_id, e.target_node_id, e.kind || e.relationship_name_ja)
-      )) };
-  }, [filteredGraph, groups, limitOf, highlightNodeIds, highlightEdgeIds, selectedNodeId, selectedEdgeId, searchMatchedNodeIds, query]);
+    return keep;
+  }, [filteredGraph.edges, highlightNodeIds, highlightEdgeIds, searchMatchedNodeIds, selectedNodeId, selectedEdgeId, query]);
+  const explorer = useRef<GraphExplorerHandle>(null);
+  const conceptView = currentViewMode === "all";
 
   const semanticLayout = useMemo(
     () =>
@@ -680,6 +641,10 @@ function OntologyFlow({
     const position = effectivePositions.get(nodeId);
     if (!position) return;
     onSelectNode?.(nodeId);
+    if (conceptView) {
+      explorer.current?.focusNode(nodeId);
+      return;
+    }
     void flow.setCenter(position.x + NODE_WIDTH / 2, position.y + NODE_HEIGHT / 2, {
       zoom: Math.max(flow.getZoom(), 0.9),
       duration: prefersReducedMotion() ? 0 : 250,
@@ -718,26 +683,6 @@ function OntologyFlow({
     }, 80);
     return () => window.clearTimeout(timer);
   }, [currentViewMode, stateKey, highlightSignature, flow, canvasVisible, fitAll, readableFit]);
-
-  // 展開で足したノードが表示範囲の外なら、展開元と足したノードに合わせる（縮尺は読める下限まで）。
-  useEffect(() => {
-    const pending = revealAfterExpand.current;
-    const container = canvasRef.current;
-    if (!pending || !container) return;
-    const added = visibleGraph.nodes.map((n) => n.id).filter((id) => !pending.before.has(id) && effectivePositions.has(id));
-    if (!added.length) return;
-    revealAfterExpand.current = null;
-    const { x, y, zoom } = flow.getViewport();
-    const rect = container.getBoundingClientRect();
-    const outside = added.some((id) => {
-      const p = effectivePositions.get(id)!;
-      const left = p.x * zoom + x, top = p.y * zoom + y;
-      return left < 0 || top < 0 || left + NODE_WIDTH * zoom > rect.width || top + NODE_HEIGHT * zoom > rect.height;
-    });
-    if (!outside) return;
-    const frame = window.requestAnimationFrame(() => readableFit({ nodes: [pending.owner, ...added], padding: 48 }));
-    return () => window.cancelAnimationFrame(frame);
-  }, [visibleGraph.nodes, effectivePositions, flow, readableFit]);
 
   // インスペクタ等の外部選択で対象が画面外のときだけ、そのノードへセンタリングする
   // (fitView での全体リセットはしない。ズームは現状維持ベース)。
@@ -835,34 +780,6 @@ function OntologyFlow({
       measuredById,
     ]
   );
-
-  const groupedPoints = useMemo(() => {
-    const points: Node<OntologyNodeData>[] = [];
-    const links: OntologyFlowEdge[] = [];
-    if (currentViewMode !== "all" || !groups.length) return { points, links };
-    const byId = new Map(nodes.map(node => [node.id, node]));
-    const visible = new Set(visibleGraph.edges.map(e => JSON.stringify([e.source_node_id, e.target_node_id, e.kind || e.relationship_name_ja])));
-    const right = nodes.reduce((x, node) => Math.max(x, node.position.x), 0) + NODE_WIDTH * 1.3;
-    for (const group of groups) {
-      const owner = byId.get(group.owner);
-      if (!owner) continue;
-      const remaining = group.neighbors.filter(id => !visible.has(JSON.stringify(group.outgoing ? [group.owner, id, group.kind] : [id, group.owner, group.kind]))).length;
-      if (!remaining) continue;
-      const label = groupRelationLabel(group.kind);
-      const id = `group:${group.id}`;
-      const position = { x: right, y: points.length * NODE_HEIGHT * 1.35 };
-      points.push({
-        id, type: "ontology", position, initialWidth: NODE_WIDTH, initialHeight: NODE_HEIGHT,
-        draggable: false, data: { ...owner.data, point: true, group: { label, remaining }, dimmed: false, searchMatched: false },
-        ariaLabel: t(group.outgoing ? "nl2sql.ontology.graphGroupOut" : "nl2sql.ontology.graphGroupIn", { name: ontologyNodeDisplay(owner.data.node).primaryLabel, relation: label, count: remaining }),
-      });
-      const source = group.outgoing ? owner : { id, position }, target = group.outgoing ? { id, position } : owner;
-      const handles = selectGraphEdgeHandles(source.position, target.position);
-      links.push({ id, source: source.id, target: target.id, sourceHandle: handles.sourceHandle, targetHandle: handles.targetHandle,
-        type: "straight", markerEnd: GRAPH_EDGE_MARKER, style: graphEdgeStyle({ dash: "4 3" }), ariaLabel: label });
-    }
-    return { points, links };
-  }, [currentViewMode, groups, nodes, visibleGraph.edges, groupRelationLabel]);
 
   const edges = useMemo<OntologyFlowEdge[]>(() => {
     const kindById = new Map(visibleGraph.nodes.map((node) => [node.id, node.kind]));
@@ -1052,23 +969,6 @@ function OntologyFlow({
         ) : null}
       </div>
       {/* 検索に当たった関係はツールバーの外の行に出し、10 件を超えたら畳む（ツールバーを伸ばさない。#4636）。 */}
-      {activeGroup && (
-        <div className="flex min-w-0 flex-wrap items-center gap-2" data-testid="ontology-neighbors">
-          {/* 同じ行の選択欄とボタンは同じ高さ（md）にし、選択欄のラベルは読み上げだけにする（ui.md「操作部品の高さと幅」）。 */}
-          <SelectField id={groupSelectId} label={t("nl2sql.ontology.graphGroups")} labelHidden value={activeGroup.id} options={groupLabels}
-            onValueChange={setActiveGroupId} width="lg" />
-          <Button type="button" variant="secondary" disabled={groupLimit >= activeGroup.neighbors.length}
-            onClick={() => changeLimit(activeGroup.id, Math.min(activeGroup.neighbors.length, groupLimit + NEIGHBOR_BATCH))}>
-            {groupLimit >= activeGroup.neighbors.length ? t("nl2sql.ontology.graphExpanded") : t("nl2sql.ontology.graphExpand", { count: Math.min(NEIGHBOR_BATCH, activeGroup.neighbors.length - groupLimit) })}
-          </Button>
-          {groupLimit > 0 && <Button type="button" variant="ghost" onClick={() => {
-            setUndo({ mode: currentViewMode, id: activeGroup.id, count: groupLimit }); changeLimit(activeGroup.id, 0);
-          }}>{t("nl2sql.ontology.graphCollapse")}</Button>}
-          {undo?.mode === currentViewMode && <Button type="button" variant="ghost" onClick={() => {
-            changeLimit(undo.id, Math.max(limitOf(undo.id), undo.count)); setUndo(null);
-          }}>{t("nl2sql.ontology.graphUndoCollapse")}</Button>}
-        </div>
-      )}
       {query ? (
         <RelationshipMatches
           edges={scopedGraph.edges.filter(e=>[e.relationship_name_ja,e.description_ja,String(e.metadata?.api_name ?? "")].some(value=>normalize(value ?? "").includes(query)))}
@@ -1076,10 +976,25 @@ function OntologyFlow({
         />
       ) : null}
       <p className="text-xs text-fg-muted">{t("nl2sql.ontology.graphSearchScope")}</p>
+      {conceptView ? (
+        <div data-testid="ontology-graph-canvas" data-graph-view="explorer">
+          <OntologyConceptExplorer
+            ref={explorer}
+            graph={visibleGraph}
+            matched={new Set([...emphasis.searchNodes, ...emphasis.highlightNodes])}
+            pinned={explorerPinned}
+            selectedNodeId={selectedNodeId}
+            selectedEdgeId={selectedEdgeId}
+            onSelectNode={onSelectNode}
+            onSelectEdge={onSelectEdge}
+            layoutKey={stateKey + ":" + conceptKind}
+          />
+        </div>
+      ) : (
       <GraphCanvasFrame ref={canvasRef} data-testid="ontology-graph-canvas">
       {canvasVisible && <GraphCanvas
-        nodes={groupedPoints.points.length ? [...nodes, ...groupedPoints.points] : nodes}
-        edges={groupedPoints.links.length ? [...edges, ...groupedPoints.links] : edges}
+        nodes={nodes}
+        edges={edges}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         // 初期の範囲合わせは下の effect（fitAll。読める縮尺）が行う。
@@ -1096,20 +1011,10 @@ function OntologyFlow({
         nodesFocusable
         edgesFocusable
         onlyRenderVisibleElements={visibleGraph.nodes.length > 150}
-        onSelectNode={id => {
-          const group = groups.find(g => `group:${g.id}` === id);
-          if (group) {
-            setActiveGroupId(group.id);
-            onSelectNode?.(group.owner);
-          } else onSelectNode?.(id);
-        }}
+        onSelectNode={(id) => onSelectNode?.(id)}
         onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)}
         onNodeMouseLeave={() => setHoveredNodeId(null)}
-        onSelectEdge={(id) => {
-          const group = groups.find(g => `group:${g.id}` === id);
-          if (group) { setActiveGroupId(group.id); onSelectNode?.(group.owner); }
-          else onSelectEdge?.(id, edges.find((item) => item.id === id)?.members);
-        }}
+        onSelectEdge={(id) => onSelectEdge?.(id, edges.find((item) => item.id === id)?.members)}
         onEdgeMouseEnter={(_event, edge) => setHoveredEdgeId(edge.id)}
         onEdgeMouseLeave={() => setHoveredEdgeId(null)}
         miniMap={visibleGraph.nodes.length > 12 ? {
@@ -1140,6 +1045,7 @@ function OntologyFlow({
         onToggleGroup={toggleLegendGroup}
       />
       </GraphCanvasFrame>
+      )}
       {/* スクリーンリーダー向け: 選択されたノードを読み上げる(視覚は selected 枠で表現済み) */}
       <span
         className="sr-only"

@@ -63,6 +63,8 @@ export interface GraphExplorerNode {
   expanded?: boolean;
   /** 検索の一致（外側の輪で示す。色だけにしない）。 */
   matched?: boolean;
+  /** 状態の枠（種類 = 塗り / 状態 = 線。検証の警告・阻止など）。省略時は種類の枠。 */
+  tone?: "warning" | "danger";
 }
 
 export interface GraphExplorerEdge {
@@ -155,6 +157,8 @@ interface ResolvedColors {
   surface: string;
   accent: string;
   match: string;
+  warning: string;
+  danger: string;
   font: string;
 }
 
@@ -176,6 +180,8 @@ function resolveColors(host: HTMLElement, kinds: readonly GraphExplorerNodeKind[
     surface: read("--color-surface-sunken"),
     accent: read("--color-accent-fg"),
     match: read("--color-warning-fg"),
+    warning: read("--color-warning-fg"),
+    danger: read("--color-danger-fg"),
     font: getComputedStyle(host).fontFamily,
   };
   probe.remove();
@@ -226,6 +232,8 @@ export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly G
         ...(kind.dashed ? { "border-style": "dashed" as const } : {}),
       },
     })),
+    { selector: "node[tone = \"warning\"]", style: { "border-color": colors.warning, "border-width": 3 } },
+    { selector: "node[tone = \"danger\"]", style: { "border-color": colors.danger, "border-width": 3, "border-style": "double" } },
     { selector: "node.matched", style: { "underlay-color": colors.match, "underlay-opacity": 0.4, "underlay-padding": 6, "underlay-shape": "ellipse" } },
     { selector: "node:selected", style: { "border-color": colors.accent, "border-width": 4, "border-style": "solid" } },
     {
@@ -497,7 +505,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
       cy.elements().filter((element) => !wanted.has(element.id()) || (fresh && element.isNode())).remove();
       const additions: ElementDefinition[] = [];
       for (const node of nodes) {
-        const data = { id: node.id, kind: node.kind, display: wrapGraphLabel(node.label) };
+        const data = { id: node.id, kind: node.kind, display: wrapGraphLabel(node.label), tone: node.tone ?? "" };
         const element = cy.getElementById(node.id);
         if (element.length) element.data(data);
         else additions.push({ group: "nodes", data, position: seeds.get(node.id) });
