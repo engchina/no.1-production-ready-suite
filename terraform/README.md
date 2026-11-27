@@ -68,6 +68,8 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
   NL2SQL で Deep Data Security を有効にする場合は `nl2sql_oracle_deepsec_data_user_password` も必要です。
 - 製品の選択は Compute の cloud-init に入るため、選択を変えて apply すると **Compute は作り直されます**（OCI provider は `user_data` の変更で instance を置き換える）。データの正本は ADB で、
   Compute の中のローカルの保存（アップロードの原本・`platform/.env` を画面で変えた値・HTTPS の CA）は失われます。
+- cloud-init に入らない入力（ADB の OCPU の数など）だけを変えた apply と、入力を変えない apply では、Compute は作り直されません（#5945）。
+  この修正より前に配備した stack は、次の apply で 1 回だけ作り直されます（cloud-init に入れる Wallet の ZIP の作り方が変わったため）。
 - 配備が終わると、`/var/log/suite-init.log` に入口の URL（`suite:`。`/` は Agent Control Plane へ転送。#1561）、製品ごとの URL、CA 証明書の URL を出します。
   その後に配備全体の確認の結果（`check:` の行）を出します（下の「配備が正常かの確認」）。
 
