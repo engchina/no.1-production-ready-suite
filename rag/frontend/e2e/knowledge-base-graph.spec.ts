@@ -487,16 +487,26 @@ test("二つの展開元を持つ原文を保持し、向き別の関係と折�
 test("総覧で近接する検索一致の名称が重ならない", { tag: "@responsive" }, async ({ page }, info) => {
   await data(page);
   await begin(page);
-  if (info.project.name === "mobile") await page.getByRole("button", { name: "関係図", exact: true }).click();
+  await result(page, 1).click();
+  const panel = detail(page, info.project.name === "mobile");
+  await panel.getByRole("button", { name: /参照 135/ }).click();
+  await panel.getByRole("button", { name: "関連を展開" }).click();
   const graph = page.locator(".react-flow");
   const labels = graph.locator(".graph-overview-label");
   await expect(labels).toHaveCount(5);
+  const readable = () => labels.evaluateAll(items => {
+    const canvas = items[0].closest(".react-flow")!.getBoundingClientRect();
+    const boxes = items.map(item => item.getBoundingClientRect());
+    return boxes.every((a, i) => a.width > 0 && a.height > 0 &&
+      a.left >= canvas.left - 1 && a.right <= canvas.right + 1 && a.top >= canvas.top - 1 && a.bottom <= canvas.bottom + 1 &&
+      boxes.slice(0, i).every(b => a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1));
+  });
   const zoomOut = graph.getByRole("button", { name: "縮小", exact: true });
   for (let i = 0; i < 10; i++) await zoomOut.click();
+  await expect.poll(readable).toBe(true);
+  await graph.getByRole("button", { name: "選択を中心に表示" }).click();
+  await graph.getByRole("button", { name: "拡大", exact: true }).click();
+  await graph.getByRole("button", { name: "全体表示" }).click();
   await expect(graph).toHaveAttribute("data-graph-overview", "");
-  await expect.poll(() => labels.evaluateAll(items => {
-    const boxes = items.map(item => item.getBoundingClientRect());
-    return boxes.every((a, i) => a.width > 0 && a.height > 0 && boxes.slice(0, i).every(b =>
-      a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1));
-  })).toBe(true);
+  await expect.poll(readable).toBe(true);
 });

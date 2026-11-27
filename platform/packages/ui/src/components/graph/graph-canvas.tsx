@@ -59,7 +59,7 @@ function OverviewScale() {
       if (pending || !canvas?.hasAttribute("data-graph-overview")) return;
       pending = requestAnimationFrame(() => {
         pending = 0;
-        if (canvas.hasAttribute("data-graph-overview")) arrangeOverviewLabels(canvas);
+        if (canvas.hasAttribute("data-graph-overview")) arrangeOverviewLabels(canvas, store.getState());
       });
     }
     const update = () => {

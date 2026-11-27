@@ -1,3 +1,5 @@
+import type { ReactFlowState } from "@xyflow/react";
+
 interface Box {
   left: number;
   top: number;
@@ -57,15 +59,20 @@ export function placeOverviewLabels(anchors: readonly Anchor[], viewport: Box): 
   });
 }
 
-export function arrangeOverviewLabels(canvas: HTMLElement) {
-  const bounds = canvas.getBoundingClientRect();
+export function arrangeOverviewLabels(canvas: HTMLElement, state: Pick<ReactFlowState, "nodeLookup" | "transform">) {
+  const bounds = { left: 0, top: 0, right: canvas.clientWidth, bottom: canvas.clientHeight };
+  const [panX, panY, zoom] = state.transform;
   const items = Array.from(canvas.querySelectorAll<HTMLElement>(".graph-overview-label")).flatMap(label => {
     const marker = label.parentElement;
-    if (!marker) return [];
-    const dot = marker.getBoundingClientRect(), box = label.getBoundingClientRect();
-    const x = dot.left + dot.width / 2, y = dot.top + dot.height / 2;
-    if (!box.width || x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) return [];
-    return [{ marker, x, y, width: box.width, height: box.height }];
+    const frame = marker?.closest<HTMLElement>(".react-flow__node");
+    const node = state.nodeLookup.get(frame?.dataset.id ?? "");
+    if (!marker || !frame || !node) return [];
+    // 全体表示の直後は DOM の変換が前の描画フレームの場合がある。同じ縮尺で全節点を投影する。
+    const { positionAbsolute } = node.internals;
+    const x = panX + (positionAbsolute.x + frame.offsetWidth / 2) * zoom;
+    const y = panY + (positionAbsolute.y + frame.offsetHeight / 2) * zoom;
+    if (x < 0 || x > bounds.right || y < 0 || y > bounds.bottom) return [];
+    return [{ marker, x, y, width: label.offsetWidth, height: label.offsetHeight }];
   }).sort((a, b) => Number(b.marker.hasAttribute("data-selected")) - Number(a.marker.hasAttribute("data-selected")));
   const placements = placeOverviewLabels(items, bounds);
   items.forEach(({ marker, x, y, width }, index) => {
