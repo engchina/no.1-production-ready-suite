@@ -418,7 +418,7 @@ ADB のデータ（3 製品の表・Oracle AI Data Platform で加工した結�
 - **stack が作らないもの**: IAM policy、ADB との接続、Private Access Channel、dataset・workbook。接続は OAC の画面で作ります（下の「配備の後」）。
 - **認証は Identity Domain**。`oac_identity_domain_ocid`（Identity Domain の OCID）と `oac_admin_user`（その domain の利用者のユーザー名。OCID ではない）を入力します。IDCS の access token は使いません。
 - 3 製品と Compute は OAC を使いません（`platform/.env` と cloud-init には何も書きません）。
-- **最初の配備で決めてください。** 今は、stack を再 apply すると入力に関わらず Compute が作り直されます（#5945）。配備済みの環境では、OAC を OCI コンソールで作ってください（stack の入力と同じ項目を指定する）。
+- 後からオンにしても Compute は作り直されません（cloud-init に入らないため。#5945 の修正より前に配備した stack は、次の apply で 1 回だけ作り直されます）。
 - `oac_name`・`oac_identity_domain_ocid`・`oac_feature_set` は、後から変えると OAC が作り直されます（dataset・workbook が失われる）。
 
 ### 配備の前に
@@ -440,6 +440,16 @@ output の `oac_url` を開き、`oac_admin_user` でサインインします。
 2. OAC の「作成 › 接続 › Oracle Autonomous AI Lakehouse」で、Wallet（クライアント資格証明）・ユーザー名・パスワード・サービス名を入力します。
    - **3 製品の接続のユーザー（アプリ用の DB ユーザー）と ADMIN は入力しないでください。** Oracle AI Data Platform を配備しているときは、AIDP 用の DB ユーザー（既定 `ADB_AIDP_USER`。自分の schema だけを使える）を使うと、AIDP で加工した結果をそのまま可視化できます。ほかの schema の表を見せるときは、ADMIN が `GRANT SELECT` で個別に付けます。
 3. **ADB がプライベート・エンドポイントのとき**は、公開の endpoint の OAC からは届きません。OAC の instance に Private Access Channel を作り（Enterprise Edition だけ。ADB の VCN・subnet と、ADB のプライベート・エンドポイントの DNS zone を指定する）、接続を作ります。Private Access Channel は stack で作りません。
+
+### 実環境で確かめたこと（2026-11-27、Osaka）
+
+| 確かめたこと | 結果 |
+|---|---|
+| Identity Domain の OCID と管理者のユーザー名だけで作れるか（IDCS の access token なし） | 作れる。作成は約 5 分（Enterprise Edition・1 OCPU・公開の endpoint） |
+| `oac_url`（資源の `service_url`） | `https://<名前>-<識別子>.analytics.ocp.oraclecloud.com/ui/`。開くと Identity Domain のサインインへ転送される |
+| 作成の後の plan | OAC に差分なし |
+
+確かめていないこと: 画面でのサインイン、ADB との接続（Private Access Channel を含む）、Professional Edition、`BRING_YOUR_OWN_LICENSE`、Tokyo・Chicago。
 
 ## 製品ごとの入力と instance 上の構成
 

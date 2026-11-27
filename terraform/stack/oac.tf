@@ -4,8 +4,7 @@
 #   IDCS の access token（idcs_access_token）は使わない（期限が短く、stack の入力に向かない）。
 # - 公開の endpoint で作る。ADB との接続・dataset・workbook は stack で作らない（OAC の画面で作る）。
 #   手順は terraform/README.md「Oracle Analytics Cloud」。
-# - Compute の cloud-init には何も書かない。ただし今は、stack を再 apply すると入力に関わらず Compute が作り直される
-#   （#5945）ため、最初の配備で決める。
+# - Compute の cloud-init には何も書かない（後から切り替えても Compute は作り直されない。#5945）。
 resource "oci_analytics_analytics_instance" "suite" {
   count = var.deploy_oac ? 1 : 0
 

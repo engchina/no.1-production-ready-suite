@@ -1050,7 +1050,7 @@ variables:
     required: true
     visible: true
     title: "Oracle Analytics Cloud を配備する"
-    description: "既定はオフ。オンにすると、Oracle Analytics Cloud を ADB のコンパートメントに 1 つ作ります（作成に 20〜40 分かかることがあります）。ADB のデータの可視化（dataset・workbook）に使います。ADB との接続は stack では作らず、Oracle Analytics Cloud の画面で作ります（手順は terraform/README.md「Oracle Analytics Cloud」）。最初の配備で決めてください。"
+    description: "既定はオフ。オンにすると、Oracle Analytics Cloud を ADB のコンパートメントに 1 つ作ります（作成に 20〜40 分かかることがあります）。ADB のデータの可視化（dataset・workbook）に使います。ADB との接続は stack では作らず、Oracle Analytics Cloud の画面で作ります（手順は terraform/README.md「Oracle Analytics Cloud」）。後からオンにしても主 Compute は作り直されません。"
     default: false
 
   oac_name:
