@@ -192,6 +192,8 @@ class Settings(ModelSecretStateMixin, BaseServiceSettings):
     aidp_ocid: str = ""
     aidp_region: str = ""
     aidp_url: str = ""
+    # AIDP の External Catalog が ADB に接続する DB ユーザーの名前（#5931。パスワードは無い）
+    aidp_db_user: str = ""
     oracle_tcp_connect_timeout_seconds: float = 10.0
     oracle_db_test_timeout_seconds: float = 15.0
     # PLATFORM_ORACLE_* の接続 pool の大きさ（Agent 固有。`app.oracle_connection`。#793）。

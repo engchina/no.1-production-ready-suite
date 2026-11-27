@@ -745,6 +745,13 @@ class Settings(
     aidp_url: str = Field(
         default="", description="Oracle AI Data Platform Workbench の画面を開く URL。"
     )
+    aidp_db_user: str = Field(
+        default="",
+        description=(
+            "Oracle AI Data Platform の External Catalog が ADB に接続する DB ユーザーの名前。"
+            "システム設定に出す（パスワードは持たない。#5931）。"
+        ),
+    )
     oracle_tcp_connect_timeout_seconds: float = Field(
         default=10.0,
         gt=0.0,

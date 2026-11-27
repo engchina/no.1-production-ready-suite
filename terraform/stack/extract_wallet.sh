@@ -1,37 +1,25 @@
 #!/bin/bash
-# Terraform external data source用ウォレット抽出スクリプト
-# 出力: 厳密にJSON形式のみ（stdout）
+# Terraform の external data source 用。Wallet の ZIP を小さくして返す（cloud-init の user_data の上限に収める）。
+# 入力: stdin の JSON {"wallet_base64":"<Wallet の ZIP の base64>"}
+# 出力: stdout に JSON {"wallet_content":"<小さくした ZIP の base64>"} だけ
+# 同じ入力からは必ず同じ出力を返す（違うと user_data が変わり、apply のたびに Compute が作り直される。#5945）。
+set -euo pipefail
+export LC_ALL=C TZ=UTC
+umask 022
 
-set -e
+WORK_DIR="$(mktemp -d)"
+trap 'rm -rf "${WORK_DIR}"' EXIT
 
-# 作業ディレクトリ（スクリプトと同じディレクトリ）
-WORK_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "$WORK_DIR"
+# base64 に引用符は含まれないので、JSON の値をそのまま切り出す（jq に依存しない）。
+sed -n 's/.*"wallet_base64"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | base64 -d > "${WORK_DIR}/wallet_full.zip"
 
-# 一時ディレクトリを作成
-rm -rf wallet_extracted >/dev/null 2>&1 || true
-mkdir -p wallet_extracted
+mkdir "${WORK_DIR}/wallet"
+unzip -q -o "${WORK_DIR}/wallet_full.zip" -d "${WORK_DIR}/wallet" >/dev/null
 
-# ZIPを展開
-unzip -q -o wallet_full.zip -d wallet_extracted >/dev/null 2>&1
+# python-oracledb の thin mode が使わないファイル（README・Java 用）を除く。
+rm -f "${WORK_DIR}/wallet"/{README,keystore.jks,truststore.jks,ojdbc.properties,ewallet.p12}
 
-# 不要ファイルを削除（README、Java関連ファイル）
-rm -f wallet_extracted/README >/dev/null 2>&1 || true
-rm -f wallet_extracted/keystore.jks >/dev/null 2>&1 || true
-rm -f wallet_extracted/truststore.jks >/dev/null 2>&1 || true
-rm -f wallet_extracted/ojdbc.properties >/dev/null 2>&1 || true
-rm -f wallet_extracted/ewallet.p12 >/dev/null 2>&1 || true
+# -X: 拡張属性（アクセス時刻など、実行のたびに変わる値）を入れない。ファイルの順は glob の並び（LC_ALL=C）で決まる。
+(cd "${WORK_DIR}/wallet" && zip -q -X ../wallet_small.zip ./*) >/dev/null
 
-# 小さいZIPを作成
-cd wallet_extracted
-zip -q ../wallet_small.zip * >/dev/null 2>&1
-cd ..
-
-# 小さいZIPをbase64エンコード（改行文字を確実に除去）
-WALLET_CONTENT=$(base64 -w 0 wallet_small.zip 2>/dev/null | tr -d '\r\n')
-
-# クリーンアップ
-rm -rf wallet_extracted wallet_full.zip wallet_small.zip >/dev/null 2>&1 || true
-
-# JSONのみを出力（これがstdoutに出力される唯一の行）
-printf '{"wallet_content":"%s"}\n' "$WALLET_CONTENT"
+printf '{"wallet_content":"%s"}\n' "$(base64 -w 0 "${WORK_DIR}/wallet_small.zip")"

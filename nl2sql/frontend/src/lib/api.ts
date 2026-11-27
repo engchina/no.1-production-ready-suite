@@ -49,6 +49,7 @@ export type {
 import type {
   AdbInfoData,
   AdbSettingsUpdate,
+  AidpIntegrationData,
   DatabaseConnectionTestResult,
   DatabasePasswordRevealData,
   DatabaseSettingsData,
@@ -985,6 +986,11 @@ export const api = {
   stopAdb: () =>
     settingsRequest<AdbInfoData>("/api/settings/database/adb/stop", {
       method: "POST",
+    }),
+  // 設定: Oracle AI Data Platform の連携の情報（読み取り専用。#5931）
+  getAidpIntegration: (options: ApiRequestOptions = {}) =>
+    settingsRequest<AidpIntegrationData>("/api/settings/database/aidp", {
+      signal: options.signal,
     }),
 
   // 回答の注意書き（設定は製品ごと。#2405・#2449）

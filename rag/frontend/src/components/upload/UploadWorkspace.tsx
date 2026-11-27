@@ -217,6 +217,17 @@ export function UploadWorkspace() {
               disabled={isBusy || allowedContentTypes?.length === 0}
               maxUploadBytes={maxUploadBytes}
             />
+            {/* 受け付ける形式の設定を読み込めなかったことを、既定の案内と同じ表示にしない（messaging §3.6.1。#5925）。 */}
+            {policy.isError ? (
+              <DataLoadFailure
+                layout="field"
+                error={policy.error}
+                fallback={t("upload.policy.loadError")}
+                onRetry={() => void policy.refetch()}
+                retrying={policy.isFetching}
+                testId="upload-policy-load-failed"
+              />
+            ) : null}
             {isBusy ? null : (
               <UploadSelectionList
                 allowedContentTypes={allowedContentTypes}

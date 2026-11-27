@@ -730,6 +730,18 @@ def _verify_terraform(variables: str, adb: str, compute: str, locals_source: str
         context="adb_workload",
     )
     _require_all(_terraform_variable(variables, "adb_db_version"), ['default     = "26ai"'], context="adb_db_version")
+    # Wallet は plan の時点で決まる形で小さくする（作業ディレクトリのファイルを経由しない）。経由すると、入力を
+    # 変えなくても apply のたびに Compute が作り直される（#5945）。
+    wallet_files = re.search(r'(?ms)^data "external" "wallet_files" \{.*?^\}', adb)
+    if wallet_files is None or "depends_on" in wallet_files.group(0):
+        raise AssertionError("data.external.wallet_files must not be deferred to apply with depends_on")
+    _require_all(
+        re.sub(r"[ \t]+", " ", wallet_files.group(0)),
+        ["wallet_base64 = oci_database_autonomous_database_wallet.generated_autonomous_database_wallet.content"],
+        context="data.external.wallet_files",
+    )
+    if "local_file" in adb:
+        raise AssertionError("the wallet must not go through a file in the stack directory (local_file)")
     _require_all(
         _terraform_variable(variables, "region"),
         ["contains([" + ", ".join(f'"{region}"' for region in SUPPORTED_REGIONS) + "], var.region)"],
@@ -1716,7 +1728,12 @@ def _verify_aidp(schema: str, variables: str, aidp: str, locals_source: str, out
     block = re.search(r"(?ms)^%\{if var\.deploy_aidp~\}\n(.*?)^%\{endif~\}\n", platform_env)
     if block is None:
         raise AssertionError("PLATFORM_AIDP_* must be written only when deploy_aidp is true")
-    if _env_keys(block.group(1)) != ["PLATFORM_AIDP_OCID", "PLATFORM_AIDP_REGION", "PLATFORM_AIDP_URL"]:
+    if _env_keys(block.group(1)) != [
+        "PLATFORM_AIDP_OCID",
+        "PLATFORM_AIDP_REGION",
+        "PLATFORM_AIDP_URL",
+        "PLATFORM_AIDP_DB_USER",
+    ]:
         raise AssertionError(f"platform/.env AIDP keys: {_env_keys(block.group(1))}")
     if "PLATFORM_AIDP_" in platform_env.replace(block.group(0), ""):
         raise AssertionError("PLATFORM_AIDP_* must stay inside the deploy_aidp block")

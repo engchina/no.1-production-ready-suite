@@ -173,10 +173,13 @@ export { DATABASE_MESSAGES, type DatabaseMessageKey } from "./database/messages"
 export type { DatabaseChangedHandler } from "./database/hooks";
 export {
   ADB_INFO_QUERY_KEY,
+  AIDP_INTEGRATION_QUERY_KEY,
   DATABASE_SETTINGS_QUERY_KEY,
   type AdbInfoData,
   type AdbOperationStatus,
   type AdbSettingsUpdate,
+  type AidpDbUserStatus,
+  type AidpIntegrationData,
   type DatabaseConnectionSecurity,
   type DatabaseConnectionTestResult,
   type DatabaseConnectionTestStatus,

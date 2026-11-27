@@ -262,14 +262,13 @@ resource "oci_database_autonomous_database_wallet" "generated_autonomous_databas
   }
 }
 
-# Save the generated wallet ZIP as a local binary file.
-resource "local_file" "wallet_zip" {
-  content_base64 = oci_database_autonomous_database_wallet.generated_autonomous_database_wallet.content
-  filename       = "${path.module}/wallet_full.zip"
-}
-
-# Shrink the wallet ZIP before injecting it into cloud-init.
+# Wallet を小さくして cloud-init に入れる（user_data の上限に収めるため）。
+# Wallet の内容は query（stdin）で渡す。作業ディレクトリのファイルを経由すると、次の plan でファイルが無く
+# （Resource Manager は job ごとに作業ディレクトリが新しい）、wallet_content が apply の時点まで決まらず、
+# 入力を変えなくても Compute が作り直される（#5945）。Wallet の資源は state にあり、内容は plan の時点で決まる。
 data "external" "wallet_files" {
-  depends_on = [local_file.wallet_zip]
-  program    = ["bash", "${path.module}/extract_wallet.sh"]
+  program = ["bash", "${path.module}/extract_wallet.sh"]
+  query = {
+    wallet_base64 = oci_database_autonomous_database_wallet.generated_autonomous_database_wallet.content
+  }
 }
