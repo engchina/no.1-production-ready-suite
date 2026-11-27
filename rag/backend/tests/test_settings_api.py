@@ -3030,7 +3030,9 @@ def test_aidp_integration_is_not_configured_without_ocid(monkeypatch: MonkeyPatc
     assert resp.status_code == 200
     assert resp.json()["data"]["configured"] is False
     # 権限は「データベース」の既存の区画と同じ。
-    assert permission_for_route("GET", "/settings/database/aidp") == {"menu.settings_database"}
+    assert permission_for_route("GET", "/settings/database/aidp") == frozenset(
+        {"menu.settings_database"}
+    )
 
 
 def test_aidp_integration_checks_the_database_user_on_the_shared_pool(
