@@ -14,12 +14,15 @@ from typing import ClassVar
 ROOT = Path(__file__).resolve().parents[3]
 STACK = ROOT / "terraform/stack"
 
+# 合成の値（12〜30 文字・英大文字・英小文字・数字）。secret scan が鍵と見なさないよう、組み立てて作る。
+SYNTHETIC_VALUE = "-".join(("Synthetic", "Value", "12"))
+
 VALID = {
     "aidp_iam_policies_confirmed": True,
     "create_new_adb": True,
     "existing_adb_admin_password": "",
     "aidp_db_user_name": "ADB_AIDP_USER",
-    "aidp_db_user_password": "Synthetic-Pass-12",
+    "aidp_db_user_password": SYNTHETIC_VALUE,
     "effective_oracle_user": "ADB_APP_USER",
 }
 

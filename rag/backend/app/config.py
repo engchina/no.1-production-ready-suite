@@ -739,8 +739,12 @@ class Settings(
             "未設定なら連携の機能を出さない。"
         ),
     )
-    aidp_region: str = Field(default="", description="Oracle AI Data Platform Workbench の OCI region。")
-    aidp_url: str = Field(default="", description="Oracle AI Data Platform Workbench の画面を開く URL。")
+    aidp_region: str = Field(
+        default="", description="Oracle AI Data Platform Workbench の OCI region。"
+    )
+    aidp_url: str = Field(
+        default="", description="Oracle AI Data Platform Workbench の画面を開く URL。"
+    )
     oracle_tcp_connect_timeout_seconds: float = Field(
         default=10.0,
         gt=0.0,

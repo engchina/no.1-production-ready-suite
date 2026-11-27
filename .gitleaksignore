@@ -37,3 +37,5 @@ cbf9af2d191ec936e0175520d335fc6b390dc4dc:nl2sql/frontend/tests/e2e/api-keys.spec
 cbf9af2d191ec936e0175520d335fc6b390dc4dc:nl2sql/frontend/tests/e2e/api-keys.spec.ts:generic-api-key:22
 # #5293 の rag_grep のテストの、サービストークンの合成の鍵（"rag-mcp-grep-test-secret-…"。後の commit で既存のテストの定数に置き換えた）。
 8815c7af0c84ceadb5a8c90e601436b7b522dab8:rag/backend/tests/test_mcp_grep.py:generic-api-key:38
+# #5917 の Terraform の入力のテストの、合成のパスワード（"Synthetic-Pass-12"。後の commit で組み立てる形に置き換えた）。
+15a3574c58d61f22125cd1f39fb5155145f4252f:terraform/scripts/tests/test_aidp_inputs.py:generic-api-key:22
