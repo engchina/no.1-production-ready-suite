@@ -745,7 +745,12 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   const customer = playground.locator(".react-flow__node", { hasText: "顧客" }).first();
   await expect(customer).toBeVisible();
   await expect(customer).toContainText("APP.CUSTOMERS");
-  await expect(playground.getByTestId("ontology-node-card-e1")).toHaveCSS(
+  const entity = playground.getByTestId("ontology-node-card-e1");
+  await expect(entity.locator(".graph-overview-node")).toHaveCSS("background-color", "rgb(23, 58, 94)");
+  await customer.focus();
+  await customer.press("Enter");
+  await playground.getByRole("button", { name: "選択を中心に表示" }).click();
+  await expect(entity).toHaveCSS(
     "background-color",
     "rgb(23, 58, 94)"
   );
