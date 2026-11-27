@@ -26,6 +26,9 @@ def startup(tmp_path: Path, request: pytest.FixtureRequest) -> tuple[Path, dict[
     source = SUITE / request.param / "scripts"
     scripts = tmp_path / request.param / "scripts"
     scripts.mkdir(parents=True)
+    shared_scripts = tmp_path / "platform" / "scripts"
+    shared_scripts.mkdir(parents=True)
+    shutil.copy2(SUITE / "platform" / "scripts" / "prepare-shared-ui.sh", shared_scripts)
     (scripts.parent / "backend").mkdir()
     for name in ("start-all.sh", "start-backend.sh", "start-frontend.sh"):
         shutil.copy2(source / name, scripts / name)
