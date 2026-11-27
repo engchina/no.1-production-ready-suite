@@ -148,9 +148,10 @@ async function data(page: Page, controls: Controls = { calls: [] }) {
     if (end === "tree") {
       const n = Number(parts.at(-2)!.split("-")[1]);
       const file = files[n];
-      return finish(slice(q.has("parent")
+      const children: unknown[] = q.has("parent")
         ? Array.from({ length: UNITS_PER_DOC }, (_, i) => unit(n * UNITS_PER_DOC + i))
-        : [{ id: "sec-" + n, label: "第 1 章", kind: "section", document_id: file.id, document_name: file.name, path: ["第 1 章"], child_count: UNITS_PER_DOC, unit_count: UNITS_PER_DOC }]));
+        : [{ id: "sec-" + n, label: "第 1 章", kind: "section", document_id: file.id, document_name: file.name, path: ["第 1 章"], child_count: UNITS_PER_DOC, unit_count: UNITS_PER_DOC }];
+      return finish(slice(children));
     }
     if (end === "relations") {
       if (controls.failRelations) return r.fulfill({ status: 503, json: { detail: "一時的な失敗" } });
