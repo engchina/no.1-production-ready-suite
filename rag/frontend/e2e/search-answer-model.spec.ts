@@ -33,6 +33,7 @@ const ANSWER = "合成の画面 A の下に保存のボタンがあります。"
 async function mockApi(page: Page, attachedImages: number, review = false, citations = review ? originalHits : []) {
   await mockDatabaseReady(page);
   await mockLocalAuth(page);
+  await page.route("**/api/feedback/current**", route => route.fulfill({ json: envelope([]) }));
   await page.route("**/api/search-answer-profiles**", (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/approved-faq/suggest")) {
@@ -93,12 +94,13 @@ test.describe("RAG 検索の回答の見出しと段落の印の節", { tag: "@r
     await expect(page.getByTestId("search-answer-body")).toBeVisible();
     const headingBeforeBody = page.locator('[data-testid="search-answer-model-heading"] ~ [data-testid="search-answer-body"]');
     await expect(headingBeforeBody).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "未解決", exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
     if (process.env.RAG_E2E_SCREENSHOT_DIR) {
-      await page.getByTestId("search-answer-model-heading").scrollIntoViewIfNeeded();
+      await page.getByTestId("search-answer-body").evaluate(element => element.scrollIntoView({ block: "center" }));
       await page.screenshot({
         path: `${process.env.RAG_E2E_SCREENSHOT_DIR}/search-answer-model-${testInfo.project.name}.png`,
-        fullPage: true,
+        animations: "disabled",
       });
     }
   });
@@ -145,7 +147,6 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   const states=reviewSnapshots("trace-model","question");
   let state=states.initial;
   const votes:string[]=[];
-  await page.route("**/api/feedback/current**", route=>route.fulfill({json:envelope([])}));
   await page.route("**/api/feedback", route=>{
     const vote=route.request().postDataJSON();
     votes.push(vote.rating);
@@ -241,7 +242,6 @@ test(
     let state = { ...base, versions: [{ ...base.versions[0], sources: { question: source } }] };
     const commands: string[] = [];
     await mockApi(page, 0, true, hits);
-    await page.route("**/api/feedback/current**", (r) => r.fulfill({ json: envelope([]) }));
     await page.route("**/api/feedback", (r) => r.fulfill({ json: envelope(r.request().postDataJSON()) }));
     await page.route("**/api/search/answers/trace-model/review", (r) => {
       if (r.request().method() === "POST") {
@@ -308,7 +308,6 @@ test("候補がなくても経過時間を示し、今回の選択に戻れる",
   let voted = false;
   let release: (() => void) | undefined;
   const gate = () => new Promise<void>((done) => { release = done; });
-  await page.route("**/api/feedback/current**", r => r.fulfill({ json: envelope([]) }));
   await page.route("**/api/feedback", r => {
     voted = true;
     return r.fulfill({ json: envelope(r.request().postDataJSON()) });

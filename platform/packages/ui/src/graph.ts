@@ -22,3 +22,4 @@ export { aggregateGraphEdges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PR
 export { graphPathLabel, type GraphPathLabel } from "./lib/graph-path-label";
 export { GRAPH_READABLE_MIN_ZOOM, graphBounds, graphReadableViewport, type GraphRect, type GraphViewport, type GraphViewportPadding } from "./lib/graph-viewport";
 export { normalizeGraphSearch } from "./lib/graph-search";
+export { directedGraphBundles, expandedGraphNeighborhood, graphNeighborGroups, reachableGraphBranches, type GraphNeighborGroup } from "./lib/graph-exploration";

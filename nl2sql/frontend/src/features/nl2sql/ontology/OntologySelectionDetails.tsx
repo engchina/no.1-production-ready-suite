@@ -1,11 +1,11 @@
 import { useId, useMemo, type ReactNode } from "react";
 import { Info } from "lucide-react";
-import { StatusBadge } from "@production-ready/ui";
+import { SelectField, StatusBadge } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { DbObjectName } from "../components/DbObjectName";
 import { cardinalityShortLabel } from "./graphView";
-import { ontologyNodeDisplay } from "./nodeDisplay";
+import { ontologyRelationshipKindLabel, ontologyNodeDisplay } from "./nodeDisplay";
 import { DefinitionFields, DetailFieldList } from "./ontologyResultPresentation";
 import {
   ontologyRelationshipRows,
@@ -91,12 +91,7 @@ const EDGE_SUMMARY_DEFINITION_KEYS = [
 
 function edgeKindLabel(edge: OntologyEdge, definition: Record<string, unknown> | null): string {
   const kind = definitionString(definition, "kind") || (edge.kind ?? "").trim();
-  if (kind) {
-    const key = `ontologyResults.kind.${kind}` as const;
-    const label = t(key);
-    if (label !== key) return label;
-  }
-  return t("ontologyPlayground.inspector.edgeKindFallback");
+  return ontologyRelationshipKindLabel(kind);
 }
 
 function OntologyEdgeDetails({ graph, edge }: { graph: OntologyGraph; edge: OntologyEdge }) {
@@ -159,15 +154,27 @@ export function OntologySelectionDetailsPanel({
   node,
   edge,
   emptyContent,
+  members,
+  sqlMatches,
+  onSelectEdge,
   testId = "ontology-selection-details-panel",
 }: {
   graph: OntologyGraph;
   node: OntologyNode | null;
   edge: OntologyEdge | null;
   emptyContent?: ReactNode;
+  members?: readonly string[];
+  sqlMatches?: readonly string[];
+  onSelectEdge?: (id: string, members?: readonly string[]) => void;
   testId?: string;
 }) {
   const titleId = useId();
+  const parallel = useMemo(() => {
+    if (!edge || node || !members?.includes(edge.id)) return [];
+    const ids = new Set(members);
+    return graph.edges.filter((item) => ids.has(item.id));
+  }, [graph.edges, edge, node, members]);
+  const sqlLabel = (id: string) => t(sqlMatches?.includes(id) ? "nl2sql.ontology.sqlRelationMatched" : "nl2sql.ontology.sqlRelationContext");
   const title = node
     ? t("ontologyPlayground.inspector.nodeDetails")
     : edge
@@ -185,7 +192,12 @@ export function OntologySelectionDetailsPanel({
         <h3 id={titleId} className="text-sm font-semibold text-fg">
           {title}
         </h3>
+        {edge && !node && sqlMatches && <StatusBadge icon={false} variant={sqlMatches.includes(edge.id) ? "info" : "neutral"} label={sqlLabel(edge.id)} />}
       </div>
+      {edge && parallel.length > 1 && onSelectEdge && <SelectField id={titleId + "-relations"} label={t("nl2sql.ontology.graphBundle", { count: parallel.length })}
+        value={edge.id} width="full" onValueChange={(id) => onSelectEdge(id, members)} options={parallel.map((item) => ({
+          value: item.id, label: [item.relationship_name_ja, cardinalityShortLabel(item.cardinality), sqlMatches ? sqlLabel(item.id) : null].filter(Boolean).join(" · "),
+        }))} />}
       {node ? (
         <OntologyNodeDetails node={node} />
       ) : edge ? (

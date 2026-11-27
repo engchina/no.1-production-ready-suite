@@ -6,13 +6,11 @@ import {
   Route,
   Search,
   ServerCog,
-  Table2,
 } from "lucide-react";
 
 import {
   Button,
   Banner,
-  DataTable,
   EmptyState,
   StatusBadge,
   ClearActionButton,
@@ -21,8 +19,6 @@ import {
   INFORMATION_LIST_ROW_CLASS,
   INFORMATION_LIST_SCROLL_CLASS,
   INFORMATION_TABLE_FOCUS_CLASS,
-  INFORMATION_TABLE_ROW_CLASS,
-  INFORMATION_TABLE_VISIBLE_ROWS,
   FieldActionRow,
   TextareaField,
   ListScrollRegion,
@@ -37,11 +33,8 @@ import { t } from "@/lib/i18n";
 import { DbManagementLoadingSkeleton, DbObjectManagementPanelShell, DbObjectPanelHeader } from "../components/DbObjectManagementShared";
 import { SchemaSyncNotice } from "../components/SchemaRefreshFeedback";
 import { useMutationSchemaSync } from "../useMutationSchemaSync";
-import {
-  deriveOntologyErDetails,
-  type OntologyErDetails,
-  type OntologyErKeyRole,
-} from "./erDetails";
+import { deriveOntologyErDetails } from "./erDetails";
+import { OntologyErDetailsPanel } from "./OntologyErDetailsPanel";
 import { ontologyNodeDisplay } from "./nodeDisplay";
 import { searchOntologyContext } from "./api";
 import {
@@ -99,26 +92,6 @@ const STAGE_LABEL_KEYS = {
   no_match: "ontologyPlayground.stage.noMatch",
 } as const;
 const ONTOLOGY_NODE_PICKER_MAX_ITEMS = 12;
-
-function erKeyRoleLabel(role: OntologyErKeyRole): string {
-  switch (role) {
-    case "pk":
-      return t("ontologyPlayground.erKeyRolePk");
-    case "fk":
-      return t("ontologyPlayground.erKeyRoleFk");
-    case "pk_fk":
-      return t("ontologyPlayground.erKeyRolePkFk");
-    case "none":
-    default:
-      return t("ontologyPlayground.erKeyRoleNone");
-  }
-}
-
-function erObjectTypeLabel(type: OntologyErDetails["objectType"]): string {
-  if (type === "table") return t("nl2sql.ontology.nodeKind.table");
-  if (type === "view") return t("nl2sql.ontology.nodeKind.view");
-  return t("nl2sql.ontology.nodeKind.unknown");
-}
 
 function stageLabel(result: PlaygroundResult): string {
   return t(STAGE_LABEL_KEYS[result.stage]);
@@ -467,8 +440,12 @@ function OntologyDetailsPanel({
   graph,
   node,
   edge,
+  members,
   onSelectNode,
+  onSelectEdge,
 }: {
+  members?: readonly string[];
+  onSelectEdge: (id: string, members?: readonly string[]) => void;
   graph: OntologyGraph;
   node: OntologyNode | null;
   edge: OntologyEdge | null;
@@ -486,6 +463,8 @@ function OntologyDetailsPanel({
       graph={graph}
       node={node}
       edge={edge}
+      members={members}
+      onSelectEdge={onSelectEdge}
       emptyContent={
         <div className="grid gap-3">
           <p className="text-sm leading-6 text-fg-muted">{t("ontologyPlayground.inspector.nodeEmpty")}</p>
@@ -564,121 +543,6 @@ function OntologyRelationshipListPanel({
   );
 }
 
-function OntologyErDetailsPanel({ details }: { details: OntologyErDetails }) {
-  return (
-    <section
-      className="grid gap-4 rounded-md border border-border bg-surface p-3"
-      aria-labelledby="ontology-er-details-title"
-      data-testid="ontology-er-details-panel"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3
-            id="ontology-er-details-title"
-            className="flex items-center gap-2 text-sm font-semibold text-fg"
-          >
-            <Table2 size={16} className="text-accent-fg" aria-hidden="true" />
-            {t("ontologyPlayground.erDetailsTitle")}
-          </h3>
-          <p className="mt-1 leading-5">
-            <DbObjectName value={details.objectName} size="xs" data-testid="ontology-er-detail-object-name" />
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2" aria-label={t("ontologyPlayground.erSummary")}>
-          <StatusBadge icon={false} variant="neutral" label={erObjectTypeLabel(details.objectType)} />
-        </div>
-      </div>
-
-      {details.columns.length > 0 ? (
-        // 列の件数は表の上のツールバーの ListCount 1 か所（見出しのバッジにしない。#4636）。
-        <div className="grid min-w-0 gap-2">
-        <ListToolbar count={{ total: details.columns.length, labels: listCountLabels() }} testId="ontology-er-columns-toolbar" />
-        <DataTable
-          columns={[
-            {
-              key: "columnName",
-              header: t("ontologyPlayground.erColumnName"),
-              headerClassName: "w-[24%]",
-              className: "break-all py-3 font-mono leading-5",
-              render: (column) => column.columnName,
-            },
-            {
-              key: "dataType",
-              header: t("ontologyPlayground.erDataType"),
-              headerClassName: "w-[16%]",
-              className: "break-all py-3 font-mono leading-5 text-fg-muted",
-              render: (column) => column.dataType,
-            },
-            {
-              key: "keyRole",
-              header: t("ontologyPlayground.erKeyRole"),
-              headerClassName: "w-[12%]",
-              className: "py-3",
-              render: (column) => erKeyRoleLabel(column.keyRole),
-            },
-            {
-              key: "businessNameJa",
-              header: t("ontologyPlayground.erBusinessName"),
-              headerClassName: "w-[22%]",
-              className: "break-words py-3",
-              render: (column) => column.businessNameJa,
-            },
-            {
-              key: "descriptionJa",
-              header: t("ontologyPlayground.erDescription"),
-              headerClassName: "w-[26%]",
-              className: "break-words py-3 text-fg-muted",
-              render: (column) => column.descriptionJa || "-",
-            },
-          ]}
-          rows={details.columns}
-          getRowKey={(column) => column.id}
-          rowProps={(column) => ({ className: INFORMATION_TABLE_ROW_CLASS, "data-testid": `ontology-er-column-${column.id}` })}
-          tableClassName="w-full min-w-[48rem] table-fixed"
-          scrollTestId="ontology-er-columns"
-          stickyHeader
-          visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
-        />
-        </div>
-      ) : (
-        <Banner severity="info">{t("ontologyPlayground.erColumnsEmpty")}</Banner>
-      )}
-
-      <div className="grid gap-2" data-testid="ontology-er-joins">
-        <h4 className="text-xs font-semibold text-fg-muted">
-          {t("ontologyPlayground.erJoinConditions")}
-        </h4>
-        {details.joins.length > 0 ? (
-          <ListScrollRegion label={listScrollLabel(t("ontologyPlayground.erJoinConditions"))} className="grid gap-2">
-            {details.joins.map((join) => (
-              <div
-                key={join.id}
-                className="grid gap-1 rounded-md border border-border bg-surface-sunken px-3 py-2"
-                data-testid={`ontology-er-join-${join.id}`}
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-fg">
-                    {join.relationshipNameJa}
-                  </span>
-                  <span className="text-xs text-fg-muted">{join.cardinality}</span>
-                </div>
-                <p className="text-xs leading-5 text-fg-muted">
-                  {join.sourceLabel} → {join.targetLabel}
-                </p>
-                <code data-surface-tint="neutral" className="break-all rounded bg-surface-hover px-2 py-1 font-mono text-xs leading-5 text-fg">
-                  {join.joinCondition}
-                </code>
-              </div>
-            ))}
-          </ListScrollRegion>
-        ) : (
-          <p className="text-sm leading-6 text-fg-muted">{t("ontologyPlayground.erJoinsEmpty")}</p>
-        )}
-      </div>
-    </section>
-  );
-}
-
 /**
  * 決定論 NL Query Playground(LLM 不要)。質問がオントロジーの
  * どのエンティティ/関係に接地するかをグラフ上でハイライトする。
@@ -713,6 +577,7 @@ export function OntologyQueryPlayground({
   const [result, setResult] = useState<PlaygroundResult | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [selectedMembers, setSelectedMembers] = useState<readonly string[]>();
   const [graphViewMode, setGraphViewMode] = useState<OntologyGraphViewMode>("all");
   const [mobileGraphOpen, setMobileGraphOpen] = useState(false);
   const [serverSearch, setServerSearch] = useState<ServerSearchState>({ status: "idle" });
@@ -740,7 +605,8 @@ export function OntologyQueryPlayground({
     setSelectedNodeId(nodeId);
     setSelectedEdgeId(null);
   };
-  const selectEdge = (edgeId: string | null) => {
+  const selectEdge = (edgeId: string | null, members?: readonly string[]) => {
+    setSelectedMembers(members);
     setSelectedEdgeId(edgeId);
     setSelectedNodeId(null);
   };
@@ -1097,6 +963,7 @@ export function OntologyQueryPlayground({
                       workspaceKey={`playground:${profileId}`}
                       selectedNodeId={selectedNodeId}
                       selectedEdgeId={selectedEdgeId}
+                      selectedMembers={selectedMembers}
                       onSelectNode={selectNode}
                       onSelectEdge={selectEdge}
                       highlightNodeIds={highlightNodeIds}
@@ -1117,6 +984,8 @@ export function OntologyQueryPlayground({
                   graph={graph}
                   node={selectedNode}
                   edge={selectedEdge}
+                  members={selectedMembers}
+                  onSelectEdge={selectEdge}
                   onSelectNode={selectNode}
                 />
                 {erDetails ? <OntologyErDetailsPanel details={erDetails} /> : null}

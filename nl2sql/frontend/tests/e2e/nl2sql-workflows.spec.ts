@@ -7112,6 +7112,14 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
         review_status: "approved",
       },
       {
+        id: "neighbor-reference",
+        kind: "reference",
+        source_node_id: "department-table",
+        target_node_id: "employee-table",
+        relationship_name_ja: "合成の参照",
+        review_status: "approved",
+      },
+      {
         id: "department-employee-join",
         kind: "foreign_key",
         source_node_id: "department-table",
@@ -7335,12 +7343,52 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   await expect(details.getByTestId("ontology-edge-details")).toContainText("結合のキー（Join Key）");
   await expect(details.getByTestId("ontology-edge-details")).toContainText("部署情報");
   await expect(details.getByTestId("ontology-edge-details")).not.toContainText("未設定");
+  await expect(details.getByText("この SQL に一致", { exact: true })).toBeVisible();
+  const canvas = panel.getByTestId("ontology-graph-canvas");
+  const flow = canvas.locator(".react-flow");
+  for (let i = 0; i < 12 && !(await flow.evaluate(el => el.hasAttribute("data-graph-overview"))); i++) {
+    await canvas.getByRole("button", { name: "グラフを縮小", exact: true }).click();
+  }
+  const combined = canvas.locator('.react-flow__edge[data-id="department-employee-join"]');
+  await combined.focus();
+  await combined.press("Enter");
+  const choices = details.getByRole("combobox", { name: "関係 2 件" });
+  await choices.click();
+  await page.getByRole("option", { name: /合成の参照.*周辺の関係/ }).click();
+  await expect(details.getByText("周辺の関係", { exact: true })).toBeVisible();
+  await expect(canvas.locator('.react-flow__edge[data-id="neighbor-reference"]')).toHaveAttribute("aria-label", /接地対象に一致/);
+
   await details.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("sql-grounding-edge-details.png") });
-  await page.getByTestId("ontology-node-card-employee-table").click();
+  const employeeNode = canvas.locator('.react-flow__node[data-id="employee-table"]');
+  await employeeNode.focus();
+  await employeeNode.press("Enter");
   await expect(details.getByRole("heading", { name: "ノード詳細", exact: true })).toBeVisible();
   await expect(details.getByTestId("ontology-node-details")).toContainText("従業員情報");
   await expect(details.getByTestId("ontology-edge-details")).toHaveCount(0);
+
+  const camera = () => canvas.locator(".react-flow__viewport").evaluate(el => (el as HTMLElement).style.transform);
+  await canvas.getByRole("button", { name: "グラフ全体を表示", exact: true }).click();
+  const groundingCamera = await camera();
+  if (process.env.GRAPH_ACCEPTANCE_DIR) {
+    await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/sql-grounding-" + testInfo.project.name + ".png" });
+  }
+  await panel.getByTestId("ontology-graph-mode-all").click();
+  await panel.getByTestId("ontology-graph-mode-physical_er").click();
+  const employee = canvas.locator('.react-flow__node[data-id="employee-table"]');
+  await employee.focus();
+  await employee.press("Enter");
+  const er = panel.getByTestId("ontology-er-details-panel");
+  await expect(er.getByTestId("ontology-er-detail-object-name")).toContainText("ADMIN.EMPLOYEE");
+  await expect(er.getByTestId("ontology-er-joins")).toContainText("ADMIN.EMPLOYEE.DEPARTMENT_ID");
+  await canvas.getByRole("button", { name: "選択を中心に表示" }).click();
+  if (process.env.GRAPH_ACCEPTANCE_DIR) {
+    await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/physical-er-" + testInfo.project.name + ".png" });
+  }
+  await panel.getByTestId("ontology-graph-mode-grounding").click();
+  await expect.poll(camera).toBe(groundingCamera);
+  await expect(details.getByTestId("ontology-node-details")).toContainText("従業員情報");
+  await expect(er).toHaveCount(0);
 
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(panel).toBeVisible();

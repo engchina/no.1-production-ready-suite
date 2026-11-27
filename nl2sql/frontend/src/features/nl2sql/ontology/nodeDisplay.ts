@@ -179,3 +179,9 @@ export function ontologyNodeSearchValues(node: OntologyNode): string[] {
     ...(node.aliases ?? []),
   ];
 }
+
+export function ontologyRelationshipKindLabel(kind: string): string {
+  const key = `ontologyResults.kind.${kind}`;
+  const label = t(key);
+  return label !== key ? label : t("ontologyPlayground.inspector.edgeKindFallback");
+}

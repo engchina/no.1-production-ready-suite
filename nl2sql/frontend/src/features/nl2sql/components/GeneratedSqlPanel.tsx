@@ -22,6 +22,9 @@ import {
   type SqlOntologyGroundingResult,
 } from "../ontology/sqlGrounding";
 import type { OntologyGraph, SqlSemanticGraph } from "../ontology/types";
+import { deriveOntologyErDetails } from "../ontology/erDetails";
+import type { OntologyGraphViewMode } from "../ontology/graphView";
+import { OntologyErDetailsPanel } from "../ontology/OntologyErDetailsPanel";
 import { OntologySelectionDetailsPanel } from "../ontology/OntologySelectionDetails";
 import type {
   GeneratedSqlPanelData,
@@ -143,19 +146,26 @@ function SqlOntologyGroundingPanel({
   /** 業務プロファイルに公開されたオントロジーが無く、接地確認をしていない(失敗ではない。#1168)。 */
   notPublished?: boolean;
 }) {
+  const [graphViewMode, setGraphViewMode] = useState<OntologyGraphViewMode>("grounding");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [selectedMembers, setSelectedMembers] = useState<readonly string[]>();
   // ノードと線（関係）は同じ詳細のパネルに出すので、片方を選んだら他方を外す（#1788）。
   const selectNode = (nodeId: string | null) => {
     setSelectedNodeId(nodeId);
     setSelectedEdgeId(null);
   };
-  const selectEdge = (edgeId: string | null) => {
+  const selectEdge = (edgeId: string | null, members?: readonly string[]) => {
+    setSelectedMembers(members);
     setSelectedEdgeId(edgeId);
     setSelectedNodeId(null);
   };
   const selectedNode = ontologyGraph?.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdge = ontologyGraph?.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
+  const erDetails = useMemo(
+    () => graphViewMode === "physical_er" && ontologyGraph ? deriveOntologyErDetails(ontologyGraph, selectedNodeId) : null,
+    [graphViewMode, ontologyGraph, selectedNodeId],
+  );
   const grounding = useMemo(
     () => groundSqlSemanticGraphOnOntologyGraph(sqlGraph, ontologyGraph ?? null),
     [ontologyGraph, sqlGraph]
@@ -247,19 +257,24 @@ function SqlOntologyGroundingPanel({
                     graph={ontologyGraph}
                     selectedNodeId={selectedNodeId}
                     selectedEdgeId={selectedEdgeId}
+                    selectedMembers={selectedMembers}
                     onSelectNode={selectNode}
                     onSelectEdge={selectEdge}
                     highlightNodeIds={grounding.highlightNodeIds}
                     highlightEdgeIds={grounding.highlightEdgeIds}
-                    defaultViewMode="grounding"
+                    viewMode={graphViewMode}
+                    onViewModeChange={setGraphViewMode}
                   />
                 </Suspense>
               </div>
-              <div className="order-1 min-w-0 @4xl:order-2">
+              <div className="order-1 grid min-w-0 gap-3 @4xl:order-2">
                 <OntologySelectionDetailsPanel
                   graph={ontologyGraph}
                   node={selectedNode}
                   edge={selectedEdge}
+                  members={selectedMembers}
+                  sqlMatches={grounding.highlightEdgeIds}
+                  onSelectEdge={selectEdge}
                   testId="nl2sql-sql-grounding-details"
                   emptyContent={
                     <p className="text-sm leading-6 text-fg-muted">
@@ -267,6 +282,7 @@ function SqlOntologyGroundingPanel({
                     </p>
                   }
                 />
+                {erDetails ? <OntologyErDetailsPanel details={erDetails} /> : null}
               </div>
             </div>
           </div>

@@ -813,7 +813,7 @@ test("2モデルは広い画面で空き列なく横並びになる", async ({ p
   await expectNoPageOverflow(page);
 });
 
-test("未解決を直ちに保存し、戻った後に選んだ資料で再回答する", async ({ page }, testInfo) => {
+test("未解決を直ちに保存し、戻った後に選んだ資料で再回答する", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const states = reviewSnapshots("t1", "question");
   let state = states.initial;
   let feedbackPayload: Record<string, unknown> | null = null;
@@ -823,7 +823,7 @@ test("未解決を直ちに保存し、戻った後に選んだ資料で再回�
       if (feedbackPayload.trace_id === "t1") state = states.unresolved;
     }
   });
-  await openPersistedConversation(page, 1280, [
+  await openPersistedConversation(page, page.viewportSize()!.width, [
     { ...userMessage, content: reviewQuestion },
     { ...assistantMessage, content: firstAnswer, citations: originalHits },
   ]);
@@ -851,8 +851,9 @@ test("未解決を直ちに保存し、戻った後に選んだ資料で再回�
   });
   const drawer = page.getByRole("dialog");
   await drawer.getByRole("button", { name:"戻る", exact:true }).click();
+  await expect(drawer).toHaveCount(0);
   await expect(bad).toHaveAttribute("aria-pressed", "true");
-  if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-vote-"+testInfo.project.name+".png" });
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ animations: "disabled", path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-vote-"+testInfo.project.name+".png" });
   await bad.click();
   await drawer.getByRole("radio", { name:"選んだ資料だけで答え直す" }).check();
   await drawer.getByRole("checkbox", { name:"操作ガイド A.pdf" }).check();
@@ -860,7 +861,8 @@ test("未解決を直ちに保存し、戻った後に選んだ資料で再回�
   await expect(page.getByText(nextAnswer, {exact:true})).toBeVisible();
   await page.getByText("回答 1 · 未解決", {exact:true}).click();
   await expect(page.getByText(firstAnswer, {exact:true})).toBeVisible();
-  if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-history-"+testInfo.project.name+".png" });
+  await expect(drawer).toHaveCount(0);
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ animations: "disabled", path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-history-"+testInfo.project.name+".png" });
 });
 
 test("3モデルはカード幅を維持して次の行へ折り返す", async ({ page }) => {

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, FileText, Heading } from "lucide-react";
 import { useReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import {
+  directedGraphBundles,
   GraphCanvas,
   GraphCanvasControls,
   GraphCanvasFrame,
@@ -68,7 +69,7 @@ export function joinScenes(...scenes: Scene[]): Scene {
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
 }
 
-type CardNode = Node<{ item: WikiNode }>;
+type CardNode = Node<{ item: WikiNode; matched: boolean }>;
 function NodeCard({ data, selected }: NodeProps<CardNode>) {
   const n = data.item;
   return (
@@ -80,6 +81,7 @@ function NodeCard({ data, selected }: NodeProps<CardNode>) {
         n.kind === "section" ? "var(--color-graph-teal, var(--color-surface-sunken))" : "var(--color-surface)"
       }
       selected={selected}
+      matched={data.matched}
     />
   );
 }
@@ -88,18 +90,28 @@ const nodeTypes = { wiki: NodeCard },
 interface Props {
   scene: Scene;
   root: string;
+  matches: ReadonlySet<string>;
   selected?: string;
   edge?: string;
   onNode: (node: WikiNode) => void;
   onEdge: (e: Connection) => void;
 }
-function Canvas({ scene, root, selected, edge, onNode, onEdge }: Props) {
+function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props) {
   const flow = useReactFlow();
   const lastRoot = useRef("");
+
+  const [slots, setSlots] = useState(() => new Map(scene.nodes.map((n, i) => [n.id, i])));
+  const added = scene.nodes.filter((n) => !slots.has(n.id));
+  if (added.length) {
+    const next = new Map(slots);
+    for (const n of added) next.set(n.id, next.size);
+    setSlots(next);
+  }
   const positions = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
     const { width, height } = GRAPH_NODE_CARD_SIZE;
-    scene.nodes.forEach((node, index) => {
+    scene.nodes.forEach((node, fallback) => {
+      const index = slots.get(node.id) ?? fallback;
       if (index === 0) {
         map.set(node.id, { x: 0, y: 0 });
         return;
@@ -118,28 +130,26 @@ function Canvas({ scene, root, selected, edge, onNode, onEdge }: Props) {
       map.set(node.id, { x: Math.cos(theta) * ring * width * 1.6, y: Math.sin(theta) * ring * height * 2.3 });
     });
     return map;
-  }, [scene.nodes]);
+  }, [scene.nodes, slots]);
   const nodes: CardNode[] = scene.nodes.map((item) => ({
     id: item.id,
     type: "wiki",
-    data: { item },
+    data: { item, matched: matches.has(item.id) },
     position: positions.get(item.id)!,
     selected: item.id === selected,
     style: { width: GRAPH_NODE_CARD_SIZE.width },
     ariaLabel: `${t(`wiki.graph.kind.${item.kind}`)} · ${item.label}`,
   }));
-  const pairs = new Map<string, Connection[]>();
-  for (const e of scene.edges) {
-    const k = [e.source, e.target].sort().join(":");
-    pairs.set(k, [...(pairs.get(k) ?? []), e]);
-  }
-  const edges: Edge[] = scene.edges.map((e) => {
+  const bundles = directedGraphBundles(scene.edges, (e) => [e.source, e.target]);
+  const edges: Edge[] = [...bundles.values()].map((members) => {
+    const e = members[0];
     const id = edgeId(e);
     const { sourceHandle, targetHandle, orientation } = selectGraphEdgeHandles(
       positions.get(e.source)!,
       positions.get(e.target)!,
     );
-    const group = pairs.get([e.source, e.target].sort().join(":"))!;
+    const reversed = bundles.has(JSON.stringify([e.target, e.source])) && e.source !== e.target;
+    const label = members.length > 1 ? t("wiki.search.edgeCount", { count: members.length }) : edgeName(e);
     return {
       id,
       source: e.source,
@@ -147,17 +157,15 @@ function Canvas({ scene, root, selected, edge, onNode, onEdge }: Props) {
       sourceHandle,
       targetHandle,
       selected: id === edge,
-      label: edgeName(e),
-      ariaLabel: edgeName(e),
+      label,
+      ariaLabel: label,
+      className: members.length > 1 ? "graph-edge-count" : undefined,
       markerEnd: GRAPH_EDGE_MARKER,
-      ...(group.length > 1
+      ...(reversed
         ? {
             type: "parallel",
             data: {
-              parallelOffset:
-                (group.indexOf(e) - (group.length - 1) / 2) *
-                (orientation === "vertical" ? 110 : 42) *
-                (e.source < e.target ? 1 : -1),
+              parallelOffset: orientation === "vertical" ? 44 : 32,
             },
           }
         : {}),
@@ -186,6 +194,7 @@ function Canvas({ scene, root, selected, edge, onNode, onEdge }: Props) {
         nodes={nodes}
         edges={edges}
         fitView={false}
+        overview
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         nodesDraggable={false}
@@ -200,6 +209,9 @@ function Canvas({ scene, root, selected, edge, onNode, onEdge }: Props) {
         }}
       >
         <GraphCanvasControls
+          key={root}
+          selectedId={selected && positions.has(selected) ? selected : null}
+          selectedEdgeId={edges.some((item) => item.id === edge) ? edge : undefined}
           labels={{
             zoomIn: t("wiki.graph.zoomIn"),
             zoomOut: t("wiki.graph.zoomOut"),
@@ -215,7 +227,7 @@ function Canvas({ scene, root, selected, edge, onNode, onEdge }: Props) {
 export function WikiScene(props: Props) {
   return (
     <GraphCanvasProvider>
-      <Canvas {...props} />
+      <Canvas key={props.root} {...props} />
     </GraphCanvasProvider>
   );
 }

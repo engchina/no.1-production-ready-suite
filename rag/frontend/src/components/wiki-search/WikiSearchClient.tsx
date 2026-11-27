@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { MessagesSquare, Search, ListRestart, SlidersHorizontal } from "lucide-react";
@@ -92,6 +92,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
   const [state, setState] = useState(() => readWorkspace("wiki.search", initial, isSearch, knowledgeBaseId));
   const [criteria, setCriteria] = useState(false);
   const [run, setRun] = useState(0);
+  const resultsRef = useRef<HTMLDivElement>(null);
   const profiles = useAllSearchAnswerProfiles({ status: "ACTIVE" }, manual);
   const profileId = state.profileId;
   const appliedMethod = state.appliedMethod ?? state.method;
@@ -122,6 +123,15 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
   useEffect(() => {
     writeWorkspace("wiki.search", state, knowledgeBaseId);
   }, [state, knowledgeBaseId]);
+  useEffect(() => {
+    // 検索を実行したときだけ、画面下に隠れた経過時間または結果の見出しへ移動する。
+    const region = resultsRef.current;
+    if (!run || !region) return;
+    const target = region.querySelector('[role="timer"]') ?? region.querySelector("h2");
+    if (target && target.getBoundingClientRect().bottom > window.innerHeight) {
+      region.scrollIntoView({ block: "start", inline: "nearest" });
+    }
+  }, [run]);
   const patch = (next: Partial<SearchState>) => setState((s) => ({ ...s, ...next }));
   const search = () => {
     if (!scope.id || isSearching || (manual && (!available.isSuccess || !state.query.trim()))) return;
@@ -268,7 +278,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
       {noKbs ? (
         <EmptyState title={t("wiki.search.noScope")} />
       ) : scope.id && (!manual || (available.isSuccess && !!state.submitted)) ? (
-        <>
+        <div ref={resultsRef} className="space-y-4 scroll-mt-24">
           <WikiExplorer
             key={JSON.stringify([scope, run, state.submitted, appliedMethod])}
             scope={scope}
@@ -324,7 +334,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
               />
             </div>
           )}
-        </>
+        </div>
       ) : (
         manual && !profiles.isPending && !profiles.isError && !scopePending && !available.isError && (
           <Card>
