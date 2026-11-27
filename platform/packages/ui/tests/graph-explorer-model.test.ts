@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { firstGraphNode, nearestGraphNodeInDirection, seedGraphPositions, wrapGraphLabel } from "../src/lib/graph-explorer-model";
+import {
+  GRAPH_EDGE_LABELS_ALWAYS_MAX,
+  GRAPH_NAME_STEPS,
+  firstGraphNode,
+  graphEdgeElasticity,
+  graphNameStep,
+  nearestGraphNodeInDirection,
+  seedGraphPositions,
+  wrapGraphLabel,
+} from "../src/lib/graph-explorer-model";
 
 describe("wrapGraphLabel", () => {
   it("wraps at word gaps into at most two lines and ends the overflow with an ellipsis", () => {
@@ -43,5 +52,36 @@ describe("seedGraphPositions", () => {
     expect(Math.hypot(a.x, a.y)).toBeCloseTo(120, 5);
     expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(40);
     expect(seeds.get("orphan")!.x).toBeGreaterThan(0);
+  });
+});
+
+describe("graphEdgeElasticity", () => {
+  it("keeps the default spring for graphs with no more edges than nodes", () => {
+    expect(graphEdgeElasticity(25, 6)).toBe(0.45);
+    expect(graphEdgeElasticity(25, 25)).toBe(0.45);
+    expect(graphEdgeElasticity(0, 0)).toBe(0.45);
+  });
+
+  it("weakens the spring as the edge density grows so that nodes and names keep their distance", () => {
+    // 合成の 25 節点で、名前を含む節点どうしが重ならなくなった強さ（56 本: 0.2 未満、448 本: 0.006 前後）。
+    expect(graphEdgeElasticity(25, 56)).toBeLessThan(0.2);
+    expect(graphEdgeElasticity(25, 448)).toBeCloseTo(0.006, 3);
+    expect(graphEdgeElasticity(25, 448)).toBeLessThan(graphEdgeElasticity(25, 224));
+  });
+});
+
+describe("GRAPH_EDGE_LABELS_ALWAYS_MAX", () => {
+  it("is a count of labelled edges on screen, well below a dense document graph", () => {
+    expect(GRAPH_EDGE_LABELS_ALWAYS_MAX).toBeGreaterThanOrEqual(24);
+    expect(GRAPH_EDGE_LABELS_ALWAYS_MAX).toBeLessThan(448);
+  });
+});
+
+describe("graphNameStep", () => {
+  it("keeps the base size while readable, enlarges per step, and hides below the last step", () => {
+    expect(graphNameStep(0.8)).toBe(-1);
+    expect(graphNameStep(0.6)).toBe(0);
+    expect(graphNameStep(0.43)).toBe(1);
+    expect(graphNameStep(0.41)).toBe(GRAPH_NAME_STEPS.length);
   });
 });

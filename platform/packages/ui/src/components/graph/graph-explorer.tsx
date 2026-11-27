@@ -17,8 +17,20 @@ import { ChevronRight, Focus, Maximize2, Minus, Plus, RotateCcw, Undo2 } from "l
 
 import { cn } from "../../lib/utils";
 import { isImeComposing } from "../../lib/keyboard";
-import { firstGraphNode, nearestGraphNodeInDirection, seedGraphPositions, wrapGraphLabel, type GraphDirection } from "../../lib/graph-explorer-model";
-import { GRAPH_OVERVIEW_MIN_ZOOM, graphReadableViewport, type GraphViewport } from "../../lib/graph-viewport";
+import {
+  GRAPH_EDGE_LABELS_ALWAYS_MAX,
+  GRAPH_NAME_MIN_PX,
+  GRAPH_NAME_STEPS,
+  GRAPH_NODE_FONT_SIZE,
+  firstGraphNode,
+  graphNameStep,
+  graphEdgeElasticity,
+  nearestGraphNodeInDirection,
+  seedGraphPositions,
+  wrapGraphLabel,
+  type GraphDirection,
+} from "../../lib/graph-explorer-model";
+import { GRAPH_OVERVIEW_MIN_ZOOM, GRAPH_READABLE_MIN_ZOOM, graphReadableViewport, type GraphViewport } from "../../lib/graph-viewport";
 import { Button } from "../ui/button";
 import { GraphLegend, GraphLegendSwatch } from "./graph-legend";
 
@@ -115,6 +127,7 @@ export interface GraphExplorerLabels {
 export interface GraphExplorerHandle {
   /** ノードを選び、画面に入っていなければ中心へ動かす（縮尺は読める大きさ以上）。 */
   focusNode: (id: string) => void;
+  /** 図の全体を画布に収める。 */
   fit: () => void;
 }
 
@@ -188,10 +201,20 @@ function resolveColors(host: HTMLElement, kinds: readonly GraphExplorerNodeKind[
   return colors;
 }
 
+/** 節点の名前と辺の種類の文字の大きさ（図の座標の px）と、画面上でこれを切ったら文字を隠す大きさ（px）。 */
+const NODE_FONT_SIZE = GRAPH_NODE_FONT_SIZE;
+const EDGE_FONT_SIZE = 11;
+const LABEL_MIN_PX = 7;
+const NAME_STEP_CLASSES = GRAPH_NAME_STEPS.map((_, index) => `name-step-${index}`).join(" ");
+
 /**
  * 画布の見た目（C 案）。中くらいの円、名前は円の下に 2 行まで（座標の 13px。読める縮尺の下限 0.8 で 10px 前後）。
  * 種類 = 塗りと大きさ、選択 = 太い枠、検索の一致 = 外側の輪。関係は矢印つきで、`dashed` の種類は点線、
- * `labelled` の種類だけ線の上に種類の文字を出す。
+ * `labelled` の種類だけ線の上に種類の文字を出す。文字は水平で、画布の背景色の下地を持つ（辺に沿って回すと
+ * 密なところで重なって読めない）。全体を収めて縮んだときに画面上で 7px を切る辺の文字（縮尺 0.64 未満）は
+ * `unreadable` で隠す（Cytoscape の `min-zoomed-font-size` は 2 の冪の段と画素密度で丸めるので使わない）。節点の
+ * 名前は縮尺 0.42 まで画面上で約 9px を保ち（`name-step-*`）、0.42 未満で隠す。隠すときは文字を消さずに透明にする（名前を含む範囲が変わると、全体を収める縮尺が押す
+ * たびに変わる）。
  */
 export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly GraphExplorerNodeKind[], edgeKinds: readonly GraphExplorerEdgeKind[]): StylesheetJson {
   return [
@@ -204,7 +227,7 @@ export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly G
         "border-width": 2,
         "border-color": colors.line,
         label: "data(display)",
-        "font-size": 13,
+        "font-size": NODE_FONT_SIZE,
         "font-weight": 500,
         "font-family": colors.font,
         "line-height": 1.2,
@@ -217,7 +240,6 @@ export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly G
         "text-background-color": colors.surface,
         "text-background-opacity": 0.85,
         "text-background-padding": "1px",
-        "min-zoomed-font-size": 7,
         "overlay-opacity": 0,
       },
     },
@@ -246,14 +268,12 @@ export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly G
         "arrow-scale": 1.1,
         "curve-style": "bezier",
         label: "data(text)",
-        "font-size": 11,
+        "font-size": EDGE_FONT_SIZE,
         "font-family": colors.font,
         color: colors.fgMuted,
-        "text-rotation": "autorotate",
         "text-background-color": colors.surface,
         "text-background-opacity": 1,
         "text-background-padding": "2px",
-        "min-zoomed-font-size": 8,
         "overlay-opacity": 0,
       },
     },
@@ -263,24 +283,42 @@ export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly G
     })),
     { selector: "edge[?strong]", style: { width: 2.5 } },
     { selector: "edge:selected", style: { "line-color": colors.accent, "target-arrow-color": colors.accent, width: 3.5, color: colors.fg } },
+    // 文字つきの辺が多い図で、選んだ・ホバーした節点につながらない辺（太い線にせず、薄くして、文字を出さない）。
+    { selector: "edge.quiet", style: { width: 1.5, opacity: 0.5, "text-opacity": 0, "text-background-opacity": 0 } },
+    ...GRAPH_NAME_STEPS.map((lower, index) => {
+      const size = GRAPH_NAME_MIN_PX / lower;
+      return { selector: `node.name-step-${index}`, style: { "font-size": size, "text-margin-y": (5 * size) / NODE_FONT_SIZE, "text-max-width": `${(400 * size) / NODE_FONT_SIZE}px` } };
+    }),
+    { selector: ".unreadable", style: { "text-opacity": 0, "text-background-opacity": 0 } },
     { selector: ".faded", style: { opacity: 0.2 } },
     { selector: ".hidden", style: { display: "none" } },
   ] as StylesheetJson;
 }
 
-/** fcose の配置（名前の大きさを含めて重ならない間隔。C 案の検証の値）。 */
-const LAYOUT_BASE = {
-  name: "fcose",
-  animate: false,
-  quality: "proof",
-  nodeDimensionsIncludeLabels: true,
-  idealEdgeLength: 100,
-  nodeRepulsion: 11000,
-  nodeSeparation: 85,
-  packComponents: true,
-  padding: 24,
-  fit: false,
-} as const;
+/**
+ * fcose の配置（名前の大きさを含めて重ならない間隔。C 案の検証の値）。辺の数が節点の数に対して多い図は、
+ * ばねを `graphEdgeElasticity` で弱め、節点と名前が重ならない間隔を保つ（広がった分は全体を収める表示で縮めて見せる）。
+ * `gravityRange` は、つながっていないまとまりを中心へ寄せる重力が効き始める距離（fcose の既定は 3.8）。既定では
+ * まとまりの間が大きく空き、全体を収めると名前が読めない縮尺になるので、最初からの配置では名前が重ならない範囲で
+ * 寄せる（#5953）。足したノードだけの配置（`fixed`）では既定のままにする（動かせない既存のノードに重ねない）。
+ */
+function layoutOptions(cy: Core, fixed?: { nodeId: string; position: { x: number; y: number } }[]): LayoutOptions {
+  const base = {
+    name: "fcose",
+    animate: false,
+    quality: "proof",
+    nodeDimensionsIncludeLabels: true,
+    idealEdgeLength: 100,
+    edgeElasticity: graphEdgeElasticity(cy.nodes().length, cy.edges().length),
+    nodeRepulsion: 11000,
+    nodeSeparation: 85,
+    packComponents: true,
+    padding: 24,
+    fit: false,
+  };
+  const options = fixed ? { ...base, randomize: false, fixedNodeConstraint: fixed } : { ...base, randomize: true, gravityRange: 0.8 };
+  return options as LayoutOptions;
+}
 
 interface MenuState {
   id: string;
@@ -294,7 +332,8 @@ interface MenuState {
  * 力の配置と、展開しても既存のノードを動かさない差分の配置、クリックで選択（詳細は製品が右に出す）、
  * ダブルクリックと Enter で隣接を展開、種類ごとの塗りと件数つきの凡例（画布の外の上。押すとその種類を選ぶ）、
  * 関係の種類の絞り込み（画布の外の上）、ドラッグ（辺が追従）、Shift＋ドラッグの範囲選択と Shift / Ctrl の
- * クリックの複数選択、右クリック（と ContextMenu・Shift＋F10）のメニュー、全体表示（読める縮尺が下限）。
+ * クリックの複数選択、右クリック（と ContextMenu・Shift＋F10）のメニュー、全体表示（図の全体を画布に収める。#5953）。
+ * 文字つきの辺が多い図は、選んだ・ホバーした節点につながる辺だけ文字を出し、ほかを薄くする（Bloom の選択の強調）。
  * canvas の描画は読み上げに出ないので、製品は同じ内容の一覧の表示を別に持つ。
  */
 export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>(function GraphExplorer({
@@ -321,6 +360,10 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
   const hintId = useId();
   const host = useRef<HTMLDivElement>(null);
   const focusTarget = useRef<HTMLDivElement>(null);
+  const controls = useRef<HTMLDivElement>(null);
+  const hovered = useRef<string | null>(null);
+  /** 全体を収めたときの表示。利用者が動かすまでは、画布の大きさが変わったとき・ノードを足したときに収め直す。 */
+  const allFitted = useRef<GraphViewport | null>(null);
   const cyRef = useRef<Core | null>(null);
   const laidOut = useRef<string | null>(null);
   const syncingSelection = useRef(false);
@@ -349,20 +392,82 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     return [kind, node.title ?? node.label, state].filter(Boolean).join("、");
   }, []);
 
-  const readableFit = useCallback((ids?: readonly string[], maxZoom = 1) => {
+  /**
+   * 範囲を画布に合わせる。`ids` を省くと図の全体。縮尺の下限の既定は読める縮尺（選択に合わせる・展開の後）。
+   * 余白は、画布に重ねた操作の行（広い画面は上、狭い画面は下）の分を空ける。
+   */
+  const fitTo = useCallback((ids?: readonly string[], maxZoom = 1, minZoom = GRAPH_READABLE_MIN_ZOOM) => {
     const cy = cyRef.current;
     if (!cy || !cy.width() || !cy.height()) return;
     const visible = cy.elements().not(".hidden");
     const target = ids ? visible.filter((element) => ids.includes(element.id())) : visible;
     if (!target.length) return;
     const box = target.boundingBox({ includeLabels: true });
+    const padding = { top: 32, right: 32, bottom: 32, left: 32 };
+    const bar = controls.current;
+    if (bar && bar.offsetTop < cy.height() / 2) padding.top = bar.offsetTop + bar.offsetHeight + 8;
+    else if (bar) padding.bottom = cy.height() - bar.offsetTop + 8;
     const viewport = graphReadableViewport({
       bounds: { x: box.x1, y: box.y1, width: box.w, height: box.h },
       frame: { width: cy.width(), height: cy.height() },
-      padding: 32,
+      padding,
+      minZoom,
       maxZoom,
     });
     cy.viewport({ zoom: viewport.zoom, pan: { x: viewport.x, y: viewport.y } });
+  }, []);
+  /** 図の全体を画布に収める（初期表示・全体表示・自動配置に戻す。下限は手で縮める下限。#5953）。 */
+  const fitAll = useCallback(() => {
+    fitTo(undefined, 1, GRAPH_OVERVIEW_MIN_ZOOM);
+    // 名前の大きさが縮尺の段で変わるので、変わった後の範囲でもう一度収める。
+    fitTo(undefined, 1, GRAPH_OVERVIEW_MIN_ZOOM);
+    const cy = cyRef.current;
+    allFitted.current = cy ? { ...cy.pan(), zoom: cy.zoom() } : null;
+  }, [fitTo]);
+  /** 全体を収めたまま（利用者が動かしていない）か。 */
+  const stillFitted = useCallback(() => {
+    const cy = cyRef.current;
+    const last = allFitted.current;
+    return Boolean(cy && last && last.zoom === cy.zoom() && last.x === cy.pan().x && last.y === cy.pan().y);
+  }, []);
+
+  /**
+   * 強調と文字の出し方を付け直す。文字つきの辺が多い図は、選んだ・ホバーした節点につながる辺だけ文字を出し、
+   * ほかを薄くする。少ない図は今までどおりすべての辺に文字を出し、ホバーした節点の隣接以外だけを薄くする。
+   * 画面上で読めない大きさ（7px 未満）になる辺の文字と、縮尺 0.42 未満の節点の名前は隠す。
+   */
+  const emphasize = useCallback(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    const zoom = cy.zoom();
+    const edges = cy.edges().not(".hidden");
+    const dense = edges.filter("[?text]").length > GRAPH_EDGE_LABELS_ALWAYS_MAX;
+    const hover = hovered.current ? cy.getElementById(hovered.current) : cy.collection();
+    const origin = hover.length ? hover : dense ? cy.elements(":selected") : cy.collection();
+    const lit = origin.union(origin.nodes().connectedEdges().not(".hidden"));
+    cy.batch(() => {
+      cy.elements().removeClass(`faded quiet unreadable ${NAME_STEP_CLASSES}`);
+      const step = graphNameStep(zoom);
+      if (step >= GRAPH_NAME_STEPS.length) cy.nodes().addClass("unreadable");
+      else if (step >= 0) cy.nodes().addClass(`name-step-${step}`);
+      if (origin.length) cy.elements().not(lit.union(lit.edges().connectedNodes())).addClass("faded");
+      if (dense) edges.not(lit).addClass("quiet");
+      if (zoom * EDGE_FONT_SIZE < LABEL_MIN_PX) cy.edges().addClass("unreadable");
+    });
+    if (focusTarget.current) focusTarget.current.dataset.graphEdgeLabels = dense ? "focus" : "all";
+  }, []);
+
+  /** 描いた数・縮尺・図の全体が画布に収まっているかを属性に出す（検査と診断用。canvas の中は DOM から読めない）。 */
+  const report = useCallback(() => {
+    const cy = cyRef.current;
+    const target = focusTarget.current;
+    if (!cy || !target) return;
+    const shown = cy.elements().not(".hidden");
+    const box = shown.renderedBoundingBox({ includeLabels: true });
+    target.dataset.graphZoom = cy.zoom().toFixed(3);
+    target.dataset.graphNodes = String(shown.nodes().length);
+    target.dataset.graphEdges = String(shown.edges().length);
+    target.dataset.graphContained = String(shown.length > 0 && box.x1 >= 0 && box.y1 >= 0 && box.x2 <= cy.width() && box.y2 <= cy.height());
   }, []);
 
   const remember = useCallback(() => {
@@ -382,7 +487,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     const p = node.renderedPosition();
     if (p.x >= 32 && p.y >= 32 && p.x <= cy.width() - 32 && p.y <= cy.height() - 32) return;
     remember();
-    cy.zoom(Math.max(cy.zoom(), 0.8));
+    cy.zoom(Math.max(cy.zoom(), GRAPH_READABLE_MIN_ZOOM));
     cy.center(node);
   }, [remember]);
 
@@ -397,8 +502,8 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
 
   useImperativeHandle(ref, () => ({
     focusNode: (id: string) => { selectOnly(id); centerOn(id); },
-    fit: () => { remember(); readableFit(); },
-  }), [centerOn, readableFit, remember, selectOnly]);
+    fit: () => { remember(); fitAll(); },
+  }), [centerOn, fitAll, remember, selectOnly]);
 
   // 画布を作る（1 度だけ）。
   useEffect(() => {
@@ -425,6 +530,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
         if (!alive) return;
         const ids = cy.elements(":selected").map((element) => element.id());
         setSelection(ids);
+        emphasize();
         latest.current.onSelectionChange?.(ids);
       });
     };
@@ -446,29 +552,34 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     });
     cy.on("mouseover", "node", (event) => {
       const node = event.target as NodeSingular;
-      cy.elements().not(node.closedNeighborhood()).addClass("faded");
+      hovered.current = node.id();
+      emphasize();
       const item = latest.current.nodeById.get(node.id());
       const p = node.renderedPosition();
       if (item) setHover({ text: item.title ?? item.label, x: p.x, y: p.y + node.renderedOuterHeight() / 2 + 4 });
     });
-    cy.on("mouseout", "node", () => { cy.elements().removeClass("faded"); setHover(null); });
+    cy.on("mouseout", "node", () => { hovered.current = null; emphasize(); setHover(null); });
     cy.on("pan zoom drag", () => { setMenu(null); setHover(null); });
-    // 描いた数と縮尺を属性に出す（検査と診断用。canvas の中は DOM から読めない）。
-    const report = () => {
-      const target = focusTarget.current;
-      if (!target) return;
-      target.dataset.graphZoom = cy.zoom().toFixed(3);
-      target.dataset.graphNodes = String(cy.nodes().not(".hidden").length);
-      target.dataset.graphEdges = String(cy.edges().not(".hidden").length);
-    };
-    cy.on("zoom add remove", report);
-    cy.on("layoutstop", report);
+    // 文字を出す・隠すの境の縮尺をまたいだときだけ、文字の出し方を付け直す。
+    let textScale = "";
+    cy.on("zoom", () => {
+      const next = `${cy.zoom() * EDGE_FONT_SIZE < LABEL_MIN_PX}:${graphNameStep(cy.zoom())}`;
+      if (next === textScale) return;
+      textScale = next;
+      emphasize();
+    });
+    // 全体を収めたまま（利用者が動かしていない）なら、画布の大きさが変わったときに収め直す（隠れていた画布が
+    // 見えたとき・全画面・詳細の開閉）。
+    cy.on("resize", () => { if (stillFitted()) fitAll(); });
+    // 要素の増減は、反映の effect の終わりで出す（追加の batch の中で範囲を測ると、名前の大きさが決まる前の
+    // 範囲が cache に残り、最初の配置が名前を含まない大きさで計算される）。
+    cy.on("viewport layoutstop", report);
     return () => {
       alive = false;
       cy.destroy();
       cyRef.current = null;
     };
-  }, [describe]);
+  }, [describe, emphasize, fitAll, report, stillFitted]);
 
   // テーマ（ライト・ダーク・OS 追従）が変わったら色を解き直す。
   useEffect(() => {
@@ -525,14 +636,19 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     }
     if (fresh || existing.size === 0) {
       laidOut.current = layoutKey;
-      cy.layout({ ...LAYOUT_BASE, randomize: true } as LayoutOptions).run();
+      cy.layout(layoutOptions(cy)).run();
       setHistory([]);
-      readableFit();
+      fitAll();
       return;
     }
     if (!added.length) return;
     const fixed = [...existing].map(([nodeId, position]) => ({ nodeId, position }));
-    cy.layout({ ...LAYOUT_BASE, randomize: false, fixedNodeConstraint: fixed } as LayoutOptions).run();
+    cy.layout(layoutOptions(cy, fixed)).run();
+    // 全体を収めたまま（利用者が動かしていない）なら、足した後も全体を収める（足したノードを画面の外に出さない）。
+    if (stillFitted()) {
+      fitAll();
+      return;
+    }
     // 足したノードが画面の外なら、足したノードとつながる既存のノードに合わせる（縮尺は読める大きさ以上）。
     // 名前を含む範囲が画布の端（上は右上の操作の分）に掛かるものも外とみなす。
     const outside = added.some((id) => {
@@ -544,10 +660,10 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
       const anchors = drawn.flatMap((edge) => addedSet.has(edge.source) && existing.has(edge.target) ? [edge.target]
         : addedSet.has(edge.target) && existing.has(edge.source) ? [edge.source] : []);
       remember();
-      // 展開では拡大しない（今の縮尺を上限にして、足したノードが入るように動かす）。
-      readableFit([...added, ...anchors], Math.max(cy.zoom(), 0.8));
+      // 展開では拡大しない（今の縮尺を上限にして、足したノードが入るように動かす。読める縮尺より縮めない）。
+      fitTo([...added, ...anchors], cy.zoom(), Math.min(cy.zoom(), GRAPH_READABLE_MIN_ZOOM));
     }
-  }, [nodes, edges, edgeKinds, layoutKey, nodeById, readableFit, remember]);
+  }, [nodes, edges, edgeKinds, layoutKey, nodeById, fitAll, fitTo, remember, stillFitted]);
 
   // 関係の種類の絞り込み。
   useEffect(() => {
@@ -556,7 +672,10 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     cy.batch(() => {
       cy.edges().forEach((edge) => { edge.toggleClass("hidden", hiddenEdgeKinds.has(edge.data("kind"))); });
     });
-  }, [hiddenEdgeKinds, nodes, edges]);
+    // 見えている辺の数で、辺の文字の出し方（すべて / 選んだ節点の辺だけ）が変わる。
+    emphasize();
+    report();
+  }, [hiddenEdgeKinds, nodes, edges, emphasize, report]);
 
   // 選択を外から合わせる（一覧・詳細から選んだとき）。
   useEffect(() => {
@@ -570,7 +689,8 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     for (const id of wanted) cy.getElementById(id).select();
     syncingSelection.current = false;
     setSelection([...wanted].filter((id) => cy.getElementById(id).length));
-  }, [selectedIds, nodes, edges]);
+    emphasize();
+  }, [selectedIds, nodes, edges, emphasize]);
 
   useEffect(() => {
     if (menu) menuRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus();
@@ -632,8 +752,8 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     const cy = cyRef.current;
     if (!cy || !cy.nodes().length) return;
     remember();
-    cy.layout({ ...LAYOUT_BASE, randomize: true } as LayoutOptions).run();
-    readableFit();
+    cy.layout(layoutOptions(cy)).run();
+    fitAll();
   }
 
   function previous() {
@@ -742,12 +862,12 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
         <p id={hintId} className="sr-only">{labels.keyboardHint}</p>
         <span className="sr-only" aria-live="polite" data-testid={testId ? `${testId}-announcement` : undefined}>{announcement}</span>
         {/* 狭い画面は画布の下に 1 行で置き、名前を隠さない。 */}
-        <div className="absolute right-3 top-3 z-10 flex max-w-[calc(100%-1.5rem)] items-center gap-1 overflow-x-auto rounded-md border border-border bg-surface p-1 shadow-sm max-sm:bottom-3 max-sm:top-auto">
+        <div ref={controls} className="absolute right-3 top-3 z-10 flex max-w-[calc(100%-1.5rem)] items-center gap-1 overflow-x-auto rounded-md border border-border bg-surface p-1 shadow-sm max-sm:bottom-3 max-sm:top-auto">
           <Button type="button" size="sm" variant="ghost" iconOnly icon={Plus} aria-label={labels.zoomIn} onClick={() => zoomBy(1.2)} />
           <Button type="button" size="sm" variant="ghost" iconOnly icon={Minus} aria-label={labels.zoomOut} onClick={() => zoomBy(1 / 1.2)} />
-          <Button type="button" size="sm" variant="ghost" iconOnly icon={Maximize2} aria-label={labels.fit} onClick={() => { remember(); readableFit(); }} />
+          <Button type="button" size="sm" variant="ghost" iconOnly icon={Maximize2} aria-label={labels.fit} onClick={() => { remember(); fitAll(); }} />
           <Button type="button" size="sm" variant="ghost" iconOnly icon={Focus} aria-label={labels.focus} disabled={!selectedNodes.length}
-            onClick={() => { remember(); readableFit(selectedNodes); }} />
+            onClick={() => { remember(); fitTo(selectedNodes); }} />
           <Button type="button" size="sm" variant="ghost" iconOnly icon={Undo2} aria-label={labels.previous} disabled={!history.length} onClick={previous} />
           <Button type="button" size="sm" variant="ghost" iconOnly icon={RotateCcw} aria-label={labels.relayout} disabled={!nodes.length} onClick={relayout} />
         </div>

@@ -118,3 +118,39 @@ export function wrapGraphLabel(text: string, perLine = 9, maxLines = 2): string 
   }
   return lines.join("\n");
 }
+
+/**
+ * 何も選ばなくてもすべての辺に種類の文字を出す上限（画面上の文字つきの辺の数）。これを超える図は、選んだ・
+ * ホバーした節点につながる辺だけ文字を出し、ほかを薄くする（Neo4j Bloom の選択の強調。#5953）。全体を収めた
+ * 画布（約 700×560px）に、種類の文字（約 30×15px）を辺や節点の名前と重ねずに置ける数の目安で、図の内容・
+ * 関係の種類には合わせない。
+ */
+export const GRAPH_EDGE_LABELS_ALWAYS_MAX = 40;
+
+/**
+ * 配置のばねの強さ（fcose の `edgeElasticity`。既定は 0.45）。辺の数が節点の数を超える図は、ばねの力が斥力に
+ * 勝って節点と名前が重なるので、密度（辺の数 ÷ 節点の数）の 1.5 乗で弱める。辺の数が節点の数までの図は既定の
+ * まま（今までの配置）。合成の 25 節点で辺 56・112・224・448 本の図を配置し、名前を含む節点どうしが重ならなく
+ * なる強さ（0.09・0.05・0.02・0.006）に合わせた（#5953）。
+ */
+export function graphEdgeElasticity(nodeCount: number, edgeCount: number): number {
+  const density = nodeCount > 0 ? Math.max(1, edgeCount / nodeCount) : 1;
+  return 0.45 / density ** 1.5;
+}
+
+/** 節点の名前の大きさ（座標）。 */
+export const GRAPH_NODE_FONT_SIZE = 13;
+/** 縮んだ図で、名前を画面上でこれより小さくしない（px）。 */
+export const GRAPH_NAME_MIN_PX = 9;
+/**
+ * 名前を大きくする縮尺の段（下限の降順）。段の中では名前を「下限の縮尺で `GRAPH_NAME_MIN_PX`」の大きさにする。
+ * 配置は 13px の名前に合わせた間隔なので、最後の値より縮むと名前どうしが重なって読めない。そこからは隠す（#5953）。
+ */
+export const GRAPH_NAME_STEPS = [0.55, 0.42];
+
+/** 縮尺 → 名前の段。-1 = 元の大きさのまま、`GRAPH_NAME_STEPS.length` = 名前を隠す。 */
+export function graphNameStep(zoom: number): number {
+  if (zoom * GRAPH_NODE_FONT_SIZE >= GRAPH_NAME_MIN_PX) return -1;
+  const index = GRAPH_NAME_STEPS.findIndex((lower) => zoom >= lower);
+  return index < 0 ? GRAPH_NAME_STEPS.length : index;
+}

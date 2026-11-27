@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { WIKI_GRAPH_SETTINGS } from "./wiki-graph-settings";
 import {
@@ -13,16 +13,19 @@ import {
   removeWikiNodes,
   replaceWikiGraph,
   showNeighbors,
+  unitsToConnect,
   type WikiGraphEdge,
   type WikiGraphNode,
   type WikiGraphState,
 } from "./wiki-graph-model";
-import { loadNeighbors, documentLinks, treeNode } from "./wiki-graph-loaders";
-import { wikiApi, type WikiScope } from "./wiki-api";
+import { connectionEdges, documentLinks, fetchDocumentNeighbors, loadNeighbors, treeNode } from "./wiki-graph-loaders";
+import { WIKI_CONNECTIONS_LIMIT, wikiApi, type WikiScope } from "./wiki-api";
 
 /**
  * Wiki の図の状態と操作（展開・折りたたみ・外す・残す・つなぐ・置き換え・足す・位置合わせ）。
  * 読み込みの失敗は `failure` に置き、画面が同じ場所で再試行を出す。
+ * 原文を足したら（検索の結果・図内検索の当たり・展開・詳細から足す）、図にある原文の間の関係を 1 回照会して
+ * 線を足す（Neo4j Browser の「Connect result nodes」。#5953）。
  */
 export function useWikiGraph(scope: WikiScope) {
   const client = useQueryClient();
@@ -76,6 +79,24 @@ export function useWikiGraph(scope: WikiScope) {
     update((old) => addToWikiGraph(old, nodes, edges, { matched })), [update]);
   const clear = useCallback(() => update((old) => replaceWikiGraph(old, [], [])), [update]);
 
+  /**
+   * 原文の当たり（検索の結果・図内検索）を図に出す。当たりと図にある原文の間の関係を先に 1 回照会し、節点と線を
+   * 一緒に出す（配置が線を考慮できる）。照会に失敗しても節点は出し、失敗は再試行に出す。
+   */
+  const place = useCallback(async (nodes: readonly WikiGraphNode[], mode: "replace" | "add", matched: readonly string[] = []) => {
+    const base = mode === "replace" ? emptyWikiGraph() : current.current;
+    const ids = unitsToConnect(base, WIKI_CONNECTIONS_LIMIT, nodes.filter((node) => node.kind === "unit").map((node) => node.id));
+    let edges: WikiGraphEdge[] = [];
+    let failed: { error: unknown } | null = null;
+    try {
+      if (ids.length) edges = connectionEdges((await wikiApi.connections(scope, ids)).connections);
+    } catch (error) {
+      failed = { error };
+    }
+    update((old) => addToWikiGraph(mode === "replace" ? replaceWikiGraph(old, [], []) : old, nodes, edges, { matched, linked: failed ? [] : ids }));
+    if (failed) throw failed.error;
+  }, [scope, update]);
+
   /** 選んだノードの間の関係を足す（単位は同じ文書の依存と別の文書への参照、文書は文書の間の参照）。 */
   const connect = useCallback((ids: readonly string[]) => {
     const nodes = ids.map((id) => current.current.nodes.get(id)).filter((node): node is WikiGraphNode => Boolean(node));
@@ -85,9 +106,7 @@ export function useWikiGraph(scope: WikiScope) {
       const edges: WikiGraphEdge[] = [];
       if (units.length > 1) {
         const found = await wikiApi.connections(scope, units);
-        edges.push(...found.connections.map((link) => ({
-          id: edgeKey(link.source_id, link.relation, link.target_id), source: link.source_id, target: link.target_id, kind: link.relation, scope: link.scope,
-        })));
+        edges.push(...connectionEdges(found.connections));
       }
       const wanted = new Set(documents);
       for (const id of documents.slice(0, WIKI_GRAPH_SETTINGS.sampleDocuments)) {
@@ -104,6 +123,8 @@ export function useWikiGraph(scope: WikiScope) {
     const edges: WikiGraphEdge[] = [];
     if (!current.current.nodes.has(unit.document_id)) {
       nodes.push({ id: unit.document_id, kind: "document", label: unit.document_name, document_id: unit.document_id, document_name: unit.document_name });
+      // 足した文書と、図にある文書の間の参照も引く（相手が図に無い線は描かれない）。
+      edges.push(...documentLinks(await fetchDocumentNeighbors(client, scope, unit.document_id)));
     }
     const { path } = await wikiApi.locate(scope, unit.document_id, unit.id);
     let parent = unit.document_id;
@@ -117,7 +138,19 @@ export function useWikiGraph(scope: WikiScope) {
       parent = step.id;
     }
     update((old) => addToWikiGraph(old, nodes, edges));
-  }, [scope, update]);
+  }, [client, scope, update]);
 
-  return { state, pending: pending > 0, failure, run, expand, collapse, remove, keep, connect, replace, add, clear, reveal };
+  // 展開・詳細から原文が図に入ったら、図にある原文との間の関係を 1 回照会して線を足す。
+  useEffect(() => {
+    // 最新の状態で判定する（照会済みの印を付けた直後にもう一度呼ばれても、同じ照会を重ねない）。
+    const ids = unitsToConnect(current.current, WIKI_CONNECTIONS_LIMIT);
+    if (!ids.length) return;
+    update((old) => addToWikiGraph(old, [], [], { linked: ids }));
+    void run(async () => {
+      const found = await wikiApi.connections(scope, ids);
+      update((old) => connectWikiGraph(old, connectionEdges(found.connections)));
+    });
+  }, [run, scope, state, update]);
+
+  return { state, pending: pending > 0, failure, run, expand, collapse, remove, keep, connect, replace, add, place, clear, reveal };
 }

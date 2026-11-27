@@ -58,6 +58,8 @@ export interface WikiGraphState {
   /** ノードを足した展開元（折りたたむ対象）。最初の表示・検索で足したノードは持たない。 */
   owners: Map<string, string>;
   matched: Set<string>;
+  /** 図にあるほかの原文との関係を照会した原文（足した原文だけを次に照会する。#5953）。 */
+  linked: Set<string>;
   /** 図を置き換えた回数（配置をやり直す）。 */
   generation: number;
 }
@@ -66,11 +68,14 @@ export const edgeKey = (source: string, kind: string, target: string) => [source
 export const moreId = (owner: string) => `more:${owner}`;
 
 export function emptyWikiGraph(): WikiGraphState {
-  return { nodes: new Map(), edges: new Map(), expansions: new Map(), owners: new Map(), matched: new Set(), generation: 0 };
+  return { nodes: new Map(), edges: new Map(), expansions: new Map(), owners: new Map(), matched: new Set(), linked: new Set(), generation: 0 };
 }
 
 function cloned(state: WikiGraphState): WikiGraphState {
-  return { ...state, nodes: new Map(state.nodes), edges: new Map(state.edges), expansions: new Map(state.expansions), owners: new Map(state.owners), matched: new Set(state.matched) };
+  return {
+    ...state, nodes: new Map(state.nodes), edges: new Map(state.edges), expansions: new Map(state.expansions), owners: new Map(state.owners),
+    matched: new Set(state.matched), linked: new Set(state.linked),
+  };
 }
 
 /** 図を置き換える（Wiki 検索の新しい検索・最初の見本）。 */
@@ -80,12 +85,12 @@ export function replaceWikiGraph(state: WikiGraphState, nodes: readonly WikiGrap
   return addToWikiGraph(next, nodes, edges, { matched });
 }
 
-/** ノードと線を足す（既にあるノードは内容だけ更新し、展開元は変えない）。 */
+/** ノードと線を足す（既にあるノードは内容だけ更新し、展開元は変えない）。`linked` は関係を照会した原文。 */
 export function addToWikiGraph(
   state: WikiGraphState,
   nodes: readonly WikiGraphNode[],
   edges: readonly WikiGraphEdge[],
-  options: { owner?: string; matched?: readonly string[] } = {},
+  options: { owner?: string; matched?: readonly string[]; linked?: readonly string[] } = {},
 ): WikiGraphState {
   const next = cloned(state);
   for (const node of nodes) {
@@ -94,6 +99,7 @@ export function addToWikiGraph(
   }
   for (const edge of edges) next.edges.set(edge.id, edge);
   for (const id of options.matched ?? []) next.matched.add(id);
+  for (const id of options.linked ?? []) next.linked.add(id);
   return next;
 }
 
@@ -184,6 +190,7 @@ export function removeWikiNodes(state: WikiGraphState, ids: readonly string[]): 
     next.nodes.delete(id);
     next.owners.delete(id);
     next.matched.delete(id);
+    next.linked.delete(id);
     next.expansions.delete(id);
   }
   return next;
@@ -193,6 +200,39 @@ export function removeWikiNodes(state: WikiGraphState, ids: readonly string[]): 
 export function keepWikiNodes(state: WikiGraphState, ids: readonly string[]): WikiGraphState {
   const keep = new Set(ids);
   return removeWikiNodes(state, [...state.nodes.keys()].filter((id) => !keep.has(id)));
+}
+
+export interface WikiGraphRow {
+  node: WikiGraphNode;
+  /** 図に出ている関係（両端が図にある線）の数。 */
+  relations: number;
+}
+
+/**
+ * 「一覧」の行（#5953）。いま図にある節点（「さらに展開」の点は含まない）と、図に出ている関係の数を名前の順で返す。
+ * 関係図と同じ集合の別の見方なので、足した・外した節点がそのまま反映される。
+ */
+export function wikiGraphRows(state: WikiGraphState): WikiGraphRow[] {
+  const relations = new Map<string, number>();
+  for (const edge of state.edges.values()) {
+    if (!state.nodes.has(edge.source) || !state.nodes.has(edge.target)) continue;
+    relations.set(edge.source, (relations.get(edge.source) ?? 0) + 1);
+    relations.set(edge.target, (relations.get(edge.target) ?? 0) + 1);
+  }
+  return [...state.nodes.values()]
+    .map((node) => ({ node, relations: relations.get(node.id) ?? 0 }))
+    .sort((a, b) => a.node.label.localeCompare(b.node.label, "ja", { numeric: true }));
+}
+
+/**
+ * 関係を照会する原文（#5953）。`adding`（これから足す原文）と、まだ照会していない図の原文を先頭に、図の原文を
+ * `limit` 件（API の上限）まで返す。新しい原文が無い・原文が合わせて 1 件以下なら空（照会しない）。
+ */
+export function unitsToConnect(state: WikiGraphState, limit: number, adding: readonly string[] = []): string[] {
+  const present = [...state.nodes.values()].filter((node) => node.kind === "unit").map((node) => node.id);
+  const fresh = [...new Set([...adding, ...present.filter((id) => !state.linked.has(id))])];
+  const ids = [...new Set([...fresh, ...present])];
+  return fresh.length && ids.length > 1 ? ids.slice(0, limit) : [];
 }
 
 /** 描く図。両端がある線だけ、まだ出していない隣接は展開元に「さらに展開」の点を付ける。 */

@@ -7,8 +7,9 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
-// Wiki の図（Cytoscape の共有画布。#5922）。画布の中は canvas なので、描いた数と縮尺は画布の属性
-// （data-graph-nodes / data-graph-edges / data-graph-zoom）で、操作はキーボードと一覧・詳細で確かめる。
+// Wiki の図（Cytoscape の共有画布。#5922）。画布の中は canvas なので、描いた数・縮尺・全体が収まっているか・
+// 辺の文字の出し方は画布の属性（data-graph-nodes / data-graph-edges / data-graph-zoom / data-graph-contained /
+// data-graph-edge-labels）で、操作はキーボードと一覧・詳細で確かめる。
 
 const nullIngestion = {
   preprocess_profile: null,
@@ -89,11 +90,30 @@ const docLinks = [
   ...[1, 2, 3, 4, 5].map((n) => ({ source_id: "doc-0", target_id: "doc-" + n, relation: "reference", count: 2 })),
   { source_id: "doc-2", target_id: "doc-3", relation: "prerequisite", count: 1 },
 ];
+// 密な図の合成（配備した環境で測った密度。#5953）: 25 文書・関係 448 本・相異なる文書の組 283・1 組あたり最大 5 本・
+// 種類は参照 409／例外 17／前提 12／続く手順 10。
+function denseDocLinks() {
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < 25; i++) for (let j = i + 1; j < 25; j++) pairs.push([i, j]);
+  const links: { source_id: string; target_id: string; relation: string; count: number }[] = [];
+  // 300 組のうち 283 組を使い、種類の多い組が 1 つの文書に偏らないように散らす。
+  pairs.filter((_, index) => index % 18 !== 17 || index > 17 * 18).slice(0, 283).forEach(([i, j], index) => {
+    const a = "doc-" + i, b = "doc-" + j;
+    const spread = (index * 7) % 283;
+    links.push({ source_id: a, target_id: b, relation: "reference", count: 1 + (index % 4) });
+    if (spread < 126) links.push({ source_id: b, target_id: a, relation: "reference", count: 1 });
+    if (spread < 17) links.push({ source_id: a, target_id: b, relation: "exception", count: 1 });
+    if (spread < 12) links.push({ source_id: a, target_id: b, relation: "prerequisite", count: 1 });
+    if (spread < 10) links.push({ source_id: a, target_id: b, relation: "continuation", count: 1 });
+  });
+  return links;
+}
 function paged<T>(items: T[]) {
   return { items, total: items.length, offset: 0, limit: 50, has_next: false };
 }
-type Controls = { failRelations?: boolean; failSample?: boolean; calls: URL[] };
+type Controls = { failRelations?: boolean; failSample?: boolean; dense?: boolean; calls: URL[] };
 async function data(page: Page, controls: Controls = { calls: [] }) {
+  const links = controls.dense ? denseDocLinks() : docLinks;
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (r) => r.fulfill({ json: ok(paged(profiles)) }));
   await page.route("**/api/chat/conversations**", (r) => r.fulfill({ json: ok(paged([])) }));
@@ -122,16 +142,16 @@ async function data(page: Page, controls: Controls = { calls: [] }) {
     if (end === "document-count") return finish({ total: files.length });
     if (end === "document-graph") {
       if (controls.failSample) return r.fulfill({ status: 503, json: { detail: "一時的な失敗" } });
-      const degree = (id: string) => docLinks.reduce((sum, l) => sum + (l.source_id === id || l.target_id === id ? l.count : 0), 0);
+      const degree = (id: string) => links.reduce((sum, l) => sum + (l.source_id === id || l.target_id === id ? l.count : 0), 0);
       const doc = q.get("document");
       const pool = doc
-        ? files.filter((f) => docLinks.some((l) => (l.source_id === doc && l.target_id === f.id) || (l.target_id === doc && l.source_id === f.id)))
+        ? files.filter((f) => links.some((l) => (l.source_id === doc && l.target_id === f.id) || (l.target_id === doc && l.source_id === f.id)))
         : [...files].sort((a, b) => degree(b.id) - degree(a.id) || a.name.localeCompare(b.name));
       const shown = pool.slice(offset, offset + limit);
       const ids = new Set([...shown.map((f) => f.id), ...(doc ? [doc] : [])]);
       return finish({
         documents: shown.map((f) => ({ ...f, reference_count: degree(f.id) })),
-        links: docLinks.filter((l) => ids.has(l.source_id) && ids.has(l.target_id)),
+        links: links.filter((l) => ids.has(l.source_id) && ids.has(l.target_id)),
         total: pool.length, offset, has_more: offset + limit < pool.length,
       });
     }
@@ -176,6 +196,11 @@ async function data(page: Page, controls: Controls = { calls: [] }) {
 const canvasOf = (page: Page) => page.getByTestId("wiki-graph-canvas");
 const graphCount = (canvas: Locator, what: "nodes" | "edges") => canvas.evaluate((el, key) => Number((el as HTMLElement).dataset[key] ?? 0), what === "nodes" ? "graphNodes" : "graphEdges");
 const graphZoom = (canvas: Locator) => canvas.evaluate((el) => Number((el as HTMLElement).dataset.graphZoom ?? 0));
+/** 図の全体（名前を含む）が画布に収まっているか。 */
+const graphContained = (canvas: Locator) => canvas.evaluate((el) => (el as HTMLElement).dataset.graphContained);
+/** 辺の文字の出し方（all = すべて / focus = 選んだ・ホバーした節点の辺だけ）。 */
+const edgeLabels = (canvas: Locator) => canvas.evaluate((el) => (el as HTMLElement).dataset.graphEdgeLabels);
+const nodeList = (page: Page) => page.getByRole("region", { name: "図にあるノードの一覧" });
 function detail(page: Page, phone: boolean) {
   return phone ? page.getByRole("dialog", { name: "詳細" }) : page.getByRole("complementary", { name: "詳細" });
 }
@@ -197,7 +222,7 @@ async function openKnowledgeBaseGraph(page: Page) {
   return page.getByTestId("wiki-graph-disclosure");
 }
 
-test("Wiki 検索は結果で図を置き換え、結果の間の関係をつなぎ、一覧は共通のページングで 25 件ずつ読む", { tag: "@responsive" }, async ({ page }, info) => {
+test("Wiki 検索は結果で図を置き換え、結果の間の関係をつなぎ、一覧は図のノード、検索結果は 25 件ずつ読む", { tag: "@responsive" }, async ({ page }, info) => {
   const phone = info.project.name === "mobile";
   const control = await data(page);
   await begin(page);
@@ -207,23 +232,36 @@ test("Wiki 検索は結果で図を置き換え、結果の間の関係をつな
   await expect.poll(() => graphCount(canvas, "edges")).toBe(1);
   expect(control.calls.some((u) => u.pathname.endsWith("/connections"))).toBe(true);
   await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("原文 25");
-  // 全体表示は読める縮尺（0.8）を下限にする（#5520・#5908）。
+  // 開いた直後と全体表示で、図の全体が画布に収まる（#5953。手で縮める下限まで縮めてよい）。
+  await expect.poll(() => graphContained(canvas)).toBe("true");
+  await page.getByRole("button", { name: "拡大", exact: true }).click();
+  await page.getByRole("button", { name: "拡大", exact: true }).click();
   await page.getByRole("button", { name: "全体表示", exact: true }).click();
-  await expect.poll(() => graphZoom(canvas)).toBeGreaterThanOrEqual(0.8);
+  await expect.poll(() => graphContained(canvas)).toBe("true");
+  expect(await graphZoom(canvas)).toBeGreaterThanOrEqual(0.1);
   await shot(page, info, "wiki-search-graph");
-  // 関係図と一覧は Tabs（押下のボタンではない）。
+  // 関係図・一覧・検索結果は Tabs（押下のボタンではない）。「一覧」はいま図にあるノード（#5953）。
+  // 狭い画面では種類と所属の文書を名前の下に出すので、名前は先頭で照合する。
   await page.getByRole("tab", { name: "一覧" }).click();
+  await expect(page.getByText("全 25 件")).toBeVisible();
+  await expect(nodeList(page).getByRole("button", { name: /^合成の原文 1(?!\d)/ })).toBeVisible();
+  await shot(page, info, "wiki-search-list");
+  // 「検索結果」はサーバー側のページングの結果（全件数・順位・ナレッジベースの名前）。
+  await page.getByRole("tab", { name: "検索結果" }).click();
   await expect(page.getByText("全 60 件")).toBeVisible();
   const list = page.getByRole("region", { name: "検索結果の一覧" });
   await expect(list.getByRole("button")).toHaveCount(25);
   const pager = page.getByRole("navigation", { name: "検索結果の一覧" });
   await pager.getByRole("button", { name: "次へ", exact: true }).click();
   await expect(list.getByRole("button", { name: /合成の原文 26/ })).toBeVisible();
-  // 新しいページの結果で図を置き換える。
+  // 新しいページの結果で図を置き換え、「一覧」も同じノードになる。
   await page.getByRole("tab", { name: "関係図" }).click();
   await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
   await page.getByRole("tab", { name: "一覧" }).click();
-  await list.getByRole("button", { name: /合成の原文 27/ }).click();
+  await expect(page.getByText("全 25 件")).toBeVisible();
+  await expect(nodeList(page).getByRole("button", { name: /^合成の原文 1(?!\d)/ })).toHaveCount(0);
+  // 行を選ぶと、図と同じノードが選ばれて詳細が出る。
+  await nodeList(page).getByRole("button", { name: /^合成の原文 27/ }).click();
   const panel = detail(page, phone);
   await expect(panel.getByText("照合済みの合成原文 27。")).toBeVisible();
   await panel.getByRole("button", { name: "質問に追加" }).click();
@@ -252,6 +290,9 @@ test("ナレッジベース詳細は参照の多い文書の見本で開き、�
   await expect.poll(() => graphCount(canvas, "edges")).toBe(docLinks.length);
   await expect(area.getByTestId("wiki-graph-node-kinds")).toContainText("文書 25");
   await expect(area.getByText(/参照の多い 25 件の文書/)).toBeVisible();
+  // 開いた直後に図の全体が画布に収まり（desktop・375px。#5953）、辺の少ない図はすべての辺に種類の文字を出す。
+  await expect.poll(() => graphContained(canvas)).toBe("true");
+  expect(await edgeLabels(canvas)).toBe("all");
   await shot(page, info, "kb-sample");
   // Tab で画布に入り、矢印キーで選び、Enter で隣接（構成と参照の相手）を展開する。
   await canvas.focus();
@@ -273,20 +314,72 @@ test("ナレッジベース詳細は参照の多い文書の見本で開き、�
   await expect(area.getByTestId("wiki-graph-selected-count")).toContainText("件を選択");
   // 図内検索はナレッジベース全体をサーバーで検索し、当たった原文を今の図に足して強調する。
   const nodesBefore = await graphCount(canvas, "nodes");
+  // 図を拡大して全体が収まっていない状態から検索する。
+  for (let i = 0; i < 3; i++) await area.getByRole("button", { name: "拡大", exact: true }).click();
+  await expect.poll(() => graphContained(canvas)).toBe("false");
   await page.locator("#wiki-graph-find").fill("合成");
   await expect.poll(() => control.calls.some((u) => u.pathname.endsWith("/search") && u.searchParams.get("method") === "keyword")).toBe(true);
   await expect.poll(() => graphCount(canvas, "nodes")).toBeGreaterThanOrEqual(nodesBefore + 25);
   await expect(page.getByTestId("wiki-graph-find-nav")).toContainText("1 / 25");
+  // 当たりと図にある原文の間の関係は、1 回の照会で引く（#5953。Neo4j Browser の「Connect result nodes」）。
+  const connectionCalls = control.calls.filter((u) => u.pathname.endsWith("/connections"));
+  expect(connectionCalls).toHaveLength(1);
+  expect(connectionCalls[0].searchParams.get("ids")!.split(",")).toEqual(expect.arrayContaining([hash(1), hash(2), hash(25)]));
   // 当たった原文までの段（文書 → 章節）を位置合わせで開く。
   await expect.poll(() => control.calls.some((u) => u.pathname.endsWith("/locate"))).toBe(true);
+  // 足した当たり（と開いた段）は画面の外に出ない（図の全体を収め直す。その前に図を動かしていても）。
+  await expect.poll(() => graphContained(canvas)).toBe("true");
   const panel = detail(page, phone);
   if (phone) await page.getByRole("button", { name: "詳細を開く" }).click();
   await expect(panel.getByText("照合済みの合成原文 1。")).toBeVisible();
   if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
   await shot(page, info, "kb-find");
+  // 「一覧」はいま図にあるノード（文書の見本・展開で足したノード・当たりの原文）で、種類・所属の文書・関係の数を出す。
+  await page.getByRole("tab", { name: "一覧" }).click();
+  const firstHit = nodeList(page).getByRole("row", { name: /合成の原文 1(?!\d)/ });
+  await expect(firstHit).toBeVisible();
+  // 原文 1 は、章節からの構成と、原文 2 との関係（connections）の 2 本。
+  await expect(firstHit.getByRole("cell").last()).toHaveText("2");
+  await expect(firstHit).toContainText(files[0].name);
+  await shot(page, info, "kb-list");
+  await expectNoPageOverflow(page);
+  await page.getByRole("tab", { name: "関係図" }).click();
   await area.getByRole("button", { name: "画面をクリア" }).click();
   await expect.poll(() => graphCount(canvas, "nodes")).toBe(0);
   await expect(area.getByText(/図は空です/)).toBeVisible();
+  // 図を空にすると「一覧」も空になる（同じ集合）。
+  await page.getByRole("tab", { name: "一覧" }).click();
+  await expect(nodeList(page)).toHaveCount(0);
+  await expect(area.getByText(/図は空です/)).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+test("関係の多い図は全体が画布に収まり、辺の文字は選んだノードの辺だけに出し、種類を絞るとその種類の辺だけになる", { tag: "@responsive" }, async ({ page }, info) => {
+  await data(page, { calls: [], dense: true });
+  const area = await openKnowledgeBaseGraph(page);
+  const canvas = canvasOf(page);
+  // 25 文書と、その間の関係 448 本（配備した環境で測った密度の合成。#5953）。
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
+  await expect.poll(() => graphCount(canvas, "edges")).toBe(448);
+  // 開いた直後に図の全体が画布に収まる（desktop・375px）。
+  await expect.poll(() => graphContained(canvas)).toBe("true");
+  // 文字つきの辺が多いので、何も選んでいない間は辺の文字を出さない（選んだ・ホバーしたノードの辺だけ）。
+  expect(await edgeLabels(canvas)).toBe("focus");
+  await shot(page, info, "kb-dense");
+  // ノードを 1 つ選ぶ（隣接だけがはっきりし、その辺の文字が出る。見た目は screenshot で確かめる）。
+  await canvas.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(area.getByTestId("wiki-graph-announcement")).toContainText("を選択しました");
+  await shot(page, info, "kb-dense-selected");
+  await page.keyboard.press("Escape");
+  // 関係の種類を「例外」だけにすると、その 17 本だけになり、すべての辺に種類の文字を出す。
+  for (const kind of ["reference", "prerequisite", "continuation"]) await area.getByTestId("wiki-graph-edge-kinds-" + kind).click();
+  await expect.poll(() => graphCount(canvas, "edges")).toBe(17);
+  await expect.poll(() => edgeLabels(canvas)).toBe("all");
+  await shot(page, info, "kb-dense-one-kind");
+  // 「一覧」の関係の数は、図に出ている関係（絞り込みの前の全部）の数。
+  await page.getByRole("tab", { name: "一覧" }).click();
+  await expect(area.getByText("全 25 件")).toBeVisible();
   await expectNoPageOverflow(page);
 });
 
@@ -294,7 +387,7 @@ test("原文の関係は 1 回で取り切り、25 件ずつ展開して「さ�
   const phone = info.project.name === "mobile";
   const control = await data(page);
   await begin(page);
-  await page.getByRole("tab", { name: "一覧" }).click();
+  await page.getByRole("tab", { name: "検索結果" }).click();
   await page.getByRole("region", { name: "検索結果の一覧" }).getByRole("button", { name: /合成の原文 1 / }).click();
   const panel = detail(page, phone);
   await panel.getByRole("tab", { name: "関係", exact: true }).click();
@@ -315,7 +408,7 @@ test("原文の関係は 1 回で取り切り、25 件ずつ展開して「さ�
 test("関係の読み込みの失敗は詳細の同じ場所で再試行でき、Wiki 権限の無い利用者は開けない", async ({ page }, info) => {
   const control = await data(page, { calls: [], failRelations: true });
   await begin(page);
-  await page.getByRole("tab", { name: "一覧" }).click();
+  await page.getByRole("tab", { name: "検索結果" }).click();
   await page.getByRole("region", { name: "検索結果の一覧" }).getByRole("button", { name: /合成の原文 1 / }).click();
   const panel = detail(page, info.project.name === "mobile");
   await panel.getByRole("tab", { name: "関係", exact: true }).click();
