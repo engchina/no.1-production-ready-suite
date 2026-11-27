@@ -5,10 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  Play,
-  RefreshCw,
-} from "lucide-react";
+import { Play } from "lucide-react";
 import {
   RunProgressCard,
   ApiErrorBanner,
@@ -934,20 +931,14 @@ export function SqlChatPage() {
             </TimedLoadingState>
           ) : null}
           {conversationId && conversation.isError ? (
-            <ApiErrorBanner
+            // 会話の内容の読み取りの失敗は、3 製品で同じ領域の失敗の表示（「詳細」は閉じる。messaging.md §11.7。#5937）。
+            <ApiErrorState
               error={conversation.error}
               fallback={t("chat.loadFailed")}
-              action={
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={RefreshCw}
-                  onClick={() => void conversation.refetch()}
-                >
-                  {t("common.action.retry")}
-                </Button>
-              }
+              testId="sql-chat-conversation-error"
+              onRetry={() => void conversation.refetch()}
+              retrying={conversation.isFetching}
+              retryLabel={t("common.action.retry")}
             />
           ) : null}
           {!conversationId && !pending && !requirementCheck && !profilesLoading ? (

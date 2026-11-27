@@ -950,6 +950,10 @@ test("会話一覧の読み込み失敗時に再試行可能なエラーを表�
   const error = page.getByRole("alert").filter({ hasText: "会話一覧を読み込めませんでした。" });
   await expect(error).toBeVisible({ timeout: 10_000 });
   await expect(error.getByRole("button", { name: "再試行" })).toBeVisible();
+  // 3 製品で同じ領域の失敗の表示（帯・「再試行」・閉じた「詳細」。messaging.md §3.6。#5937）。
+  await expect(error).toHaveAttribute("data-testid", "chat-conversations-error");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
   await expectNoPageOverflow(page);
 });
 

@@ -377,6 +377,45 @@ test("詳細の読み取り失敗を対象なしと見せず、再試行で回�
   await expectNoPageHorizontalOverflow(page);
 });
 
+// #5937: 一覧の読み取りの失敗は、ほかの一覧と同じ領域の失敗の表示（帯・「再試行」・閉じた「詳細」）。
+// 読めなかった一覧を 0 件と見せず、前回の一覧があれば残していつの内容かを示す（messaging.md §3.6.1）。
+test("一覧を読めなかったときは 0 件と見せず再試行で回復し、前回の一覧があれば残す", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  seedAutomation(mockApi);
+  const failure = await failDatabaseReads(page, "/api/automations");
+  await page.goto("/automations");
+  // 取得は自動の再試行（1 秒・2 秒）の後に失敗になる。
+  const failed = page.getByTestId("automations-load-failed");
+  await expect(failed).toBeVisible({ timeout: 15_000 });
+  const alert = failed.getByRole("alert");
+  await expect(alert).toHaveAttribute("data-failure-layout", "region");
+  await expect(alert.locator("details")).not.toHaveAttribute("open", "");
+  await expect(page.getByText("自動実行はまだありません")).toHaveCount(0);
+  // 読み取れていない間は作らない。
+  await expect(page.getByRole("button", { name: "自動実行を作成" })).toBeDisabled();
+  await expectNoPageHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("list-read-failure.png") });
+
+  failure.recover();
+  await failed.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(failed).toHaveCount(0);
+  const row = page.getByRole("link", { name: /毎朝の売上の要約/ });
+  await expect(row).toBeVisible();
+
+  // 画面に戻ったときの取り直し（window focus）が失敗しても、前回の一覧を残す。
+  const refetchFailure = await failDatabaseReads(page, "/api/automations");
+  await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+  const stale = page.getByTestId("automations-load-stale");
+  await expect(stale).toContainText("時点の内容を表示しています", { timeout: 15_000 });
+  await expect(row).toBeVisible();
+  await expect(failed).toHaveCount(0);
+  await expectNoPageHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("list-read-stale.png") });
+  refetchFailure.recover();
+  await stale.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(stale).toHaveCount(0);
+  await expect(row).toBeVisible();
+});
+
 test("業務 Agent への指示は、普通の欄とは別の全幅の区画に置く（#4847・#5851）", async ({ page }) => {
   for (const width of [1440, 1920]) {
     await page.setViewportSize({ width, height: 900 });

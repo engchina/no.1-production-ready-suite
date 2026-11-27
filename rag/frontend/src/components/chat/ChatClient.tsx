@@ -58,7 +58,7 @@ import { answerNoticeItems } from "@/components/search/AnswerDetailsPanel";
 import { AnswerProcess } from "@/components/search/AnswerProcess";
 import { AnswerText } from "@/components/search/AnswerText";
 import { useAuth } from "@/components/security/AuthProvider";
-import { ApiErrorState, EmptyState, ErrorState } from "@/components/StateViews";
+import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import type {
   ApprovedFaqSuggestionData,
   GuideConditionAnswer,
@@ -1835,9 +1835,14 @@ export function ChatClient() {
                 <ChatSkeleton />
               </TimedLoadingState>
             ) : activeId && conversationQuery.isError ? (
-              <ErrorState
-                message={t("chat.messages.error")}
+              // 会話の内容の読み取りの失敗は、3 製品で同じ領域の失敗の表示（原因・「再試行」・閉じた「詳細」。
+              // messaging.md §11.7。#5937）。
+              <ApiErrorState
+                error={conversationQuery.error}
+                fallback={t("chat.messages.error")}
+                testId="chat-conversation-error"
                 onRetry={() => void conversationQuery.refetch()}
+                retrying={conversationQuery.isFetching}
               />
             ) : !searchAnswerProfileId ? (
               <EmptyState title={t("chat.searchAnswerProfile.required")} />

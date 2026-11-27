@@ -19,7 +19,7 @@ import {
   PageBody,
   publishedVersionColumns,
   RowTitleButton,
-  ApiErrorBanner,
+  ApiErrorState,
   apiErrorMessage,
   compareNames,
   ListScrollRegion,
@@ -167,7 +167,17 @@ export function AgentsPage() {
               </ListScrollRegion>
             </Banner></div>
           ) : null}
-          {skills.error ? <ApiErrorBanner error={skills.error} fallback={t("common.error.load")} /> : null}
+          {/* スキルの一覧の読み取りの失敗は領域の失敗の表示（「再試行」・閉じた「詳細」。messaging.md §3.6。#5937）。 */}
+          {skills.error ? (
+            <ApiErrorState
+              error={skills.error}
+              fallback={t("common.error.load")}
+              testId="agents-skills-error"
+              onRetry={() => void skills.refetch()}
+              retrying={skills.isFetching}
+              retryLabel={t("common.retry")}
+            />
+          ) : null}
           {/* スキルの更新があります（N 件）と、確かめてまとめて再公開する（#1867）。 */}
           <SkillUpdatesPanel agents={agentList} skills={skills.data?.skills ?? []} canManage={canManage} />
           <Section title={t("agent.list")}>

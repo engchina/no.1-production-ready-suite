@@ -548,6 +548,33 @@ test("会話は履歴から開き直せ、SQL・分類・前回の実行の要�
 });
 
 /** 会話の欄の末尾からの距離（px）。 */
+// #5937: 会話の内容の読み取りの失敗は、チャットと同じ領域の失敗の表示（帯・「再試行」・閉じた「詳細」）。
+test("開いている会話の内容を読めなかったときは、空の状態ではなく失敗と再試行を出す", async ({ page }) => {
+  const turn = storedTurn("turn-f1", "データベースの版", generated(plan("SELECT BANNER_FULL FROM V$VERSION")));
+  await setup(page, { conversations: [savedConversation("conversation-f", "会話 F", [turn])] });
+  let failing = true;
+  // 後から登録した route が先に呼ばれる（setup の成功の応答を上書きする）。
+  await page.route("**/api/nl2sql/db-admin-chat/conversations/conversation-f", (route) =>
+    failing && route.request().method() === "GET"
+      ? route.fulfill({ status: 500, json: { detail: "会話を取得できません。" } })
+      : route.fallback(),
+  );
+  await page.goto("/db-admin-chat");
+  await openFromHistory(page, "会話 F");
+  // 取得は TanStack Query の既定の再試行の後に失敗になる。
+  const error = page.getByTestId("db-admin-chat-conversation-error");
+  await expect(error).toContainText("会話を取得できません。", { timeout: 20_000 });
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+  await expect(page.getByTestId("db-admin-chat-turn")).toHaveCount(0);
+
+  failing = false;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByTestId("db-admin-chat-turn")).toHaveCount(1);
+  await expect(error).toHaveCount(0);
+});
+
 function distanceFromBottom(page: Page) {
   return page
     .getByTestId("db-admin-chat-conversation")

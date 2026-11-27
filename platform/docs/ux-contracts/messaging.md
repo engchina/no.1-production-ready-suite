@@ -575,7 +575,7 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 #### 10.3.1 API の失敗（応答が届かなかった失敗を含む。#900 / #906）
 
 - 画面は `error.message` を直接出さない。API の失敗は `packages/ui` の部品と関数で出す。
-  - 処理・操作の失敗の面（Banner）: `ApiErrorBanner`（要約・次の操作・開いた「詳細」）。領域の読み取りの失敗は下の `ApiErrorState` で出す（`ApiErrorBanner` で出している残りの箇所は §10.5）。
+  - 処理・操作の失敗の面（Banner）: `ApiErrorBanner`（要約・次の操作・開いた「詳細」）。領域の読み取りの失敗は下の `ApiErrorState` で出す（移行の記録は §10.5）。
   - 領域の取得の失敗（§3.6）: `ApiErrorState`（`ErrorState` に閉じた「詳細」を足したもの。再試行付き。再試行の間は `retrying` でボタンを `loading` にする）。画面全体の失敗は `layout="page"`。
   - 1 つの文しか出せない所（Toast・`FormStatus`・`SaveErrorBanner`）: `apiErrorMessage(error, 既定の文)`。
   - 要約・次の操作・詳細を自分で並べる所: `presentApiError(error, 既定の文)`。
@@ -593,7 +593,7 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
 
 既存の画面の棚卸しと残りの移行は #705 に一覧を残し、画面を触るときに直す。新しい画面・部品は最初からこの節に従う。
 
-読み取りの失敗を `ApiErrorBanner`（「詳細」は開く）で出している残りの箇所（チャットの会話の履歴・会話の内容、NL2SQL の実行履歴、Agent の自動実行・スキルの一覧）は、#5937 で `ApiErrorState`（「詳細」は閉じる）へ移す。チャットの対象の一覧は移した（#5929）。
+読み取りの失敗を `ApiErrorBanner`（「詳細」は開く）や「詳細」の無い `ErrorState` で出していた箇所は、読み取りの失敗の部品（「詳細」は閉じる）へ移した: チャットの対象の一覧（#5929）、3 製品のチャットの会話の履歴の一覧（`ChatHistoryList`）と会話の内容（NL2SQL の DB 管理チャットを含む）・Agent の業務 Agent の画面のスキルの一覧は `ApiErrorState`、NL2SQL の実行履歴の一覧と詳細・Agent の自動実行の一覧は `DataLoadFailureState`（前の内容があれば残して `StaleDataNotice`。§3.6.1）（#5937）。`ApiErrorBanner` は処理・操作の失敗（送信・停止・実行・検査・ダウンロードなど）にだけ使う。
 
 ---
 
@@ -683,7 +683,7 @@ header           : StatusBadge（エンティティの状態の正本 = P1）
   - 内容が空と分かっている会話（「新しい会話」で作った・開いた会話）は、内容（空）をキャッシュに先に入れ、読み込み中にしない（#1188）。
 - **失敗は空として出さない。**
   - 対象の一覧を読めなかった: 上のカードに領域の失敗の表示（3 製品とも `ApiErrorState`。原因・「再試行」・閉じた「詳細」。`ApiErrorBanner` は使わない。#5929）を出し、会話の欄は出さない（0 件のとき＝「使える◯◯がありません」と同じく、対象が無いと会話できないため）。0 件の案内（空の状態）と失敗を同じ分岐にしない。
-  - 開いている会話の内容を読めなかった: 会話の欄に失敗の表示（再試行付き）を出し、空の状態は出さない。送信は無効のまま（内容の分からない会話に続けて送らない）。「新しい会話」と履歴は使えるままにし、失敗の後も別の会話へ移れるようにする。
+  - 開いている会話の内容を読めなかった: 会話の欄に領域の失敗の表示（3 製品とも `ApiErrorState`。原因・「再試行」・閉じた「詳細」。#5937）を出し、空の状態は出さない。送信は無効のまま（内容の分からない会話に続けて送らない）。「新しい会話」と履歴は使えるままにし、失敗の後も別の会話へ移れるようにする。
 - 送った質問の表示（§11.1）を出している間は、その会話の読み込み中の表示で隠さない（作った会話の内容はキャッシュに先に入れる。§11.2）。
 - 実装: `ChatSkeleton`（`packages/ui`、[components-reference.md](../design-system/components-reference.md)「読み込み中と一覧の表示密度」）。製品は RAG `components/chat/ChatClient.tsx`、NL2SQL `features/nl2sql/SqlChatPage.tsx`、Agent `pages/ChatPage.tsx`。Playwright は対象の一覧の応答を遅らせ、空の状態が出ず Skeleton が出ること・経過時間が 1 つであること・入力欄と送信などが無効で入力欄の文字が残ること・読み込み後に使えること・失敗の表示を、会話の内容の応答を遅らせ、入力欄に書けて送信だけが止まることを、desktop / 375px・light / dark で確かめる（RAG `e2e/chat-loading.spec.ts`・NL2SQL `tests/e2e/sql-chat-loading.spec.ts`・Agent `e2e/chat-loading.spec.ts`）。
 

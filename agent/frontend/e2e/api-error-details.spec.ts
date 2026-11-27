@@ -23,6 +23,10 @@ test("エラーの内部の原文は要約に出さず「詳細」にだけ出�
   const failure = page.getByRole("alert").filter({ hasText: "自動実行の一覧を読み込めませんでした。" }).first();
   await expect(failure).toBeVisible({ timeout: 20_000 });
   const details = failure.locator("details");
+  // 読み取りの失敗の「詳細」は閉じて出し、利用者が開く（messaging.md §10.3。#5937）。
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator("summary").click();
+  await expect(details.getByText("store is locked")).toBeVisible();
   await expect(details).toContainText("元のメッセージ");
   await expect(details).toContainText("store is locked");
   await expect(details).toContainText("automation_store_unavailable");

@@ -209,7 +209,13 @@ test("開いている会話の内容を読めなかったときは、失敗を�
   await setup(page, { conversationFails: true });
   await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(profilesPage));
   await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-  await expect(page.getByText("会話を読み込めませんでした。")).toBeVisible({ timeout: RETRY_TIMEOUT });
+  // 3 製品で同じ領域の失敗の表示（原因・「再試行」・閉じた「詳細」。messaging.md §11.7。#5937）。
+  const error = page.getByTestId("chat-conversation-error");
+  await expect(error).toContainText("会話を取得できません。", { timeout: RETRY_TIMEOUT });
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+  await expect(error.getByRole("button", { name: "再試行" })).toBeVisible();
   await expect(page.getByText(EMPTY_TEXT, { exact: true })).toHaveCount(0);
   const composer = page.getByRole("textbox", { name: COMPOSER, exact: true });
   await composer.fill("続きの質問");
