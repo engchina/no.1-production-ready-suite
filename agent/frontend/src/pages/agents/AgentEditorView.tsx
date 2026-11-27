@@ -110,7 +110,7 @@ function agentDraftOf(agent: AgentProfile | undefined): AgentDraft {
     data_scopes: normalizeDataScopes(agent?.data_scopes),
     clarification_policy: agent?.clarification_policy === "assume" ? "assume" : "confirm",
     clarification_max_rounds: agent?.clarification_max_rounds ?? DEFAULT_CLARIFICATION_MAX_ROUNDS,
-    // この項目の無い保存済みの業務 Agent は既定（そのまま出して注意を付ける）。
+    // この項目の無い保存済みの業務 Agent は既定（注意を付けて表示する）。
     ungrounded_answer_policy: agent?.ungrounded_answer_policy === "refuse" ? "refuse" : "annotate",
     skill_policy: agent?.skill_policy === "latest" ? "latest" : "pinned",
     output_fields: normalizeOutputFields(agent?.output_fields ?? []),
@@ -149,6 +149,7 @@ export function AgentEditorView({
   modelsLoading,
   modelsError,
   onRetryModels,
+  ungroundedNotice,
   actions,
   readOnly,
   sharing,
@@ -170,6 +171,8 @@ export function AgentEditorView({
   /** モデルの候補の読み取りの失敗（候補なしと分けて再試行を出す。#4222）。 */
   modelsError: Error | null;
   onRetryModels: () => void;
+  /** 資料・データで確かめていない回答に付ける注意の文（backend の文。案内に差し込む。#5859）。 */
+  ungroundedNotice: string;
   actions: EntityAction[];
   /** 変更の権限がない利用者は閲覧だけ（保存を出さず、入力を無効にする）。 */
   readOnly: boolean;
@@ -451,6 +454,8 @@ export function AgentEditorView({
   const modelWritesAnswer = selectedSkills.some(
     (skill) => skill.enabled && !skill.final_answer_tools?.length && skill.mcp_requirements.length > 0
   );
+  // 「資料・データで確かめていない回答」は、資料・業務データのツールを宣言したスキルを選んだときだけ効く（#5859）。
+  const usesGroundingSkills = selectedSkills.some((skill) => skill.enabled && skill.grounding);
   const finalAnswerSkillNames = modelWritesAnswer
     ? []
     : selectedSkills.filter((skill) => skill.final_answer_tools?.length).map((skill) => skill.name);
@@ -964,30 +969,34 @@ export function AgentEditorView({
                 </CardContent>
               </Card>
             </Section>
-            {/* 資料・データで確かめていない回答（#5859）。資料・業務データのツールを呼ばずに作った回答の扱い。 */}
-            <Section
-              title={t("agent.ungroundedAnswer.title")}
-              description={t("agent.ungroundedAnswer.description")}
-            >
-              <Card className="min-w-0">
-                <CardContent className="pt-5">
-                  <FormGrid data-testid="agent-ungrounded-answer">
-                    <SelectField
-                      id={`${fieldId}-agent-ungrounded-answer-policy`}
-                      label={t("agent.ungroundedAnswer.policy")}
-                      helper={t("agent.ungroundedAnswer.policyHint")}
-                      width="lg"
-                      value={ungroundedAnswerPolicy}
-                      options={[
-                        { value: "annotate", label: t("agent.ungroundedAnswer.policy.annotate") },
-                        { value: "refuse", label: t("agent.ungroundedAnswer.policy.refuse") },
-                      ]}
-                      onValueChange={(value) => setUngroundedAnswerPolicy(value === "refuse" ? "refuse" : "annotate")}
-                    />
-                  </FormGrid>
-                </CardContent>
-              </Card>
-            </Section>
+            {/* 資料・データで確かめていない回答（#5859）。資料・業務データのツールを宣言したスキルを選んだときだけ出す。 */}
+            {usesGroundingSkills ? (
+              <Section
+                title={t("agent.ungroundedAnswer.title")}
+                description={t("agent.ungroundedAnswer.description")}
+              >
+                <Card className="min-w-0">
+                  <CardContent className="pt-5">
+                    <FormGrid data-testid="agent-ungrounded-answer">
+                      <SelectField
+                        id={`${fieldId}-agent-ungrounded-answer-policy`}
+                        // 区画の見出しと同じ名前（見せるラベルは置かない）。
+                        label={t("agent.ungroundedAnswer.title")}
+                        labelHidden
+                        helper={ungroundedNotice ? t("agent.ungroundedAnswer.policyHint", { notice: ungroundedNotice }) : undefined}
+                        width="lg"
+                        value={ungroundedAnswerPolicy}
+                        options={[
+                          { value: "annotate", label: t("agent.ungroundedAnswer.policy.annotate") },
+                          { value: "refuse", label: t("agent.ungroundedAnswer.policy.refuse") },
+                        ]}
+                        onValueChange={(value) => setUngroundedAnswerPolicy(value === "refuse" ? "refuse" : "annotate")}
+                      />
+                    </FormGrid>
+                  </CardContent>
+                </Card>
+              </Section>
+            ) : null}
           </fieldset>
           {/* 保存の失敗は確定の行の直上の 1 か所だけ（messaging.md §3.3.1。#585 / #1786）。 */}
           <SaveErrorBanner

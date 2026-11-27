@@ -89,8 +89,7 @@ const agentJa = {
   "feedback.signal.tool_failed": "ツールの失敗",
   "feedback.signal.run_failed": "実行の失敗・取り消し",
   "feedback.signalHint.not_helpful": "本人か管理者が「役に立たなかった」と評価した回答です。",
-  "feedback.signalHint.ungrounded_answer":
-    "資料・業務データのツールを 1 つも呼ばずに作った回答を、注意を付けてそのまま出しました。回答の内容は資料・業務データで確かめていません。",
+  "feedback.signalHint.ungrounded_answer": "資料・業務データを調べずに作った回答を、注意を付けて表示しました。",
   "feedback.signalHint.unanswered": "資料から答えられない（根拠不足）か、人への引き継ぎとした回答です。",
   "feedback.signalHint.approval_rejected": "承認が却下されたツールがあります。",
   "feedback.signalHint.tool_failed": "ツールの呼び出しが失敗しました。",
@@ -1824,11 +1823,11 @@ const agentJa = {
   "agent.ungroundedAnswer.title": "資料・データで確かめていない回答",
   "agent.ungroundedAnswer.description":
     "資料・業務データのツールを 1 つも呼ばずに作った回答を、利用者に出すかを決めます。チャット・品質評価・自動実行の回答に使います。",
-  "agent.ungroundedAnswer.policy": "回答の扱い",
-  "agent.ungroundedAnswer.policy.annotate": "そのまま出して注意を付ける",
-  "agent.ungroundedAnswer.policy.refuse": "出さずに「お答えできません」と返す",
+  "agent.ungroundedAnswer.policy.annotate": "注意を付けて表示する",
+  "agent.ungroundedAnswer.policy.refuse": "表示せず「お答えできません」と返す",
+  // {notice} は backend の注意の文（GET /api/runtime/status の ungrounded_notice）。
   "agent.ungroundedAnswer.policyHint":
-    "注意を付けるときは、回答の末尾に「この回答は、資料・業務データで確かめていません。」を出します。出さないときは、ツールで確かめるよう 1 回やり直させ、それでも確かめなければ「お答えできません」と返します。ツールを呼んだかだけで決め、回答の中身は確かめません。",
+    "注意を付ける: 回答の下に「{notice}」を表示します。／お答えできません: 資料・データを調べずに作った回答は表示しません。",
   "agent.dataScope.description":
     "この業務 Agent が使えるプロファイルを決めます。選んだ範囲の外は実行時に使えません（利用者が使えないプロファイルは、範囲に入れても使えません）。",
   "agent.dataScope.nl2sql.title": "データ問い合わせ（NL2SQL）",

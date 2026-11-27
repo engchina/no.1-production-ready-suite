@@ -485,11 +485,11 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     ではない）ときは今どおり。
 - **資料・データで確かめていない回答（#5859）**: 根拠・データのツールを渡した Run で、モデルがどれも呼ばずに答えたときの扱いは、
   業務 Agent ごとの設定 `ungrounded_answer_policy`（版の項目。画面は「回答前の確認」の次の区画「資料・データで確かめていない
-  回答」）で決める（利用者の決定、2026-11-26。それまでは常に拒答していた）。`annotate`（既定）= そのまま出して注意を付ける
+  回答」）で決める（利用者の決定、2026-11-26。それまでは常に拒答していた）。`annotate`（既定）= 注意を付けて表示する
   （回答の注意書きの先頭に「この回答は、資料・業務データで確かめていません。」。差し戻さない・本文を置き換えない。回答の対応の
-  basis は `ungrounded_answer`）、`refuse` = 出さずに「お答えできません」と返す（1 回差し戻し、それでも呼ばなければ拒答の文。
-  #1835）。判定はツールを呼んだかだけで、回答の中身は見ない。例外（確認の質問だけの回答・ファイルを作った Run・前の Run が
-  ツールで答えた続きなど）は 2 つの設定で同じ。正本は [agents/runtime.md](./agents/runtime.md) と `tool_grounding.py`。
+  basis は `ungrounded_answer`）、`refuse` = 表示せず「お答えできません」と返す（1 回差し戻し、それでも呼ばなければ拒答の文。
+  #1835）。判定はツールを呼んだかだけで、回答の中身は見ない。例外（確認の質問だけの回答・前の Run が
+  ツールで答えた続きなど）は 2 つの設定で同じ。本文の確認の質問の差し戻し（#1881・#1903）は回答前の確認の方針で決まり、この設定とは別。正本は [agents/runtime.md](./agents/runtime.md) と `tool_grounding.py`。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 1500 秒。RAG の回答のツール〔`rag_chat`・`rag_search`〕は処理の全体を RAG の回答の上限
   （`RAG_ANSWER_TIMEOUT_SECONDS`、既定 1200 秒・画面で選べる最大も 1200 秒。#5280・#5862）の 1 つの期限で終える〔#5339〕ので、その外側の

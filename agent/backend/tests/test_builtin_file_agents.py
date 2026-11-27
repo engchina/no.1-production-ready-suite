@@ -282,19 +282,16 @@ def test_rag_and_file_agents_make_a_file_from_the_rag_answer(
     model.assert_complete()
 
 
-@pytest.mark.parametrize("policy", ["annotate", "refuse"])
-def test_data_and_file_agent_keeps_the_answer_when_it_only_made_a_file(
-    monkeypatch: MonkeyPatch, script: Any, policy: str
+def test_data_and_file_agent_treats_a_file_only_run_like_other_answers(
+    monkeypatch: MonkeyPatch, script: Any
 ) -> None:
-    """根拠のツールを呼ばずにファイルだけを作った Run は、回答を拒答に置き換えない（#5853）。
+    """根拠のツールを呼ばずにファイルだけを作った Run も、ほかの回答と同じ判定・設定で扱う。
 
-    利用者が会話に書いた内容をファイルにした Run。ファイルは成果物に残るので、回答も
-    モデルが返したまま出す（差し戻しもしない）。既定の設定でも、確かめていない回答の注意を
-    付けない（#5859。2 つの設定で同じ例外）。
+    ファイルを作るツールは根拠・データのツールに数えず、ファイルを作った Run を例外にしない。
+    既定の設定では、モデルが返した回答とファイルをそのまま出し、確かめていない回答の注意を付ける
+    （#5859）。
     """
     fake_product_mcp(monkeypatch)
-    # 組み込みの業務 Agent の公開中の版を書き換えずに、Run の設定を決める。
-    monkeypatch.setattr(builtin_runtime, "_ungrounded_answer_policy", lambda _agent: policy)
     answer = "ファイル「合成の一覧.xlsx」を作りました。シート「合成の表」に 2 行あります。"
 
     run, model = script(
@@ -316,7 +313,7 @@ def test_data_and_file_agent_keeps_the_answer_when_it_only_made_a_file(
     assert _file_rows(run) == [["名前"], ["record-1"], ["record-2"]]
     assert run_answer_text(run) == answer
     assert [event for event in run.events if "tool_grounding" in event.model_dump_json()] == []
-    assert UNGROUNDED_NOTICE not in (run_answer_notice(run) or "")
+    assert (run_answer_notice(run) or "").startswith(UNGROUNDED_NOTICE)
     model.assert_complete()
 
 
@@ -325,7 +322,7 @@ def test_data_and_file_agent_still_refuses_an_answer_without_tools_or_files(
 ) -> None:
     """拒答の設定では、ファイルも作らず根拠のツールも呼ばない回答を差し戻して拒答にする。"""
     fake_product_mcp(monkeypatch)
-    # 組み込みの業務 Agent は既定（そのまま出して注意を付ける。#5859）。公開中の版を書き換えずに、
+    # 組み込みの業務 Agent は既定（注意を付けて表示する。#5859）。公開中の版を書き換えずに、
     # この Run を拒答の設定にする。
     monkeypatch.setattr(builtin_runtime, "_ungrounded_answer_policy", lambda _agent: "refuse")
 

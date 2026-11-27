@@ -337,8 +337,8 @@ def test_greetings_and_clarification_questions_get_no_notice(
     del mcp
     _set_policy(policy)
     steps = [[assistant_message(answer)]]
-    if policy == tool_grounding.POLICY_REFUSE and question == GOAL:
-        # チャットの Run は確認のツールを渡す。拒答の設定では、本文の確認の質問を 1 回差し戻し、
+    if question == GOAL:
+        # チャットの Run は確認のツールを渡す。どちらの設定でも、本文の確認の質問を 1 回差し戻し、
         # 同じ聞き返しならそのまま出す（#1881）。あいさつ・用件の聞き返しは差し戻さない。
         steps.append([assistant_message(answer)])
     model = _script(monkeypatch, *steps)
@@ -354,20 +354,93 @@ def test_greetings_and_clarification_questions_get_no_notice(
     assert fact_signals(fact_from_run(run)) == []
 
 
-def test_default_does_not_send_back_a_text_clarification(
-    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+CLARIFICATION = "確認させてください。\nどの年度の規程ですか？"
+
+_ASSUMING_RUNS = [
+    pytest.param({}, {"clarification_policy": "assume"}, id="agent-policy-assume"),
+    pytest.param(
+        {"metadata": {"automation_id": "auto_5859", "automation_trigger": "schedule"}},
+        {},
+        id="automation",
+    ),
+    pytest.param({"metadata": {EVALUATION_DRY_RUN_KEY: True}}, {}, id="evaluation"),
+]
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+def test_text_clarification_is_sent_back_once_under_either_policy(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp, policy: str
 ) -> None:
-    """既定の設定は、確認のツールを渡した Run の本文の確認の質問も差し戻さない（そのまま出す）。"""
+    """確認のツールを渡した Run の本文の確認の質問は、どちらの設定でも 1 回差し戻す（#1881）。
+
+    回答前の確認の方針で決まる差し戻しで、確かめていない回答の設定とは別。差し戻しの後も本文で
+    聞き返したら、拒答にも注意にもせずそのまま出し、経過に残す。
+    """
     del mcp
-    answer = "確認させてください。\nどの年度の規程ですか？"
-    model = _script(monkeypatch, [assistant_message(answer)])
+    _set_policy(policy)
+    model = _script(
+        monkeypatch, [assistant_message(CLARIFICATION)], [assistant_message(CLARIFICATION)]
+    )
 
     run = _run()
 
-    assert len(model.calls) == 1
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 2
     assert CONFIRMATION_TOOL in {tool.name for tool in model.calls[0].tools}
-    assert run_answer_text(run) == answer
-    assert _grounding_events(run) == [] and not _noticed(run)
+    assert model.calls[1].input[-1]["content"].startswith(tool_grounding.RETRY_MESSAGE_CONFIRMABLE)
+    assert [item["action"] for item in _grounding_events(run)] == ["retry", "text_clarification"]
+    assert run_answer_text(run) == CLARIFICATION
+    assert not _noticed(run)
+
+
+@pytest.mark.parametrize(("request_fields", "agent_fields"), _ASSUMING_RUNS)
+def test_runs_without_confirmation_send_back_a_text_clarification_by_default(
+    monkeypatch: MonkeyPatch,
+    mcp: FakeProductMcp,
+    request_fields: dict[str, Any],
+    agent_fields: dict[str, Any],
+) -> None:
+    """利用者に確認しない Run（方針「前提を示して回答」・自動実行・品質評価）は、既定の設定でも
+    本文の聞き返しを 1 回差し戻し、前提を示して答えさせる（#1903・#1959）。
+
+    利用者が「確認せずに回答」を選んだ Run は `test_confirmation.py` が確かめる。
+
+    差し戻しの後にツールを呼ばずに答えた回答は、既定の設定どおり注意を付けて出す。
+    """
+    del mcp
+    if agent_fields:
+        runtime_repository.patch_agent(AGENT_ID, AgentProfilePatch(**agent_fields))
+        runtime_repository.publish_agent(AGENT_ID)
+    model = _script(
+        monkeypatch, [assistant_message(CLARIFICATION)], [assistant_message(UNGROUNDED)]
+    )
+
+    run = _run(**request_fields)
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].message
+    assert len(model.calls) == 2
+    assert model.calls[1].input[-1]["content"].startswith(tool_grounding.RETRY_MESSAGE_ASSUME)
+    assert [item["action"] for item in _grounding_events(run)] == ["retry"]
+    assert run_answer_text(run) == UNGROUNDED
+    assert _noticed(run)
+    assert _answer_content(run)["outcome"]["basis"] == "ungrounded_answer"
+
+
+def test_runs_without_confirmation_keep_a_repeated_text_clarification(
+    monkeypatch: MonkeyPatch, mcp: FakeProductMcp
+) -> None:
+    """差し戻しの後も本文で聞き返したら、既定の設定でもそのまま出し、経過に残す（拒答にしない）。"""
+    del mcp
+    model = _script(
+        monkeypatch, [assistant_message(CLARIFICATION)], [assistant_message(CLARIFICATION)]
+    )
+
+    run = _run(metadata={"automation_id": "auto_5859", "automation_trigger": "schedule"})
+
+    assert len(model.calls) == 2
+    assert [item["action"] for item in _grounding_events(run)] == ["retry", "text_clarification"]
+    assert run_answer_text(run) == CLARIFICATION
+    assert not _noticed(run)
 
 
 @pytest.mark.parametrize("policy", POLICIES)
@@ -675,3 +748,32 @@ def test_api_reads_and_writes_the_policy_with_the_versions(api_agent: None) -> N
         },
     )
     assert invalid_created.status_code == 422
+
+
+def test_skill_list_and_runtime_status_feed_the_editor_setting(mcp: FakeProductMcp) -> None:
+    """業務 Agent の編集は、スキルの一覧の `grounding` で設定の表示を決め、注意の文は
+    `GET /runtime/status` から読む（文は backend だけが持つ）。"""
+    del mcp
+    skills = {item["id"]: item for item in client.get("/api/skills").json()["data"]["skills"]}
+    # RAG・NL2SQL のツールを宣言したスキルは根拠・データのスキル。
+    assert skills[SKILL_ID]["grounding"] is True
+    assert skills["rag-chat"]["grounding"] is True
+    assert skills["structured-data-query"]["grounding"] is True
+    # Control Plane のツール（ファイルを作るツール）だけのスキルは数えない。
+    assert skills["xlsx-create"]["grounding"] is False
+    # 一覧・推薦だけ・接続のすべてのツールの宣言の判定。
+    listing = AgentSkillDefinition(
+        id="listing",
+        name="一覧だけ",
+        mcp_requirements=[
+            SkillMcpRequirement(server_id="rag", tool_names=["rag_list_search_answer_profiles"])
+        ],
+    )
+    whole = AgentSkillDefinition(
+        id="whole", name="接続のすべて", mcp_requirements=[SkillMcpRequirement(server_id="crm")]
+    )
+    assert builtin_runtime.declares_grounding_tools(listing) is False
+    assert builtin_runtime.declares_grounding_tools(whole) is True
+
+    status = client.get("/api/runtime/status").json()["data"]
+    assert status["ungrounded_notice"] == tool_grounding.UNGROUNDED_NOTICE
