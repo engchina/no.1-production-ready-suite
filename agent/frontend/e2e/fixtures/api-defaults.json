@@ -203,7 +203,9 @@
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
-      "references": []
+      "references": [],
+      "grounding": true,
+      "model_writes_answer": false
     },
     {
       "id": "rag-search",
@@ -234,7 +236,9 @@
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
-      "references": []
+      "references": [],
+      "grounding": true,
+      "model_writes_answer": false
     },
     {
       "id": "structured-data-query",
@@ -262,7 +266,9 @@
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
-      "references": []
+      "references": [],
+      "grounding": true,
+      "model_writes_answer": true
     },
     {
       "id": "rag-chat-and-data",
@@ -299,7 +305,9 @@
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
-      "references": []
+      "references": [],
+      "grounding": true,
+      "model_writes_answer": true
     },
     {
       "id": "rag-search-and-data",
@@ -336,7 +344,9 @@
       "source": "builtin",
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
-      "references": []
+      "references": [],
+      "grounding": true,
+      "model_writes_answer": true
     }
   ],
   "tools": [

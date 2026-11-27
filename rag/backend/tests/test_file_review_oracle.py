@@ -1,5 +1,6 @@
 """同じ回答版の判定・再回答の保存・問題単位の集計を実 DB で確かめる。"""
 
+from datetime import UTC, datetime
 from hashlib import sha256
 from uuid import uuid4
 
@@ -7,7 +8,7 @@ import pytest
 from pr_backend_core.file_review import StaleReview
 
 from app.api.routes.feedback import _feedback_summary
-from app.clients.oracle import OracleClient
+from app.clients.oracle import OracleClient, StoredMessage
 from app.rag.request_context import (
     AuditRequestContext,
     reset_audit_request_context,
@@ -89,4 +90,81 @@ async def test_review_versions_and_latest_resolution_in_oracle(surface: str) -> 
             second: "helpful",
         }
     finally:
+        reset_audit_request_context(token)
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_chat_message_reads_latest_reviewed_answer_in_oracle() -> None:
+    """再回答の後の会話のメッセージは最新の版の回答も返し、実行を結び付けるメッセージを引ける。
+
+    会話の履歴（#5914）と、再回答の実行履歴の会話・メッセージ（#5913）が使う読み取り。
+    """
+    client = OracleClient()
+    profile = await client.ensure_default_search_answer_profile()
+    # 版の保存は回答の持ち主だけなので、利用者の分かる context で会話と回答を作る。
+    owner = sha256(uuid4().bytes).hexdigest()
+    token = set_audit_request_context(
+        AuditRequestContext(request_id="review-integration", user_id_hash=owner)
+    )
+    conversation = await client.create_conversation(search_answer_profile_id=profile.id)
+    user_id, answer_id, other_id = uuid4().hex, uuid4().hex, uuid4().hex
+    first, second, untouched = uuid4().hex, uuid4().hex, uuid4().hex
+    now = datetime.now(UTC)
+    record: dict[str, object] = {
+        "surface": "chat",
+        "answer_engine": "grounded",
+        "question": "合成の質問",
+        "answer": "最初の回答",
+    }
+
+    def answer(message_id: str, trace_id: str) -> StoredMessage:
+        return StoredMessage(
+            id=message_id,
+            conversation_id=conversation.id,
+            role="ASSISTANT",
+            content="最初の回答",
+            reply_to_message_id=user_id,
+            trace_id=trace_id,
+            created_at=now,
+        )
+
+    async def reviewed() -> dict[str, str | None]:
+        messages = await client.list_messages(conversation.id)
+        return {message.id: message.reviewed_answer for message in messages}
+
+    try:
+        await client.append_message(
+            StoredMessage(
+                id=user_id,
+                conversation_id=conversation.id,
+                role="USER",
+                content="合成の質問",
+                created_at=now,
+            )
+        )
+        await client.append_message(answer(answer_id, first))
+        await client.append_message(answer(other_id, untouched))
+        await client.save_answer_record({**record, "trace_id": first})
+        await client.save_answer_record({**record, "trace_id": untouched})
+        assert await client.get_chat_answer_message_id(conversation.id, first) == answer_id
+        assert await client.get_chat_answer_message_id(conversation.id, second) is None
+        assert await reviewed() == {user_id: None, answer_id: None, other_id: None}
+        # 候補の確認だけ（版は 1 つ）では、元の回答のまま。
+        versions = [{"id": first, "answer": "最初の回答"}]
+        await client.save_file_review(first, 0, {"revision": 1, "versions": versions}, {})
+        assert await reviewed() == {user_id: None, answer_id: None, other_id: None}
+        versions.append({"id": second, "answer": "選んだ資料からの回答"})
+        await client.save_file_review(
+            first,
+            1,
+            {"revision": 2, "versions": versions},
+            {**record, "trace_id": second, "answer": "選んだ資料からの回答"},
+        )
+        assert await reviewed() == {
+            user_id: None,
+            answer_id: "選んだ資料からの回答",
+            other_id: None,
+        }
+    finally:
+        await client.delete_conversation(conversation.id)
         reset_audit_request_context(token)

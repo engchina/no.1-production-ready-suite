@@ -22,6 +22,8 @@ interface FeedbackControlsProps {
   messageId?: string | null;
   contentSnapshot?: FeedbackContentSnapshot | null;
   readOnly?: boolean;
+  /** 回答し直した版があるか。false なら、資料を選び直す面を開くまで以前の版を読まない（#5938）。既定は読む。 */
+  hasFileReview?: boolean;
   onHistory: (rootId: string) => void;
 }
 
@@ -32,6 +34,7 @@ export function FeedbackControls({
   messageId,
   contentSnapshot,
   readOnly,
+  hasFileReview = true,
   onHistory,
 }: FeedbackControlsProps) {
   const current = useCurrentFeedback(!readOnly && traceId ? traceId : null);
@@ -69,6 +72,7 @@ export function FeedbackControls({
         disabled={current.isError}
         loadingRating={!readOnly && current.isLoading}
         load={load}
+        loadOnMount={hasFileReview}
         initialRating={current.data?.find((item) => item.target_type === "answer")?.rating}
         change={(action) =>
           request<FileReviewState>(

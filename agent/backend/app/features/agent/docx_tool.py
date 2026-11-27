@@ -33,7 +33,6 @@ from app.features.agent.chart_spec import (
     CHART_SCHEMA,
     CHART_TYPES,
     MAX_CHART_CATEGORIES,
-    ChartSpec,
 )
 from app.features.agent.docx_document import (
     BLOCK_TYPES,
@@ -59,11 +58,11 @@ from app.features.agent.file_tool_support import (
     FILE_OUTPUT_SCHEMA,
     MAX_FILES_PER_RUN,
     TEXT_COLUMN_SCHEMA,
-    check_file_count,
+    chart_spec,
+    create_run_file,
+    field_issues,
     invalid_content,
     run_data_index,
-    running_run,
-    save_run_file,
     source_schema,
     text_table,
 )
@@ -309,40 +308,9 @@ def _table(
     return ChartBlock(
         columns=columns,
         rows=rows,
-        chart=ChartSpec(
-            type=chart["type"],
-            category_column=chart["category_column"],
-            series_columns=tuple(chart["series_columns"]),
-        ),
+        chart=chart_spec(chart),
         caption=caption,
     )
-
-
-def _field_issues(at: str, raw: Mapping[str, Any]) -> list[SpecIssue]:
-    """ブロックの種類に合わない項目（要る項目が無い・使わない項目に値がある）。"""
-    kind = str(raw.get("type"))
-    used = _BLOCK_FIELDS[kind]
-    issues: list[SpecIssue] = []
-    for name, unused_value in _UNUSED_VALUES.items():
-        present = raw.get(name) not in (None, "", [])
-        if name in used and not present:
-            issues.append(
-                SpecIssue(
-                    f"{at}.{name}",
-                    "required",
-                    f"type が {kind} のブロックでは {name} を書いてください。",
-                )
-            )
-        elif name not in used and present:
-            issues.append(
-                SpecIssue(
-                    f"{at}.{name}",
-                    "conflict",
-                    f"type が {kind} のブロックでは {name} を{unused_value}にしてください"
-                    "（この項目の内容は文書に入りません）。",
-                )
-            )
-    return issues
 
 
 def _content(arguments: Mapping[str, Any], run: Any) -> DocumentContent:
@@ -352,9 +320,17 @@ def _content(arguments: Mapping[str, Any], run: Any) -> DocumentContent:
     blocks: list[Block] = []
     for block_index, raw in enumerate(arguments.get("blocks") or []):
         at = f"blocks.{block_index}"
-        field_issues = _field_issues(at, raw)
-        if field_issues:
-            issues.extend(field_issues)
+        wrong = field_issues(
+            at,
+            raw,
+            unit="ブロック",
+            target="文書",
+            required=_BLOCK_FIELDS[str(raw.get("type"))],
+            optional=(),
+            unused_values=_UNUSED_VALUES,
+        )
+        if wrong:
+            issues.extend(wrong)
             continue
         kind = raw["type"]
         if kind == "heading":
@@ -398,27 +374,19 @@ def _content(arguments: Mapping[str, Any], run: Any) -> DocumentContent:
 
 
 def _create_docx(arguments: dict[str, Any], context: ToolInvocationContext) -> dict[str, Any]:
-    run = running_run(context.run_id)
-    # 上限はこの module の値を呼ぶたびに読む（形式をまたいで同じ値。`file_tool_support`）。
-    check_file_count(run, MAX_FILES_PER_RUN)
-    content = _content(arguments, run)
-    try:
+    def build(run: Any) -> tuple[str, bytes, dict[str, Any]]:
+        content = _content(arguments, run)
         built = build_document(content)
-    except DocxSpecError as exc:
-        raise invalid_content(exc.issues) from exc
-    reference = save_run_file(
-        run.id,
-        MAX_FILES_PER_RUN,
-        file_name=content.title,
-        mime_type=DOCX_MIME_TYPE,
-        data=built.data,
+        summary = {
+            "blocks": dict(built.blocks),
+            "tables": list(built.tables),
+            "charts": list(built.charts),
+        }
+        return content.title, built.data, summary
+
+    return create_run_file(
+        context.run_id, mime_type=DOCX_MIME_TYPE, spec_errors=(DocxSpecError,), build=build
     )
-    return {
-        "file": reference,
-        "blocks": dict(built.blocks),
-        "tables": list(built.tables),
-        "charts": list(built.charts),
-    }
 
 
 def docx_create_tool() -> tuple[ToolDefinition, ToolHandler]:

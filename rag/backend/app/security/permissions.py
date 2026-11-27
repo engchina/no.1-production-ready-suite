@@ -360,6 +360,9 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
             "/documents/{document_id}/tree",
             "/units/{unit_id}",
             "/units/{unit_id}/relations",
+            "/document-graph",
+            "/connections",
+            "/documents/{document_id}/locate",
         )
     },
     # ---- ナレッジ構築: 文書（アップロード・文書インデックス） ----

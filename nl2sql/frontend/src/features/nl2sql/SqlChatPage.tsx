@@ -12,6 +12,7 @@ import {
 import {
   RunProgressCard,
   ApiErrorBanner,
+  ApiErrorState,
   ChatReadOnlyNotice,
   Banner,
   Button,
@@ -685,22 +686,14 @@ export function SqlChatPage() {
             // ツールバーの欄の寸法だけを予約する。文言と経過時間は会話の欄の先頭の 1 か所に出す（#4649）。
             <FieldSkeleton searchable fieldLabel={false} size="sm" testId="sql-chat-profiles-skeleton" />
           ) : profilesFailed ? (
-            <ApiErrorBanner
+            // 対象の一覧の読み取りの失敗は、3 製品で同じ領域の失敗の表示（「詳細」は閉じる。messaging.md §11.7。#5929）。
+            <ApiErrorState
               error={profiles.error}
               fallback={t("chat.profile.loadFailed")}
               testId="sql-chat-profiles-error"
-              action={
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  icon={RefreshCw}
-                  loading={profiles.isFetching}
-                  onClick={() => void profiles.refetch()}
-                >
-                  {t("chat.retry")}
-                </Button>
-              }
+              onRetry={() => void profiles.refetch()}
+              retrying={profiles.isFetching}
+              retryLabel={t("common.action.retry")}
             />
           ) : noProfiles ? (
             <EmptyState
@@ -952,7 +945,7 @@ export function SqlChatPage() {
                   icon={RefreshCw}
                   onClick={() => void conversation.refetch()}
                 >
-                  {t("chat.retry")}
+                  {t("common.action.retry")}
                 </Button>
               }
             />

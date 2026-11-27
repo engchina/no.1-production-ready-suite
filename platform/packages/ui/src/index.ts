@@ -547,6 +547,7 @@ export {
   LoadingState,
   ErrorState,
   EmptyState,
+  type ErrorStateLayout,
 } from "./components/feedback/state-views";
 export {
   ProcessingIndicator,

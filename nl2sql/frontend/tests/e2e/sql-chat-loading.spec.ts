@@ -178,8 +178,13 @@ test("業務プロファイルの一覧を読めなかったときは、空の�
     page.getByText("利用できる業務プロファイルがありません", { exact: true }),
   ).toHaveCount(0);
 
+  // 3 製品で同じ領域の失敗の表示（帯・「詳細」は閉じる・「再試行」。messaging.md §11.7。#5929）。
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+
   fail = false;
-  await error.getByRole("button", { name: "再読み込み" }).click();
+  await error.getByRole("button", { name: "再試行" }).click();
   await expect(page.locator("#sql-chat-profile")).toContainText("売上分析");
   await expect(
     page.getByText("質問を入力して会話を始めます", { exact: true }),

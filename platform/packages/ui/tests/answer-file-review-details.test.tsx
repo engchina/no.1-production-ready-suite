@@ -40,7 +40,11 @@ afterEach(() => {
 const vote = vi.fn(async () => undefined);
 const load = vi.fn(async (rating: "helpful" | "not_helpful") => state(rating));
 
-async function render(rating: "helpful" | "not_helpful", save = vi.fn(async () => undefined)) {
+async function render(
+  rating: "helpful" | "not_helpful",
+  save = vi.fn(async () => undefined),
+  loadOnMount?: boolean,
+) {
   vote.mockClear();
   load.mockClear();
   const details: AnswerFileReviewDetails = {
@@ -63,6 +67,7 @@ async function render(rating: "helpful" | "not_helpful", save = vi.fn(async () =
           t={t}
           initialRating={rating}
           load={() => load(rating)}
+          loadOnMount={loadOnMount}
           change={async () => state(rating)}
           vote={vote}
           details={details}
@@ -108,6 +113,20 @@ describe("AnswerFileReview の評価と、その後の操作（#5906）", () => 
     expect(load).toHaveBeenCalledTimes(1);
     expect(document.body.querySelector("[data-state=open]")).not.toBeNull();
     expect(vote).not.toHaveBeenCalled();
+  });
+
+  it("mount のときに以前の版を読む（既定）", async () => {
+    await render("not_helpful");
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("loadOnMount が false なら、資料を選び直す面を開くまで読まない（#5938）", async () => {
+    await render("not_helpful", undefined, false);
+    expect(load).not.toHaveBeenCalled();
+    // 読み込み中の骨組みではなく、評価のボタンをすぐ出す。
+    expect(button(FILE_REVIEW_JA["fileReview.notHelpful"])).toBeDefined();
+    await click(REVIEW);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("理由と修正した回答を、その版の ID で保存し、記録済みを出す", async () => {

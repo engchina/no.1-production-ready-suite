@@ -68,7 +68,7 @@ def agent(monkeypatch: MonkeyPatch) -> Iterator[None]:
             id=AGENT_ID,
             name="除去実験の業務 Agent",
             skill_ids=[SKILL_ID],
-            # 差し戻し・拒答の補助が動く設定（#5859。既定の「そのまま出して注意を付ける」は下の
+            # 差し戻し・拒答の補助が動く設定（#5859。既定の「注意を付けて表示する」は下の
             # `test_default_policy_run_is_the_same_with_and_without_the_aid`）。
             ungrounded_answer_policy="refuse",
         )
@@ -160,7 +160,7 @@ def test_disabled_aid_changes_the_code_path_only_in_evaluation_runs(
 def test_default_policy_run_is_the_same_with_and_without_the_aid(
     monkeypatch: MonkeyPatch, agent: None
 ) -> None:
-    """既定の設定（そのまま出して注意を付ける。#5859）は差し戻さないので、補助を外しても回答は同じ。
+    """既定の設定（注意を付けて表示する。#5859）は差し戻さないので、補助を外しても回答は同じ。
 
     全構成は注意を付けて basis を `ungrounded_answer` にし、補助を外した評価は注意も付けない。
     補助のコード経路（差し戻し・拒答のイベント）は基準でも動かないので、比較は `not_applicable`。

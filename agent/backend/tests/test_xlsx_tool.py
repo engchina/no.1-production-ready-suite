@@ -28,7 +28,7 @@ from mcp_support import DEFAULT_OUTPUTS, fake_product_mcp
 from openpyxl import load_workbook  # type: ignore[import-untyped]
 from pytest import MonkeyPatch
 
-from app.features.agent import builtin_runtime, xlsx_tool
+from app.features.agent import builtin_runtime, file_tool_support
 from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND, FILE_RUN_CLOSED
 from app.features.agent.builtin_runtime import UNDECLARED_CALL_NOT_DECLARED, ModelTarget
 from app.features.agent.config import runtime_config_store
@@ -452,7 +452,7 @@ def test_schema_violations_are_rejected_before_the_handler(run_id: str) -> None:
 
 def test_files_per_run_are_limited(run_id: str, monkeypatch: MonkeyPatch) -> None:
     assert MAX_FILES_PER_RUN == 10
-    monkeypatch.setattr(xlsx_tool, "MAX_FILES_PER_RUN", 2)
+    monkeypatch.setattr(file_tool_support, "MAX_FILES_PER_RUN", 2)
     sheet = _sheet(rows=[["x"]])
 
     results = [_invoke(run_id, sheet, title=f"file-{index}") for index in range(3)]

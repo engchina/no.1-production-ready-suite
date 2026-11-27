@@ -245,8 +245,23 @@ def pin_skill(skill: AgentSkillDefinition) -> PinnedSkill:
     )
 
 
+class AgentSkillListItem(AgentSkillDefinition):
+    """スキルの一覧の 1 件（業務 Agent の編集が使う判定を足す）。
+
+    `grounding` は、根拠・データのツール（RAG・NL2SQL・登録した MCP 接続のツール。一覧・推薦を
+    除く）を宣言したスキルか（`builtin_runtime.declares_grounding_tools`）。業務 Agent の編集は、
+    これを選んだときだけ「資料・データで確かめていない回答」の設定を出す（#5859）。
+    `model_writes_answer` は、このスキルを選ぶと RAG の回答をそのまま返さずにモデルが回答を書くか
+    （`builtin_runtime.model_writes_answer`。#5867）。業務 Agent の編集は、RAG の回答をそのまま返す
+    案内を出すかに使う。
+    """
+
+    grounding: bool = False
+    model_writes_answer: bool = False
+
+
 class AgentSkillListOutput(BaseModel):
-    skills: list[AgentSkillDefinition]
+    skills: list[AgentSkillListItem]
     metadata: JsonObject = Field(default_factory=dict)
 
 

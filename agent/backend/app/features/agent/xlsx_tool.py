@@ -29,18 +29,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from app.features.agent.chart_spec import CHART_SCHEMA, CHART_TYPES, ChartSpec
+from app.features.agent.chart_spec import CHART_SCHEMA, CHART_TYPES
 from app.features.agent.file_tool_support import (
     FILE_LIMIT_CODE,
     FILE_OUTPUT_SCHEMA,
     FORMAT_NAMES_HELP,
     MAX_FILES_PER_RUN,
-    check_file_count,
+    chart_spec,
     column_header,
+    create_run_file,
     invalid_content,
     run_data_index,
-    running_run,
-    save_run_file,
     source_schema,
     table_values,
 )
@@ -329,13 +328,7 @@ def _sheets(arguments: Mapping[str, Any], run: Any) -> list[Sheet]:
                     )
                     for item in raw.get("summaries") or ()
                 ),
-                chart=None
-                if chart is None
-                else ChartSpec(
-                    type=chart["type"],
-                    category_column=chart["category_column"],
-                    series_columns=tuple(chart["series_columns"]),
-                ),
+                chart=None if chart is None else chart_spec(chart),
             )
         )
     if issues:
@@ -344,22 +337,14 @@ def _sheets(arguments: Mapping[str, Any], run: Any) -> list[Sheet]:
 
 
 def _create_xlsx(arguments: dict[str, Any], context: ToolInvocationContext) -> dict[str, Any]:
-    run = running_run(context.run_id)
-    # 上限はこの module の値を呼ぶたびに読む（形式をまたいで同じ値。`file_tool_support`）。
-    check_file_count(run, MAX_FILES_PER_RUN)
-    sheets = _sheets(arguments, run)
-    try:
-        built = build_workbook(sheets)
-    except XlsxSpecError as exc:
-        raise invalid_content(exc.issues) from exc
-    reference = save_run_file(
-        run.id,
-        MAX_FILES_PER_RUN,
-        file_name=str(arguments.get("title") or ""),
-        mime_type=XLSX_MIME_TYPE,
-        data=built.data,
+    def build(run: Any) -> tuple[str, bytes, dict[str, Any]]:
+        built = build_workbook(_sheets(arguments, run))
+        summary = {"sheets": list(built.sheets), "charts": list(built.charts)}
+        return str(arguments.get("title") or ""), built.data, summary
+
+    return create_run_file(
+        context.run_id, mime_type=XLSX_MIME_TYPE, spec_errors=(XlsxSpecError,), build=build
     )
-    return {"file": reference, "sheets": list(built.sheets), "charts": list(built.charts)}
 
 
 def xlsx_create_tool() -> tuple[ToolDefinition, ToolHandler]:

@@ -1608,6 +1608,8 @@ export interface ChatMessage {
   approved_faq_answer?: boolean;
   /** 資料で答えた本文に引用を対応付けられなかった ASSISTANT の回答か（#5391）。 */
   answer_citation_missing?: boolean;
+  /** 資料を選び直して回答し直した版があるか（#5938）。true の回答だけ、開いたときに以前の版を読む。 */
+  has_file_review?: boolean;
 }
 
 export interface ConversationSummary {
