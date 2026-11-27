@@ -878,3 +878,72 @@ variable "aidp_db_user_write_enabled" {
   type        = bool
   default     = true
 }
+
+# ---------------------------------------------------------------- Oracle Analytics Cloud（任意。#5933）
+
+variable "deploy_oac" {
+  description = "Deploy an Oracle Analytics Cloud instance in the Autonomous AI Database compartment. The connection to the Autonomous AI Database is created in the Oracle Analytics Cloud console, not by this stack."
+  type        = bool
+  default     = false
+}
+
+variable "oac_name" {
+  description = "Name of the Oracle Analytics Cloud instance. It must be unique in the tenancy and cannot be changed later."
+  type        = string
+  default     = "ProductionReadySuiteOAC"
+
+  validation {
+    condition     = can(regex("^[A-Za-z][A-Za-z0-9]{0,29}$", var.oac_name))
+    error_message = "oac_name must start with a letter and contain only letters and digits (up to 30 characters)."
+  }
+}
+
+variable "oac_identity_domain_ocid" {
+  description = "OCID of the identity domain used to sign in to Oracle Analytics Cloud. Changing it re-creates the instance."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.oac_identity_domain_ocid == "" || can(regex("^ocid1\\.domain\\.", trimspace(var.oac_identity_domain_ocid)))
+    error_message = "oac_identity_domain_ocid must be the OCID of an identity domain (ocid1.domain...)."
+  }
+}
+
+variable "oac_admin_user" {
+  description = "User name (not OCID) of a user in the identity domain who becomes the administrator of the Oracle Analytics Cloud instance."
+  type        = string
+  default     = ""
+}
+
+variable "oac_feature_set" {
+  description = "Edition of Oracle Analytics Cloud: ENTERPRISE_ANALYTICS (Enterprise Edition) or SELF_SERVICE_ANALYTICS (Professional Edition). Changing it re-creates the instance."
+  type        = string
+  default     = "ENTERPRISE_ANALYTICS"
+
+  validation {
+    condition     = contains(["ENTERPRISE_ANALYTICS", "SELF_SERVICE_ANALYTICS"], var.oac_feature_set)
+    error_message = "oac_feature_set must be ENTERPRISE_ANALYTICS or SELF_SERVICE_ANALYTICS."
+  }
+}
+
+variable "oac_license_type" {
+  description = "License of Oracle Analytics Cloud: LICENSE_INCLUDED or BRING_YOUR_OWN_LICENSE."
+  type        = string
+  default     = "LICENSE_INCLUDED"
+
+  validation {
+    condition     = contains(["LICENSE_INCLUDED", "BRING_YOUR_OWN_LICENSE"], var.oac_license_type)
+    error_message = "oac_license_type must be LICENSE_INCLUDED or BRING_YOUR_OWN_LICENSE."
+  }
+}
+
+variable "oac_capacity_ocpus" {
+  description = "Number of OCPUs of the Oracle Analytics Cloud instance. 1 is for trials only; use 2 or more for production."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = contains([1, 2, 4, 6, 8, 10, 12, 16, 24, 36, 52], var.oac_capacity_ocpus)
+    error_message = "oac_capacity_ocpus must be one of 1, 2, 4, 6, 8, 10, 12, 16, 24, 36, 52."
+  }
+}
