@@ -51,8 +51,9 @@ import {
   ApiError,
   type ExternalMcpToolInfo,
   type McpAuthMode,
+  type McpConnectionPreset,
+  type McpConnectionProtocol,
   type McpConnectionSettings,
-  type McpConnectionWritePayload,
 } from "@/lib/api";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { agentPaginationLabels, listScrollLabel, PagedDataTable, QueryState } from "@/components/ListViews";
@@ -67,8 +68,20 @@ import {
 import { useEditorRoute } from "@/lib/editor-route";
 import { focusFirstInvalidField, numberFieldError } from "@/lib/field-validation";
 import { formatNumber } from "@/lib/format";
+import {
+  a2aAgentCardOf,
+  mcpAuthModesFor,
+  mcpBaseUrlChanged,
+  mcpConnectionPayload,
+  mcpFormOf,
+  withMcpPreset,
+  withMcpProtocol,
+  type A2aAgentCardInfo,
+  type McpConnectionFormState,
+  type McpConnectionPayloadContext,
+} from "@/lib/mcp-connection-form";
 import { mcpUrlCredentialProblem } from "@/lib/mcp-url";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { useCapabilities } from "@/lib/permissions";
 import { sameDraft, useEditorLeaveGuard } from "@/lib/leave-guard";
 import { formatDate } from "@/pages/shared/page-helpers";
@@ -83,7 +96,9 @@ function McpConnectionNotice({ connection }: { connection: McpConnectionSettings
     return null;
   }
   const missing = [
-    connection.base_url ? null : t("settings.mcpConnections.missingUrl"),
+    connection.base_url
+      ? null
+      : t(connection.protocol === "a2a" ? "settings.mcpConnections.missingUrlA2a" : "settings.mcpConnections.missingUrl"),
     connection.auth_mode === "service_token" && !connection.service_token_configured
       ? t("settings.mcpConnections.missingSecret")
       : null,
@@ -92,6 +107,9 @@ function McpConnectionNotice({ connection }: { connection: McpConnectionSettings
       : null,
     connection.auth_mode === "oauth_client_credentials" && !connection.oauth_configured
       ? t("settings.mcpConnections.missingOauth")
+      : null,
+    connection.auth_mode === "oci_signature" && !connection.oci_signature_configured
+      ? t("settings.mcpConnections.missingOciSignature")
       : null,
   ].filter((item): item is string => item !== null);
   return (
@@ -106,18 +124,34 @@ function McpConnectionNotice({ connection }: { connection: McpConnectionSettings
   );
 }
 
-/** サービストークンの準備の状態（.env で管理。値は表示しない）。 */
-function McpServiceTokenStatus({ connection }: { connection: McpConnectionSettings }) {
-  const rows = [
-    {
-      id: "secret",
-      label: t("settings.productMcp.secret"),
-      hint: t("settings.productMcp.secretHint"),
-      configured: connection.service_token_configured,
-    },
-  ];
+/**
+ * 接続ごとの資格情報を持たない認証の準備の状態（値は表示しない）。サービストークンは共通 .env の署名鍵、
+ * OCI 署名は「システム設定 › OCI 認証」の API キー（#5932）。
+ */
+function McpSharedCredentialStatus({ connection }: { connection: McpConnectionSettings }) {
+  const ociSignature = connection.auth_mode === "oci_signature";
+  const rows = ociSignature
+    ? [
+        {
+          id: "oci-signature",
+          label: t("settings.mcpConnections.ociSignatureKey"),
+          hint: t("settings.mcpConnections.ociSignatureKeyHint"),
+          configured: connection.oci_signature_configured === true,
+        },
+      ]
+    : [
+        {
+          id: "secret",
+          label: t("settings.productMcp.secret"),
+          hint: t("settings.productMcp.secretHint"),
+          configured: connection.service_token_configured,
+        },
+      ];
   return (
-    <ul aria-label={t("settings.productMcp.authStatus")} className="divide-y divide-border rounded-md border border-border">
+    <ul
+      aria-label={t(ociSignature ? "settings.mcpConnections.ociSignatureStatus" : "settings.productMcp.authStatus")}
+      className="divide-y divide-border rounded-md border border-border"
+    >
       {rows.map((row) => (
         <li key={row.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 space-y-0.5 break-words [overflow-wrap:anywhere]">
@@ -156,15 +190,22 @@ function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSett
   });
   // 接続の設定（URL・認証）を保存し直したら、前の設定での結果は消す（messaging.md §10.4）。
   const { reset } = fetchTools;
-  const settingsKey = `${connection.base_url ?? ""}\u0000${connection.auth_mode ?? ""}\u0000${connection.configured}`;
+  const settingsKey = `${connection.protocol ?? "mcp"}\u0000${connection.base_url ?? ""}\u0000${connection.agent_card_url ?? ""}\u0000${connection.auth_mode ?? ""}\u0000${connection.configured}`;
   useEffect(() => {
     reset();
   }, [reset, settingsKey]);
 
   const tools = fetchTools.data?.tools ?? [];
+  // A2A の接続（#5932）は Agent card を読み、その Agent にメッセージを送る 1 つのツールを返す。
+  const a2a = connection.protocol === "a2a";
+  const agentCard = a2aAgentCardOf(fetchTools.data?.metadata);
+  const name = connection.label || connection.server_id;
 
   return (
-    <Section title={t("settings.mcpConnections.tools")} description={t("settings.mcpConnections.toolsDescription")}>
+    <Section
+      title={t("settings.mcpConnections.tools")}
+      description={t(a2a ? "settings.mcpConnections.toolsDescriptionA2a" : "settings.mcpConnections.toolsDescription")}
+    >
       <Card className="min-w-0">
         <CardContent className="space-y-4 pt-5">
           <div className="flex flex-wrap items-center gap-3">
@@ -188,7 +229,7 @@ function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSett
           {fetchTools.isPending ? (
             // 取得中は結果の位置に経過時間を出す。スピナーは押した「ツールを取得」が担う（messaging.md §3.7 / §10.2）。
             <TimedLoadingState
-              label={t("loading.mcpTools")}
+              label={t(a2a ? "loading.a2aAgentCard" : "loading.mcpTools")}
               activityIcon="none"
               testId="mcp-tools-loading"
             >
@@ -201,26 +242,34 @@ function McpConnectionToolsPanel({ connection }: { connection: McpConnectionSett
               <SettingsTestResultPanel
                 tone={tools.length ? "success" : "warning"}
                 message={
-                  tools.length
-                    ? t("settings.mcpConnections.fetchSucceeded", {
-                        name: connection.label || connection.server_id,
-                        count: formatNumber(tools.length),
-                      })
-                    : t("settings.mcpConnections.fetchEmpty", { name: connection.label || connection.server_id })
+                  !tools.length
+                    ? t("settings.mcpConnections.fetchEmpty", { name })
+                    : agentCard
+                      ? t("settings.mcpConnections.fetchSucceededA2a", { name })
+                      : t("settings.mcpConnections.fetchSucceeded", { name, count: formatNumber(tools.length) })
                 }
                 elapsedMs={elapsedMs}
                 checkedAt={checkedAt}
                 troubleshooting={tools.length ? [] : [t("settings.mcpConnections.fetchEmptyHint")]}
                 details={toSettingsTestResultDetails({
                   server_id: connection.server_id,
+                  protocol: mcpProtocolLabel(connection.protocol),
                   base_url: connection.base_url,
                   auth_mode: mcpAuthLabel(connection.auth_mode),
+                  agent_name: agentCard?.name,
+                  protocol_version: agentCard?.protocolVersion,
+                  agent_version: agentCard?.version,
                   tools: tools.length,
                 })}
                 testId="mcp-tools-result"
               />
+              {agentCard ? <A2aAgentCardSummary card={agentCard} /> : null}
               {tools.length ? (
-                <McpToolsList tools={tools} trusted={connection.trust_tool_annotations === true} />
+                <McpToolsList
+                  tools={tools}
+                  trusted={connection.trust_tool_annotations === true}
+                  protocol={connection.protocol ?? "mcp"}
+                />
               ) : null}
             </>
           ) : null}
@@ -243,19 +292,22 @@ function McpToolsFailure({
   checkedAt?: string;
 }) {
   const apiError = error instanceof ApiError ? error : null;
+  const a2a = connection.protocol === "a2a";
   return (
     <SettingsTestResultPanel
       tone="danger"
       message={t("settings.mcpConnections.fetchFailedMessage", { name: connection.label || connection.server_id })}
       elapsedMs={elapsedMs}
       checkedAt={checkedAt}
+      // 1 つ目は backend の文（OCI 署名の 401 / 403 / 404 は、要る権限の案内を含む。#5932）。
       troubleshooting={[
         error.message,
-        t("settings.mcpConnections.fetchFailedHintUrl"),
-        t("settings.mcpConnections.fetchFailedHintAuth"),
+        t(a2a ? "settings.mcpConnections.fetchFailedHintUrlA2a" : "settings.mcpConnections.fetchFailedHintUrl"),
+        t(a2a ? "settings.mcpConnections.fetchFailedHintAuthA2a" : "settings.mcpConnections.fetchFailedHintAuth"),
       ]}
       details={toSettingsTestResultDetails({
         server_id: connection.server_id,
+        protocol: mcpProtocolLabel(connection.protocol),
         base_url: connection.base_url,
         status_code: apiError?.status,
         error_code: apiError?.errorCode,
@@ -266,12 +318,29 @@ function McpToolsFailure({
   );
 }
 
-function McpToolApprovalBadge({ tool, trusted }: { tool: ExternalMcpToolInfo; trusted: boolean }) {
+function McpToolApprovalBadge({
+  tool,
+  trusted,
+  protocol,
+}: {
+  tool: ExternalMcpToolInfo;
+  trusted: boolean;
+  protocol: McpConnectionProtocol;
+}) {
   // readOnlyHint の無いツールは、ツール権限で許可しない限り実行の前に承認を求める。注釈を信頼しない接続では
   // readOnlyHint のツールも承認を求める（#1832）。標準の接続の nl2sql_query のように backend の既定で
-  // 承認なしのツールは、backend の判定（default_decision）に従う。
+  // 承認なしのツールは、backend の判定（default_decision）に従う。信頼した A2A の接続の Agent も既定で
+  // 承認なし（#5932）。
   if (!tool.read_only && tool.default_decision === "allow") {
-    return <StatusBadge variant="neutral" label={t("settings.mcpConnections.autoByDefault")} icon={false} />;
+    return (
+      <StatusBadge
+        variant="neutral"
+        label={t(
+          protocol === "a2a" ? "settings.mcpConnections.autoTrustedConnection" : "settings.mcpConnections.autoByDefault"
+        )}
+        icon={false}
+      />
+    );
   }
   if (tool.read_only && !trusted) {
     return <StatusBadge variant="warning" label={t("settings.mcpConnections.readOnlyUntrusted")} icon={false} />;
@@ -283,7 +352,36 @@ function McpToolApprovalBadge({ tool, trusted }: { tool: ExternalMcpToolInfo; tr
   );
 }
 
-function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; trusted: boolean }) {
+/** 「ツールを取得」で読んだ Agent card（A2A の接続。名前・説明・版を読める形で出す。#5932）。 */
+function A2aAgentCardSummary({ card }: { card: A2aAgentCardInfo }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border p-3" data-testid="a2a-agent-card">
+      <p className="text-sm font-medium text-fg">{t("settings.mcpConnections.agentCard")}</p>
+      <dl className="mt-2 grid grid-cols-1 gap-2 text-sm">
+        <McpToolMeta label={t("settings.mcpConnections.agentCardName")} value={card.name} />
+        <McpToolMeta label={t("settings.mcpConnections.agentCardDescription")} value={card.description || "-"} />
+        <McpToolMeta
+          label={t("settings.mcpConnections.agentCardProtocolVersion")}
+          value={card.protocolVersion ?? "-"}
+          mono={Boolean(card.protocolVersion)}
+        />
+        {card.version ? (
+          <McpToolMeta label={t("settings.mcpConnections.agentCardVersion")} value={card.version} mono />
+        ) : null}
+      </dl>
+    </div>
+  );
+}
+
+function McpToolsList({
+  tools,
+  trusted,
+  protocol,
+}: {
+  tools: ExternalMcpToolInfo[];
+  trusted: boolean;
+  protocol: McpConnectionProtocol;
+}) {
   // 表示件数（10 / 25 / 50 / 100。#1891）。接続ごとの一覧なので、開いている間だけ保つ。
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   // 取り直した一覧は別の結果なので、そのときと表示件数を変えたときだけ 1 ページ目へ戻す。
@@ -313,7 +411,7 @@ function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; truste
     {
       key: "approval",
       header: t("settings.mcpConnections.approval"),
-      render: (tool) => <McpToolApprovalBadge tool={tool} trusted={trusted} />,
+      render: (tool) => <McpToolApprovalBadge tool={tool} trusted={trusted} protocol={protocol} />,
     },
     {
       key: "input_schema",
@@ -349,7 +447,7 @@ function McpToolsList({ tools, trusted }: { tools: ExternalMcpToolInfo[]; truste
           <div key={tool.name} className="rounded-md border border-border p-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <p className="min-w-0 break-words font-mono text-xs font-medium text-fg">{tool.name}</p>
-              <McpToolApprovalBadge tool={tool} trusted={trusted} />
+              <McpToolApprovalBadge tool={tool} trusted={trusted} protocol={protocol} />
             </div>
             <p className="mt-1 text-sm leading-6 text-fg-muted">{tool.description || "-"}</p>
             <dl className="mt-3 grid grid-cols-1 gap-2 text-xs">
@@ -407,7 +505,25 @@ function mcpAuthLabel(mode?: McpAuthMode | null): string {
   if (mode === "api_key") {
     return t("settings.mcpServers.authApiKey");
   }
+  if (mode === "oci_signature") {
+    return t("settings.mcpConnections.authOciSignature");
+  }
   return t("settings.mcpServers.authNone");
+}
+
+/** 一覧・結果の詳細に出すプロトコルの短い名前（値の無い接続は MCP）。 */
+function mcpProtocolLabel(protocol?: McpConnectionProtocol | null): string {
+  return protocol === "a2a" ? t("settings.mcpConnections.protocolA2aShort") : t("settings.mcpConnections.protocolMcp");
+}
+
+/** 追加の画面の既定値の表示名（id → i18n。知らない id はそのまま出す）。 */
+const MCP_PRESET_LABEL_KEYS: Record<string, I18nKey> = {
+  aidp_agent: "settings.mcpConnections.preset.aidp_agent",
+};
+
+function mcpPresetLabel(preset: McpConnectionPreset): string {
+  const key = MCP_PRESET_LABEL_KEYS[preset.id];
+  return key ? t(key) : preset.id;
 }
 
 /** 標準の接続（RAG / NL2SQL）の URL を決める配備の環境変数（backend の `_PRODUCT_MCP_URL_ENV` と同じ。#1325）。 */
@@ -420,41 +536,6 @@ function mcpSourceLabel(source: string): string {
   if (source === "env") return t("settings.mcpConnections.sourceEnv");
   return t("settings.mcpConnections.sourceRuntime");
 }
-
-interface McpConnectionFormState {
-  serverId: string;
-  label: string;
-  baseUrl: string;
-  authMode: McpAuthMode;
-  apiKey: string;
-  serviceAudience: string;
-  timeoutSeconds: string;
-  sessionId: string;
-  oauthTokenUrl: string;
-  oauthClientId: string;
-  oauthClientSecret: string;
-  oauthScope: string;
-  /** ツールの注釈（readOnlyHint）を信頼する（#1832・#1875。外部の接続は既定でオフ。標準の接続は常に使う）。 */
-  trustToolAnnotations: boolean;
-}
-
-const EMPTY_MCP_FORM: McpConnectionFormState = {
-  serverId: "",
-  label: "",
-  baseUrl: "",
-  authMode: "none",
-  apiKey: "",
-  serviceAudience: "",
-  timeoutSeconds: "10",
-  sessionId: "",
-  oauthTokenUrl: "",
-  oauthClientId: "",
-  oauthClientSecret: "",
-  oauthScope: "",
-  // 外部の接続は既定でオフ（#1875。MCP の仕様: 信頼しないサーバーの注釈は untrusted）。管理者が接続を
-  // 確かめてから、確認のダイアログを経てオンにする。
-  trustToolAnnotations: false,
-};
 
 /**
  * MCP の URL の検証（backend の `_validate_mcp_url` と同じ規則・文言）。空は未設定として保存できる。
@@ -469,21 +550,6 @@ function mcpUrlError(raw: string): string | null {
   return problem.kind === "userinfo"
     ? t("validation.mcpUrl.userinfo")
     : t("validation.mcpUrl.secretQuery", { names: problem.names.join("・") });
-}
-
-function mcpFormOf(connection: McpConnectionSettings | undefined): McpConnectionFormState {
-  if (!connection) return EMPTY_MCP_FORM;
-  return {
-    ...EMPTY_MCP_FORM,
-    serverId: connection.server_id,
-    label: connection.label ?? "",
-    baseUrl: connection.base_url ?? "",
-    authMode: connection.auth_mode,
-    serviceAudience: connection.service_audience ?? "",
-    timeoutSeconds: String(connection.timeout_seconds),
-    // 値を保存していない既存の外部の接続もオフ（backend が false を返す。#1875）。
-    trustToolAnnotations: connection.trust_tool_annotations === true,
-  };
 }
 
 export function McpConnectionsPage() {
@@ -594,7 +660,7 @@ export function McpConnectionsPage() {
               count={connections.data ? listCount(list.length, visibleConnections.length, Boolean(mcpQuery.trim())) : undefined}
               testId="mcp-connection-list-toolbar"
             />
-            <QueryState query={connections} loadingLabel={t("loading.mcpServers")} skeleton={<TableSkeleton columns={6} />}>
+            <QueryState query={connections} loadingLabel={t("loading.mcpServers")} skeleton={<TableSkeleton columns={7} />}>
               <McpConnectionTable
                 connections={visibleConnections}
                 resetKey={mcpQuery}
@@ -635,6 +701,7 @@ export function McpConnectionsPage() {
     <McpConnectionEditor
       key={connection?.server_id ?? "new"}
       connection={connection}
+      presets={connections.data?.presets ?? []}
       actions={connection ? connectionActions(connection) : []}
       readOnly={!canManage}
       onBack={() => editor.backToList()}
@@ -646,15 +713,18 @@ export function McpConnectionsPage() {
   );
 }
 
-/** MCP 接続の全画面エディタ（A 型。`?id=new` / `?id=<接続 ID>`）。 */
+/** 外部接続（MCP / A2A）の全画面エディタ（A 型。`?id=new` / `?id=<接続 ID>`）。 */
 function McpConnectionEditor({
   connection,
+  presets,
   actions,
   readOnly,
   onBack,
   onSaved,
 }: {
   connection?: McpConnectionSettings;
+  /** 追加の画面で選べる既定値（AIDP を配備した構成だけ。#5932）。 */
+  presets: McpConnectionPreset[];
   actions: EntityAction[];
   /** 変更の権限がない利用者は閲覧だけ（保存を出さず、入力を無効にする）。 */
   readOnly: boolean;
@@ -666,6 +736,7 @@ function McpConnectionEditor({
   const [formBaseline, setFormBaseline] = useState<McpConnectionFormState>(() => mcpFormOf(connection));
   const [serverIdError, setServerIdError] = useState<string | null>(null);
   const [baseUrlError, setBaseUrlError] = useState<string | null>(null);
+  const [agentCardUrlError, setAgentCardUrlError] = useState<string | null>(null);
   const [timeoutError, setTimeoutError] = useState<string | null>(null);
   // 保存した回数。保存し直したら、前の設定（秘密を含む）でのツールの取得の結果を消す（messaging.md §10.4。#1014）。
   const [savedCount, setSavedCount] = useState(0);
@@ -674,40 +745,20 @@ function McpConnectionEditor({
   const builtin = connection?.source === "builtin";
   // 配備（環境変数）が URL を決めた標準の接続は、URL も変えられない（#1325）。
   const urlLocked = Boolean(connection?.base_url_locked);
+  // A2A の接続（外部の Agent。#5932）。標準の接続では Oracle AI Data Platform の Agent（`aidp`）。
+  const a2a = form.protocol === "a2a";
+  const builtinA2a = builtin && a2a;
+  const preset = presets.find((candidate) => candidate.id === form.presetId) ?? null;
+  // 標準の接続（AIDP の Agent）の URL の形は、配備の既定値（リージョンの入った例）があればそれを出す。
+  const aidpUrlExample =
+    presets.find((candidate) => candidate.id === "aidp_agent")?.base_url_example ??
+    t("settings.mcpConnections.urlExampleAidp");
+  const payloadContext: McpConnectionPayloadContext = { editingId, builtin, urlLocked, baseline: formBaseline };
 
   // 送る内容は mutate の引数で渡す（クリック直前の入力を closure の古い state で送らない）。
   const saveMutation = useMutation({
     mutationFn: (current: McpConnectionFormState) => {
-      const payload: McpConnectionWritePayload = {
-        timeout_seconds: Number(current.timeoutSeconds),
-        session_id: current.sessionId || undefined,
-      };
-      // 標準の接続の名前は配備が決める（送らない。#1325）。
-      if (!builtin) {
-        payload.label = current.label || null;
-      }
-      // URL は変えたときだけ送る。保存済みの URL の資格情報は伏せて返るため、そのまま送り返すと
-      // 伏せた値で上書きしてしまう（#1056）。
-      if (!urlLocked && baseUrlChanged(current)) {
-        payload.base_url = current.baseUrl.trim();
-      }
-      if (!builtin) {
-        payload.auth_mode = current.authMode;
-        // 標準の接続は注釈を常に使う（送らない。#1832）。
-        payload.trust_tool_annotations = current.trustToolAnnotations;
-      }
-      if (current.authMode === "api_key" && current.apiKey) {
-        payload.api_key = current.apiKey;
-      }
-      if (current.authMode === "service_token" && !builtin) {
-        payload.service_audience = current.serviceAudience.trim();
-      }
-      if (current.authMode === "oauth_client_credentials") {
-        payload.oauth_token_url = current.oauthTokenUrl || undefined;
-        payload.oauth_client_id = current.oauthClientId || undefined;
-        payload.oauth_client_secret = current.oauthClientSecret || undefined;
-        payload.oauth_scope = current.oauthScope || undefined;
-      }
+      const payload = mcpConnectionPayload(current, payloadContext);
       if (editingId) {
         return agentApi.updateMcpConnection(editingId, payload);
       }
@@ -732,16 +783,26 @@ function McpConnectionEditor({
     if (await confirmClose()) onBack();
   }
 
-  // 注釈の信頼をオンにする前に、MCP の仕様の注意を確認のダイアログで示す（#1875）。オフにするのは
-  // 安全側なので確かめない。
+  // 注釈の信頼をオンにする前に、MCP の仕様の注意を確認のダイアログで示す（#1875）。A2A の接続では、
+  // 相手の Agent を承認なしで呼ぶことの注意を示す（#5932）。オフにするのは安全側なので確かめない。
   async function changeTrustToolAnnotations(checked: boolean) {
     if (checked) {
       const ok = await confirm({
-        title: t("settings.mcpConnections.trustAnnotationsConfirmTitle"),
-        description: t("settings.mcpConnections.trustAnnotationsConfirmDescription", {
-          name: form.label.trim() || form.serverId.trim() || t("settings.mcpConnections.trustAnnotationsThisConnection"),
-        }),
-        confirmLabel: t("settings.mcpConnections.trustAnnotationsConfirm"),
+        title: t(
+          a2a ? "settings.mcpConnections.trustA2aConfirmTitle" : "settings.mcpConnections.trustAnnotationsConfirmTitle"
+        ),
+        description: t(
+          a2a
+            ? "settings.mcpConnections.trustA2aConfirmDescription"
+            : "settings.mcpConnections.trustAnnotationsConfirmDescription",
+          {
+            name:
+              form.label.trim() || form.serverId.trim() || t("settings.mcpConnections.trustAnnotationsThisConnection"),
+          }
+        ),
+        confirmLabel: t(
+          a2a ? "settings.mcpConnections.trustA2aConfirm" : "settings.mcpConnections.trustAnnotationsConfirm"
+        ),
         cancelLabel: t("common.cancel"),
         tone: "warning",
       });
@@ -751,7 +812,23 @@ function McpConnectionEditor({
   }
 
   function baseUrlChanged(current: McpConnectionFormState): boolean {
-    return !editingId || current.baseUrl.trim() !== formBaseline.baseUrl.trim();
+    return mcpBaseUrlChanged(current, payloadContext);
+  }
+
+  // プロトコルを切り替える。今の認証方式が使えなくなったら「なし」に戻す（MCP は OCI 署名、A2A は
+  // サービストークンを使えない。#5932）。
+  function changeProtocol(protocol: McpConnectionProtocol) {
+    setForm((current) => withMcpProtocol(current, protocol));
+    setBaseUrlError(null);
+    setAgentCardUrlError(null);
+  }
+
+  // 追加の画面の既定値（プロトコル・認証・タイムアウトと URL の雛形を入れる。#5932）。
+  function changePreset(presetId: string) {
+    const next = presets.find((candidate) => candidate.id === presetId) ?? null;
+    setForm((current) => withMcpPreset(current, next, preset));
+    setBaseUrlError(null);
+    setTimeoutError(null);
   }
 
   function save() {
@@ -759,6 +836,11 @@ function McpConnectionEditor({
       !editingId && !form.serverId.trim() ? t("settings.mcpServers.idRequired") : null;
     // 保存済みの（伏せて表示している）URL のままなら検証しない（変えた URL だけを送る）。
     const nextBaseUrlError = !urlLocked && baseUrlChanged(form) ? mcpUrlError(form.baseUrl) : null;
+    // Agent card の URL は A2A の外部の接続だけ（保存済みの値のままなら検証しない）。
+    const nextAgentCardUrlError =
+      a2a && !builtin && (!editingId || form.agentCardUrl.trim() !== formBaseline.agentCardUrl.trim())
+        ? mcpUrlError(form.agentCardUrl)
+        : null;
     // 空のタイムアウトを 0 として保存しない。規則は backend（McpConnectionCreate / Patch）と同じ（#540）。
     const nextTimeoutError = numberFieldError(form.timeoutSeconds, {
       label: t("settings.timeout"),
@@ -768,11 +850,13 @@ function McpConnectionEditor({
     });
     setServerIdError(nextServerIdError);
     setBaseUrlError(nextBaseUrlError);
+    setAgentCardUrlError(nextAgentCardUrlError);
     setTimeoutError(nextTimeoutError);
     if (
       focusFirstInvalidField([
         ["mcp-server-id", nextServerIdError],
         ["mcp-server-base-url", nextBaseUrlError],
+        ["mcp-server-agent-card-url", nextAgentCardUrlError],
         ["mcp-server-timeout", nextTimeoutError],
       ])
     ) {
@@ -781,12 +865,29 @@ function McpConnectionEditor({
     saveMutation.mutate(form);
   }
 
-  const authOptions: SelectFieldOption<McpAuthMode>[] = [
-    { value: "none", label: t("settings.mcpServers.authNone") },
-    { value: "api_key", label: t("settings.mcpServers.authApiKey") },
-    { value: "oauth_client_credentials", label: t("settings.mcpServers.authOauth") },
-    { value: "service_token", label: t("settings.mcpConnections.authServiceToken") },
+  // 認証の選択肢はプロトコルで変わる（MCP は OCI 署名を出さず、A2A はサービストークンを出さない。#5932）。
+  const authOptions: SelectFieldOption<McpAuthMode>[] = mcpAuthModesFor(form.protocol).map((mode) => ({
+    value: mode,
+    label: mcpAuthLabel(mode),
+  }));
+  const protocolOptions: SelectFieldOption<McpConnectionProtocol>[] = [
+    { value: "mcp", label: t("settings.mcpConnections.protocolMcp") },
+    { value: "a2a", label: t("settings.mcpConnections.protocolA2a") },
   ];
+  const presetOptions: SelectFieldOption<string>[] = [
+    { value: "", label: t("settings.mcpConnections.presetNone") },
+    ...presets.map((candidate) => ({ value: candidate.id, label: mcpPresetLabel(candidate) })),
+  ];
+  // URL の欄の補足: 配備が決めた URL → 標準の接続（AIDP の Agent / RAG・NL2SQL）→ 外部の接続（A2A / MCP）。
+  const urlHelper = urlLocked
+    ? t("settings.mcpConnections.urlHintLocked", { env: productMcpUrlEnv(connection?.server_id ?? "") })
+    : builtinA2a
+      ? `${t("settings.mcpConnections.urlHintBuiltinA2a")}${t("settings.mcpConnections.urlHintExample", { example: aidpUrlExample })}`
+      : builtin
+        ? t("settings.mcpConnections.urlHintBuiltin", { env: productMcpUrlEnv(connection?.server_id ?? "") })
+        : a2a
+          ? `${t("settings.mcpConnections.urlHintA2a")}${preset ? t("settings.mcpConnections.urlHintExample", { example: preset.base_url_example }) : ""}`
+          : t("settings.mcpConnections.urlHint");
   const listTitle = t("nav.settingsMcpConnections");
   const title = connection ? connection.label || connection.server_id : t("settings.mcpConnections.addTitle");
 
@@ -819,13 +920,18 @@ function McpConnectionEditor({
                   label={connection.configured ? t("common.configured") : t("common.notConfigured")}
                 />
                 <StatusBadge variant="neutral" label={mcpSourceLabel(connection.source)} icon={false} />
+                <StatusBadge variant="neutral" label={mcpProtocolLabel(connection.protocol)} icon={false} />
                 <span className="text-xs text-fg-muted">
                   {`${t("settings.mcpServers.auth")}: ${mcpAuthLabel(connection.auth_mode)}`}
                 </span>
               </div>
               {builtin ? (
                 <Banner severity="info" title={t("settings.mcpConnections.builtinTitle")}>
-                  {urlLocked ? t("settings.mcpConnections.builtinLocked") : t("settings.mcpConnections.builtinUnlocked")}
+                  {builtinA2a
+                    ? t("settings.mcpConnections.builtinA2a")
+                    : urlLocked
+                      ? t("settings.mcpConnections.builtinLocked")
+                      : t("settings.mcpConnections.builtinUnlocked")}
                 </Banner>
               ) : null}
               <McpConnectionNotice connection={connection} />
@@ -839,6 +945,20 @@ function McpConnectionEditor({
               <Card className="min-w-0">
                 <CardContent className="pt-5">
                   <FormGrid>
+                    {/* 追加の画面の既定値（AIDP を配備した構成だけ。選ぶとプロトコル・認証・URL の雛形が入る。#5932）。 */}
+                    {!editingId && presets.length ? (
+                      <div className="col-span-full min-w-0">
+                        <SelectField<string>
+                          id="mcp-server-preset"
+                          width="md"
+                          label={t("settings.mcpConnections.preset")}
+                          helper={t("settings.mcpConnections.presetHint")}
+                          value={form.presetId}
+                          options={presetOptions}
+                          onValueChange={changePreset}
+                        />
+                      </div>
+                    ) : null}
                     {/* 接続 ID は作成時だけ入力でき、必須。モデルに渡すツール名（<接続>__<ツール>）の先頭になる。 */}
                     <TextField
                       id="mcp-server-id"
@@ -865,19 +985,27 @@ function McpConnectionEditor({
                       value={form.label}
                       onValueChange={(value) => setForm({ ...form, label: value })}
                     />
+                    {/* プロトコル（#5932）。標準の接続は変えられない。A2A は外部の Agent を 1 つのツールにする。 */}
+                    <div className="col-span-full min-w-0">
+                      <SelectField<McpConnectionProtocol>
+                        id="mcp-server-protocol"
+                        width="md"
+                        label={t("settings.mcpConnections.protocol")}
+                        helper={t(
+                          builtin ? "settings.mcpConnections.protocolHintBuiltin" : "settings.mcpConnections.protocolHint"
+                        )}
+                        value={form.protocol}
+                        options={protocolOptions}
+                        disabled={builtin}
+                        onValueChange={changeProtocol}
+                      />
+                    </div>
                     <div className="col-span-full min-w-0">
                       <TextField
                         id="mcp-server-base-url"
                         width="full"
-                        label={t("settings.mcpConnections.url")}
-                        helper={[
-                          urlLocked
-                            ? t("settings.mcpConnections.urlHintLocked", { env: productMcpUrlEnv(connection?.server_id ?? "") })
-                            : builtin
-                              ? t("settings.mcpConnections.urlHintBuiltin", { env: productMcpUrlEnv(connection?.server_id ?? "") })
-                              : t("settings.mcpConnections.urlHint"),
-                          connection?.base_url_masked ? t("settings.mcpConnections.urlMaskedHint") : null,
-                        ]
+                        label={t(a2a ? "settings.mcpConnections.urlA2a" : "settings.mcpConnections.url")}
+                        helper={[urlHelper, connection?.base_url_masked ? t("settings.mcpConnections.urlMaskedHint") : null]
                           .filter(Boolean)
                           .join("")}
                         error={baseUrlError ?? undefined}
@@ -889,6 +1017,23 @@ function McpConnectionEditor({
                         }}
                       />
                     </div>
+                    {/* Agent card の URL は任意（空なら endpoint から決まる）。標準の接続では endpoint から決まる。 */}
+                    {a2a && !builtin ? (
+                      <div className="col-span-full min-w-0">
+                        <TextField
+                          id="mcp-server-agent-card-url"
+                          width="full"
+                          label={t("settings.mcpConnections.agentCardUrl")}
+                          helper={t("settings.mcpConnections.agentCardUrlHint")}
+                          error={agentCardUrlError ?? undefined}
+                          value={form.agentCardUrl}
+                          onValueChange={(value) => {
+                            setForm({ ...form, agentCardUrl: value });
+                            setAgentCardUrlError(null);
+                          }}
+                        />
+                      </div>
+                    ) : null}
                     <TextField
                       id="mcp-server-timeout"
                       width="xs"
@@ -904,32 +1049,42 @@ function McpConnectionEditor({
                         setTimeoutError(null);
                       }}
                     />
-                    <TextField
-                      id="mcp-server-session"
-                      width="md"
-                      label={t("settings.mcpSessionId")}
-                      className="min-w-0"
-                      helper={t("settings.mcpSessionHint")}
-                      value={form.sessionId}
-                      autoComplete="off"
-                      onValueChange={(value) => setForm({ ...form, sessionId: value })}
-                    />
-                    {/* ツールの注釈（readOnlyHint）の信頼（#1832）。標準の接続は常に使う（変えられない）。 */}
+                    {/* セッション ID は MCP（streamable HTTP の gateway）だけ。 */}
+                    {a2a ? null : (
+                      <TextField
+                        id="mcp-server-session"
+                        width="md"
+                        label={t("settings.mcpSessionId")}
+                        className="min-w-0"
+                        helper={t("settings.mcpSessionHint")}
+                        value={form.sessionId}
+                        autoComplete="off"
+                        onValueChange={(value) => setForm({ ...form, sessionId: value })}
+                      />
+                    )}
+                    {/* MCP: ツールの注釈（readOnlyHint）の信頼（#1832）。A2A: この接続の Agent を承認なしで呼ぶ（#5932）。
+                        標準の接続は常にオン（変えられない）。 */}
                     <div className="col-span-full space-y-1" data-testid="mcp-trust-annotations">
                       <label className="inline-flex items-center gap-2 text-sm text-fg">
                         <Switch
                           checked={builtin || form.trustToolAnnotations}
                           disabled={builtin}
-                          aria-label={t("settings.mcpConnections.trustAnnotations")}
+                          aria-label={t(a2a ? "settings.mcpConnections.trustA2a" : "settings.mcpConnections.trustAnnotations")}
                           aria-describedby="mcp-trust-annotations-helper"
                           onCheckedChange={(checked) => void changeTrustToolAnnotations(checked)}
                         />
-                        {t("settings.mcpConnections.trustAnnotations")}
+                        {t(a2a ? "settings.mcpConnections.trustA2a" : "settings.mcpConnections.trustAnnotations")}
                       </label>
                       <p id="mcp-trust-annotations-helper" className="text-xs leading-5 text-fg-muted">
-                        {builtin
-                          ? t("settings.mcpConnections.trustAnnotationsBuiltin")
-                          : t("settings.mcpConnections.trustAnnotationsHelper")}
+                        {t(
+                          a2a
+                            ? builtin
+                              ? "settings.mcpConnections.trustA2aBuiltin"
+                              : "settings.mcpConnections.trustA2aHelper"
+                            : builtin
+                              ? "settings.mcpConnections.trustAnnotationsBuiltin"
+                              : "settings.mcpConnections.trustAnnotationsHelper"
+                        )}
                       </p>
                     </div>
                   </FormGrid>
@@ -947,7 +1102,13 @@ function McpConnectionEditor({
                       value={form.authMode}
                       options={authOptions}
                       disabled={builtin}
-                      helper={builtin ? t("settings.mcpConnections.authBuiltinHint") : undefined}
+                      helper={
+                        builtinA2a
+                          ? t("settings.mcpConnections.authBuiltinHintA2a")
+                          : builtin
+                            ? t("settings.mcpConnections.authBuiltinHint")
+                            : undefined
+                      }
                       onValueChange={(value) => setForm({ ...form, authMode: value })}
                     />
                     {form.authMode === "service_token" ? (
@@ -1024,9 +1185,18 @@ function McpConnectionEditor({
                         />
                       </>
                     ) : null}
-                    {form.authMode === "service_token" && connection ? (
+                    {/* OCI 署名は接続ごとの資格情報を持たない（「システム設定 › OCI 認証」の API キーで署名する。#5932）。 */}
+                    {form.authMode === "oci_signature" ? (
+                      <p className="col-span-full text-sm leading-6 text-fg-muted" data-testid="mcp-oci-signature-hint">
+                        {t("settings.mcpConnections.ociSignatureHint")}
+                      </p>
+                    ) : null}
+                    {/* 保存済みの認証方式の準備の状態（入力中の認証方式が保存済みと同じときだけ）。 */}
+                    {connection &&
+                    form.authMode === connection.auth_mode &&
+                    (form.authMode === "service_token" || form.authMode === "oci_signature") ? (
                       <div className="col-span-full min-w-0">
-                        <McpServiceTokenStatus connection={connection} />
+                        <McpSharedCredentialStatus connection={connection} />
                       </div>
                     ) : null}
                   </FormGrid>
@@ -1064,6 +1234,7 @@ function McpConnectionEditor({
                     setForm(formBaseline);
                     setServerIdError(null);
                     setBaseUrlError(null);
+                    setAgentCardUrlError(null);
                     setTimeoutError(null);
                   },
                 },
@@ -1117,6 +1288,13 @@ function McpConnectionTable({
       render: (connection) => (connection.base_url ? <span className="font-mono">{connection.base_url}</span> : "-"),
     },
     {
+      key: "protocol",
+      header: t("settings.mcpConnections.protocol"),
+      render: (connection) => (
+        <StatusBadge variant="neutral" label={mcpProtocolLabel(connection.protocol)} icon={false} />
+      ),
+    },
+    {
       key: "auth_mode",
       header: t("settings.mcpServers.auth"),
       className: "text-fg-muted",
@@ -1164,7 +1342,7 @@ function McpConnectionTable({
       getRowKey={(connection) => connection.server_id}
       onRowClick={onOpen}
       rowProps={() => ({ className: "align-top" })}
-      tableClassName="w-full min-w-[48rem]"
+      tableClassName="w-full min-w-[54rem]"
       ariaLabel={t("settings.mcpConnections.title")}
       empty={empty}
     />

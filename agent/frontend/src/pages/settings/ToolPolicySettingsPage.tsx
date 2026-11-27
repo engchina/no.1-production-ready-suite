@@ -70,6 +70,9 @@ function policyReasonLabel(tool: ToolPolicyTool, choice: ToolPolicyChoice | unde
   switch (tool.default_reason) {
     case "standard":
       return t("settings.toolPolicy.reason.standard");
+    case "trusted_connection":
+      // 信頼した接続の外部の Agent（A2A。既定で承認なし・送信後の失敗では再送しない。#5932）。
+      return t("settings.toolPolicy.reason.trusted_connection");
     case "read_only":
       return tool.server_id === "control-plane"
         ? t("settings.toolPolicy.reason.read_only")

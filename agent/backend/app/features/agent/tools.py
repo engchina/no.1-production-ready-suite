@@ -2,6 +2,8 @@
 
 Control Plane のツール（`tool_registry`）と、MCP 接続のツール（RAG / NL2SQL / 外部 MCP。#757）を
 同じポリシー・ガードレール・監査で呼ぶ。業務 RAG / NL2SQL はこのプロジェクト内で実装しない。
+A2A の接続（外部の Agent。#5932）も同じ入口（`list_mcp_connection_tools`・`mcp_tool_definition`・
+`mcp_tool_handler`）で 1 つのツールにする（プロトコルの実装は `a2a.py`）。
 
 依存は「業務 Agent → スキル → ツール」の一方向（#3240）。この module（とここから import する
 module）はスキルの定義・ID・一覧を import・参照しない。どのツールを Run に渡すかはスキルの側
@@ -133,6 +135,11 @@ class ToolDefinition(BaseModel):
     # 標準の接続（RAG / NL2SQL）のツールで、Agent が既定で承認なしに実行すると決めたもの（#1832。
     # `nl2sql_query`）。ツール権限で個別に指定（ask / deny を含む）すればそちらが優先する。
     standard_auto_approve: bool = False
+    # 信頼した接続の外部の Agent（A2A のツール。#5932）で、既定で承認なしに実行するもの。相手が
+    # 書き込むことがあるので、`standard_auto_approve` と違い副作用のあるツールのまま扱う（読み取り
+    # 専用にしない。送信後の失敗では再送せず、論理操作の ID と結果不明の規則 `external_writes` も
+    # 掛かる）。ツール権限で個別に指定すればそちらが優先する。
+    trusted_auto_approve: bool = False
     # MCP 接続のツールの出自（接続の ID と `tools/list` の name。それ以外のツールは None）。
     # モデルに渡す名前は衝突を避けて元の名前と変わることがあるので（#2596）、Skill の requirement・
     # 指示の名前との対応と、別のツールの名前の衝突の検出はこちらで行う。
@@ -299,9 +306,10 @@ class ToolPolicy(BaseModel):
         """判定と、その理由（#1832。ツール権限の画面に出す）。
 
         理由: `policy`（ツール権限で個別に指定）/ `standard`（標準の接続で Agent が承認なしと
-        決めたツール）/ `read_only`（読み取り専用の宣言。MCP のツールは信頼した接続の
-        `readOnlyHint`）/ `untrusted_annotation`（読み取り専用の注釈はあるが、接続が注釈を信頼
-        していないので既定の動作）/ `default_mode`（未指定ツールの既定の動作）。
+        決めたツール）/ `trusted_connection`（信頼した接続の外部の Agent。#5932）/ `read_only`
+        （読み取り専用の宣言。MCP のツールは信頼した接続の `readOnlyHint`）/
+        `untrusted_annotation`（読み取り専用の注釈はあるが、接続が注釈を信頼していないので既定の
+        動作）/ `default_mode`（未指定ツールの既定の動作）。
         """
         if definition.name in self.deny:
             return ToolPolicyDecision.DENY, "policy"
@@ -311,6 +319,8 @@ class ToolPolicy(BaseModel):
             return ToolPolicyDecision.ALLOW, "policy"
         if definition.standard_auto_approve:
             return ToolPolicyDecision.ALLOW, "standard"
+        if definition.trusted_auto_approve:
+            return ToolPolicyDecision.ALLOW, "trusted_connection"
         if definition.trusted_read_only:
             return ToolPolicyDecision.ALLOW, "read_only"
         read_only = (
@@ -766,8 +776,16 @@ def _post_mcp_message(
     kind: McpRetryKind = McpRetryKind.PROTOCOL,
     deadline: float | None = None,
     target_name: str | None = None,
+    auth: httpx.Auth | None = None,
+    http_method: str = "POST",
+    span_name: str = "mcp.request",
+    trace_meta: bool = True,
 ) -> tuple[JsonObject | None, Any]:
     """JSON-RPC の 1 メッセージを POST する。本文のない応答（通知への 202）は None。
+
+    A2A の接続（#5932。`a2a.py`）も同じ再試行・期限・取消で送る: `auth` はリクエストごとの署名
+    （OCI 署名）、`http_method="GET"` は本文を送らない取得（Agent card）、`span_name` は span の
+    名前、`trace_meta=False` は `params._meta` を足さない（A2A の params には無い項目）。
 
     再試行（#854。MCP の意味に合わせる）:
     - 送信前の失敗（接続できない・接続の timeout・pool の待ち）と 429 / 503 は、どの分類でも
@@ -795,6 +813,10 @@ def _post_mcp_message(
             deadline=deadline,
             target_name=target_name,
             abort=abort,
+            auth=auth,
+            http_method=http_method,
+            span_name=span_name,
+            trace_meta=trace_meta,
         )
     except ExternalToolError as exc:
         if abort is None or not abort.aborted or exc.code == f"{service_code}.call_aborted":
@@ -899,11 +921,17 @@ def _post_mcp_attempts(
     deadline: float | None,
     target_name: str | None,
     abort: CallAbort | None,
+    auth: httpx.Auth | None = None,
+    http_method: str = "POST",
+    span_name: str = "mcp.request",
+    trace_meta: bool = True,
 ) -> tuple[JsonObject | None, Any]:
     target = target_name or service_label
     # 送信中に接続を切ってよいか（書き込みのツールは送った後は切らない）。
     trace = abort.httpcore_trace() if abort is not None and kind != McpRetryKind.UNSAFE else None
     request_options: dict[str, Any] = {"extensions": {"trace": trace}} if trace else {}
+    if auth is not None:
+        request_options["auth"] = auth
     end = deadline if deadline is not None else monotonic() + max(0.1, timeout_seconds)
     attempts = max(0, max_retries) + 1
     retry_statuses = _RETRY_STATUSES[kind]
@@ -925,11 +953,11 @@ def _post_mcp_attempts(
         try:
             with (
                 observed_span(
-                    "mcp.request",
+                    span_name,
                     kind="client",
                     attributes={
                         "pr.attempt": attempt,
-                        "http.request.method": "POST",
+                        "http.request.method": http_method,
                         **_mcp_request_attributes(payload),
                     },
                 ) as call_span,
@@ -939,12 +967,16 @@ def _post_mcp_attempts(
                 # 置き場所）の両方に入れる（#3226）。呼び先（RAG / NL2SQL）はサービストークンの要求
                 # だけ親にし、呼び先の span がこの `mcp.request` の下につながる。
                 call_span.set_call_input(payload)
-                response = client.post(
-                    url,
-                    json=_with_trace_meta(payload),
-                    headers={**headers, **capture_trace_context()},
-                    **request_options,
-                )
+                request_headers = {**headers, **capture_trace_context()}
+                if http_method == "GET":
+                    response = client.get(url, headers=request_headers, **request_options)
+                else:
+                    response = client.post(
+                        url,
+                        json=_with_trace_meta(payload) if trace_meta else payload,
+                        headers=request_headers,
+                        **request_options,
+                    )
                 response.raise_for_status()
                 response_headers = response.headers
                 if response.status_code == 202 or not response.content:
@@ -1810,6 +1842,14 @@ class McpConnectionClient:
                     {"server_id": config.server_id},
                 )
             headers["Authorization"] = f"Bearer {config.api_key}"
+        elif mode == "oci_signature":
+            # OCI 署名は A2A の接続だけ（#5932）。認証なしで送らない。
+            raise ExternalToolError(
+                "mcp.auth_mode_unsupported",
+                f"MCP 接続「{self._label}」では OCI 署名の認証を使えません"
+                "（プロトコルが A2A の接続で使います）。",
+                {"server_id": config.server_id},
+            )
         return McpSession(
             url=config.base_url.rstrip("/"),
             headers=headers,
@@ -2023,7 +2063,12 @@ STANDARD_AUTO_APPROVED_TOOLS: dict[str, frozenset[str]] = {
 
 
 def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> ToolDefinition:
-    """MCP 接続のツールを Runtime のツール定義にする（承認の要否は readOnlyHint とポリシー）。"""
+    """MCP 接続のツールを Runtime のツール定義にする（承認の要否は readOnlyHint とポリシー）。
+
+    A2A の接続のツール（外部の Agent。#5932）は注釈を持たないので、常に副作用のあるツールにする
+    （相手が書き込むことがある）。信頼した接続（組み込みの `aidp`・管理者が信頼にした接続）だけ
+    既定で承認なしにし（`trusted_auto_approve`）、送信後の失敗では再送しない。
+    """
     schema = dict(tool.input_schema) or {"type": "object", "properties": {}}
     schema.setdefault("type", "object")
     label = config.label or config.server_id
@@ -2045,6 +2090,7 @@ def mcp_tool_definition(config: McpConnectionConfig, tool: ExternalMcpToolInfo) 
         annotations_trusted=config.annotations_trusted(),
         standard_auto_approve=config.source == "builtin"
         and tool.name in STANDARD_AUTO_APPROVED_TOOLS.get(config.server_id, frozenset()),
+        trusted_auto_approve=config.protocol == "a2a" and config.annotations_trusted(),
         mcp_server_id=config.server_id,
         mcp_tool_name=tool.name,
         idempotent=tool.idempotent,
@@ -2069,7 +2115,12 @@ def mcp_tool_handler(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> 
     """MCP 接続のツールを呼ぶ handler（再試行は `_post_mcp_message`。#854）。
 
     組み込みの NL2SQL のジョブのツールは、結果が実行中なら完了まで続きを取る（#848）。
+    A2A の接続のツールは、外部の Agent にメッセージを送る（#5932。`a2a.a2a_tool_handler`）。
     """
+    if config.protocol == "a2a":
+        from app.features.agent.a2a import a2a_tool_handler
+
+        return a2a_tool_handler(config)
     follow_up_tool = _job_follow_up_tool(config, tool.name)
 
     def handle(
@@ -2104,8 +2155,15 @@ def mcp_tool_handler(config: McpConnectionConfig, tool: ExternalMcpToolInfo) -> 
 def list_mcp_connection_tools(
     server_id: str, *, context: ToolInvocationContext, trace_id: str | None = None
 ) -> ExternalMcpToolsData:
-    """MCP 接続のツール一覧（呼び先は利用者の権限で絞る）。未登録の接続は KeyError。"""
+    """MCP 接続のツール一覧（呼び先は利用者の権限で絞る）。未登録の接続は KeyError。
+
+    A2A の接続（#5932）は Agent card を読み、その Agent にメッセージを送る 1 つのツールを返す。
+    """
     config = runtime_config_store.get_mcp(server_id)
+    if config.protocol == "a2a":
+        from app.features.agent.a2a import A2aConnectionClient
+
+        return A2aConnectionClient(config).list_tools()
     return McpConnectionClient(config, context=context).list_tools(trace_id=trace_id)
 
 

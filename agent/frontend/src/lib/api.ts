@@ -149,8 +149,17 @@ export interface ToolPolicyTool {
   side_effects: boolean | null;
   /** ポリシーで個別に決めていないとき（既定に従う）の判定。不明なら null。 */
   default_decision: "allow" | "ask" | "deny" | null;
-  /** その判定の理由（#1832）。read_only / untrusted_annotation / default_mode。 */
-  default_reason?: "standard" | "read_only" | "untrusted_annotation" | "default_mode" | null;
+  /**
+   * その判定の理由（#1832）。read_only / untrusted_annotation / default_mode。`trusted_connection` は
+   * 信頼した接続の外部の Agent（A2A。#5932）。
+   */
+  default_reason?:
+    | "standard"
+    | "trusted_connection"
+    | "read_only"
+    | "untrusted_annotation"
+    | "default_mode"
+    | null;
   /** false は一覧に無い（接続を取れない・ツールが無くなった）が、保存したポリシーにある名前。 */
   available: boolean;
 }
@@ -1149,14 +1158,36 @@ export interface AgentProfilePatchPayload {
   output_fields?: AgentOutputField[];
 }
 
-export type McpAuthMode = "none" | "api_key" | "oauth_client_credentials" | "service_token";
+/**
+ * 認証方式。`oci_signature`（#5932）は「システム設定 › OCI 認証」の API キーでリクエストに署名する
+ * （A2A の接続だけ。接続ごとの secret を持たない）。`service_token` は MCP の接続だけ。
+ */
+export type McpAuthMode =
+  | "none"
+  | "api_key"
+  | "oauth_client_credentials"
+  | "service_token"
+  | "oci_signature";
 
-/** MCP 接続（#757。RAG / NL2SQL / 外部 MCP）。資格情報の値は返らず、設定済みかだけを返す。 */
+/** 接続のプロトコル（#5932）。`mcp` は MCP のサーバー、`a2a` は外部の Agent（Agent2Agent）。 */
+export type McpConnectionProtocol = "mcp" | "a2a";
+
+/**
+ * 外部接続（#757。RAG / NL2SQL / 外部 MCP と、外部の Agent〔A2A。#5932〕）。資格情報の値は返らず、
+ * 設定済みかだけを返す。
+ */
 export interface McpConnectionSettings {
   server_id: string;
   label?: string | null;
-  /** URL の userinfo・資格情報らしい query の値は `***` に伏せて返る（#1056）。 */
+  /** プロトコル（#5932）。値の無い応答は MCP。 */
+  protocol?: McpConnectionProtocol;
+  /**
+   * URL の userinfo・資格情報らしい query の値は `***` に伏せて返る（#1056）。A2A の接続では Agent の
+   * endpoint の URL。
+   */
   base_url?: string | null;
+  /** A2A の Agent card の URL（指定したときだけ。空なら endpoint から決まる）。 */
+  agent_card_url?: string | null;
   /** 保存済みの URL に資格情報があり、base_url を伏せて返したか。 */
   base_url_masked?: boolean;
   auth_mode: McpAuthMode;
@@ -1175,18 +1206,39 @@ export interface McpConnectionSettings {
   session_configured: boolean;
   /** 共通 .env の PLATFORM_SERVICE_TOKEN_SECRET が 32 文字以上あるか（値は返らない）。 */
   service_token_configured: boolean;
-  /** ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に true）。 */
+  /** OCI 署名: 「システム設定 › OCI 認証」の API キーを読み込めるか（値は返らない。#5932）。 */
+  oci_signature_configured?: boolean;
+  /**
+   * ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に true）。A2A の接続では、
+   * その Agent を既定で承認なしに呼ぶか（#5932）。
+   */
   trust_tool_annotations?: boolean;
+}
+
+/** 接続の追加の画面の既定値（#5932）。`id` ごとの表示名は画面（i18n）が持つ。 */
+export interface McpConnectionPreset {
+  id: string;
+  protocol: McpConnectionProtocol;
+  auth_mode: McpAuthMode;
+  /** URL の雛形（host まで決まった先頭の部分）。 */
+  base_url_prefix: string;
+  /** 入力する URL の形の例。 */
+  base_url_example: string;
+  timeout_seconds: number;
 }
 
 export interface McpConnectionsData {
   connections: McpConnectionSettings[];
+  /** 追加の画面で選べる既定値（AIDP を配備した構成だけ。無ければ空）。 */
+  presets?: McpConnectionPreset[];
 }
 
 export interface McpConnectionWritePayload {
   server_id?: string;
   label?: string | null;
+  protocol?: McpConnectionProtocol;
   base_url?: string | null;
+  agent_card_url?: string | null;
   auth_mode?: McpAuthMode;
   api_key?: string | null;
   timeout_seconds?: number;
@@ -1216,6 +1268,10 @@ export interface ExternalMcpToolInfo {
 
 export interface ExternalMcpToolsData {
   tools: ExternalMcpToolInfo[];
+  /**
+   * A2A の接続（#5932）では `protocol: "a2a"` と、読んだ Agent card の
+   * `agent_card: { name, description, protocol_version, version }`。
+   */
   metadata: Record<string, unknown>;
 }
 

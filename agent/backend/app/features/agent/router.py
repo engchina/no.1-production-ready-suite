@@ -22,6 +22,7 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal, NoReturn, cast
+from urllib.parse import urlsplit
 
 import httpx
 from anyio import fail_after
@@ -106,6 +107,7 @@ from pr_system_settings.oci import build_oci_router
 from pr_system_settings.oci_auth import (
     load_oci_config_without_prompt as _load_oci_config_without_prompt,
 )
+from pr_system_settings.oci_signing import oci_request_signing_configured
 from pr_system_settings.trace_recording import build_trace_recording_router
 from pr_system_settings.upload_storage import (
     build_upload_storage_router,
@@ -120,6 +122,7 @@ from app.features.agent import (
     external_writes,
     run_facts_store,
 )
+from app.features.agent.a2a import is_aidp_gateway_host
 from app.features.agent.artifact_file_store import attachment_disposition
 from app.features.agent.automations import (
     Automation,
@@ -137,7 +140,16 @@ from app.features.agent.automations import (
 from app.features.agent.automations import fire as fire_automation
 from app.features.agent.chat_attachments import chat_attachment_service
 from app.features.agent.chat_progress import run_trace_events
-from app.features.agent.config import McpAuthMode, McpConnectionConfig, runtime_config_store
+from app.features.agent.config import (
+    AIDP_CONNECTION_ID,
+    AIDP_DEFAULT_TIMEOUT_SECONDS,
+    McpAuthMode,
+    McpConnectionConfig,
+    McpConnectionProtocol,
+    aidp_deployed,
+    aidp_gateway_host,
+    runtime_config_store,
+)
 from app.features.agent.confirmation import (
     SOURCE_AGENT,
     ConfirmationAnswerError,
@@ -432,8 +444,13 @@ class McpConnectionSettings(BaseModel):
 
     server_id: str
     label: str | None = None
-    # URL の userinfo・secret らしい query の値は `***` に伏せる（#1056）。
+    # プロトコル（#5932）: `mcp`（MCP のサーバー）/ `a2a`（外部の Agent）。
+    protocol: McpConnectionProtocol = "mcp"
+    # URL の userinfo・secret らしい query の値は `***` に伏せる（#1056）。A2A の接続では Agent の
+    # endpoint の URL。
     base_url: str | None = None
+    # A2A の Agent card の URL（指定したときだけ。空なら endpoint から決める）。
+    agent_card_url: str | None = None
     # 保存した URL に資格情報があり、base_url を伏せて返したか（画面は URL を変えない限り
     # base_url を送らない）。
     base_url_masked: bool = False
@@ -452,17 +469,36 @@ class McpConnectionSettings(BaseModel):
     session_configured: bool = False
     # サービストークン: 共通 `.env` の PLATFORM_SERVICE_TOKEN_SECRET（値は返さない）。
     service_token_configured: bool = False
-    # ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に True）。
+    # OCI 署名: 「システム設定 › OCI 認証」の API キーを読み込めるか（値は返さない。#5932）。
+    oci_signature_configured: bool = False
+    # ツールの注釈（readOnlyHint）を既定の判定に使うか（#1832。標準の接続は常に True）。A2A の
+    # 接続では、その Agent を既定で承認なしに呼ぶか（#5932）。
     trust_tool_annotations: bool = False
+
+
+class McpConnectionPreset(BaseModel):
+    """接続の追加の画面の既定値（#5932）。`id` ごとの表示名は画面が持つ。"""
+
+    id: str
+    protocol: McpConnectionProtocol
+    auth_mode: McpAuthMode
+    # URL の雛形（host まで決まった先頭の部分）と、入力する URL の形の例。
+    base_url_prefix: str
+    base_url_example: str
+    timeout_seconds: float
 
 
 class McpConnectionsData(BaseModel):
     connections: list[McpConnectionSettings] = Field(default_factory=list)
+    # 追加の画面で選べる既定値（AIDP を配備した構成だけ「AIDP の Agent」。#5932）。
+    presets: list[McpConnectionPreset] = Field(default_factory=list)
 
 
 class McpConnectionPatch(BaseModel):
     label: str | None = None
+    protocol: McpConnectionProtocol | None = None
     base_url: str | None = None
+    agent_card_url: str | None = None
     auth_mode: McpAuthMode | None = None
     api_key: str | None = None
     timeout_seconds: float | None = None
@@ -480,7 +516,7 @@ class McpConnectionPatch(BaseModel):
     def _validate_timeout(cls, value: float | None) -> float | None:
         return _validate_mcp_timeout(value)
 
-    @field_validator("base_url")
+    @field_validator("base_url", "agent_card_url")
     @classmethod
     def _validate_base_url(cls, value: str | None) -> str | None:
         return _validate_mcp_url(value)
@@ -498,6 +534,12 @@ class McpConnectionCreate(McpConnectionPatch):
             raise ValueError(
                 "接続 ID は英数字で始まる 40 文字以内の英数字・「-」・「_」で入力してください"
                 "（「__」と control-plane は使えません）。"
+            )
+        if value == AIDP_CONNECTION_ID:
+            # 組み込みの接続（AI Data Platform の Agent）の ID（#5932）。
+            raise ValueError(
+                f"接続 ID「{AIDP_CONNECTION_ID}」は組み込みの接続（AI Data Platform の Agent）が"
+                "使うため、使えません。"
             )
         return value
 
@@ -4680,17 +4722,24 @@ def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettin
     mode = config.effective_auth_mode()
     oauth_configured = _mcp_oauth_configured(config)
     service_token_configured = len(settings.app_service_token_secret.strip()) >= 32
+    # 鍵を読むのは OCI 署名の接続だけ（一覧のたびにすべての接続で読まない）。
+    oci_signature_configured = mode == "oci_signature" and oci_request_signing_configured(
+        settings.oci_config_file, settings.oci_config_profile
+    )
     credentials_ready = {
         "none": True,
         "api_key": bool(config.api_key),
         "oauth_client_credentials": oauth_configured,
         "service_token": service_token_configured,
+        "oci_signature": oci_signature_configured,
     }[mode]
     return McpConnectionSettings(
         server_id=config.server_id,
         label=config.label,
+        protocol=config.protocol,
         base_url=mask_url_credentials(config.base_url),
         base_url_masked=url_has_credentials(config.base_url),
+        agent_card_url=mask_url_credentials(config.agent_card_url),
         auth_mode=mode,
         service_audience=config.audience() if mode == "service_token" else None,
         timeout_seconds=config.timeout_seconds,
@@ -4702,16 +4751,84 @@ def _mcp_connection_settings(config: McpConnectionConfig) -> McpConnectionSettin
         oauth_configured=oauth_configured,
         session_configured=bool(config.session_id),
         service_token_configured=service_token_configured,
+        oci_signature_configured=oci_signature_configured,
         trust_tool_annotations=config.annotations_trusted(),
     )
+
+
+def _aidp_endpoint_prefix() -> str:
+    """AIDP の Agent の endpoint の URL の先頭（host は `PLATFORM_AIDP_REGION` から決まる）。"""
+    host = aidp_gateway_host() or "gateway.aidp.<region>.oci.oraclecloud.com"
+    return f"https://{host}/agentendpoint/"
+
+
+def _mcp_connection_presets() -> list[McpConnectionPreset]:
+    """接続の追加の画面の既定値。AIDP を配備した構成だけ「AIDP の Agent」を出す（#5932）。"""
+    if not aidp_deployed():
+        return []
+    prefix = _aidp_endpoint_prefix()
+    return [
+        McpConnectionPreset(
+            id="aidp_agent",
+            protocol="a2a",
+            auth_mode="oci_signature",
+            base_url_prefix=prefix,
+            base_url_example=f"{prefix}<agentId>/a2a",
+            timeout_seconds=AIDP_DEFAULT_TIMEOUT_SECONDS,
+        )
+    ]
 
 
 def _mcp_connections_response() -> McpConnectionsData:
     return McpConnectionsData(
         connections=[
             _mcp_connection_settings(config) for config in runtime_config_store.list_mcp_servers()
-        ]
+        ],
+        presets=_mcp_connection_presets(),
     )
+
+
+def _protocol_auth_error(protocol: str, auth_mode: str | None) -> str | None:
+    """プロトコルと認証方式の組み合わせが使えないなら、その理由（#5932）。"""
+    if protocol == "mcp" and auth_mode == "oci_signature":
+        return "OCI 署名の認証は、プロトコルが A2A の接続で使います（MCP の接続では使えません）。"
+    if protocol == "a2a" and auth_mode == "service_token":
+        # 3 製品の間の token（Run の利用者の身元）を外部の Agent へ渡さない。
+        return "A2A の接続では、サービストークンの認証を使えません。"
+    return None
+
+
+def _aidp_patch_error(current: McpConnectionConfig, patch: McpConnectionPatch) -> str | None:
+    """組み込みの接続 `aidp`（AI Data Platform の Agent）に変えられない変更なら、その理由（#5932）。
+
+    変えられるのは endpoint の URL（AIDP の gateway の host だけ）と timeout。
+    """
+    if (patch.protocol is not None and patch.protocol != current.protocol) or (
+        patch.auth_mode is not None and patch.auth_mode != current.effective_auth_mode()
+    ):
+        return (
+            "AI Data Platform の Agent の接続のプロトコル（A2A）と認証（OCI 署名）は"
+            "変えられません。"
+        )
+    if patch.label is not None and (patch.label.strip() or None) != current.label:
+        return "AI Data Platform の Agent の接続の名前は変えられません。"
+    if patch.trust_tool_annotations is False:
+        return (
+            "AI Data Platform の Agent の接続は、既定で承認なしに呼びます。"
+            "承認を求めるときは「ツール権限」でそのツールを指定してください。"
+        )
+    if patch.agent_card_url:
+        return "AI Data Platform の Agent の接続の Agent card の URL は、endpoint から決まります。"
+    if patch.base_url:
+        parts = urlsplit(patch.base_url)
+        expected = aidp_gateway_host()
+        host_ok = parts.hostname == expected if expected else is_aidp_gateway_host(parts.hostname)
+        if parts.scheme != "https" or not host_ok or parts.port is not None:
+            return (
+                "URL は AI Data Platform の Agent の endpoint"
+                f"（{_aidp_endpoint_prefix()}<agentId>/a2a）を入力してください。"
+            )
+    return None
 
 
 # 標準の接続（RAG / NL2SQL）の URL を決める配備の環境変数（#1325）。
@@ -4735,6 +4852,10 @@ def _builtin_patch_error(current: McpConnectionConfig, patch: McpConnectionPatch
 
     今と同じ値を送るのは受け付ける（画面は変えた項目だけを送るが、API の利用者は全項目を送りうる）。
     """
+    if current.server_id == AIDP_CONNECTION_ID:
+        return _aidp_patch_error(current, patch)
+    if patch.protocol is not None and patch.protocol != current.protocol:
+        return "標準の接続（RAG / NL2SQL）のプロトコルは変えられません。"
     if _changes_builtin_auth(current, patch):
         # Run の利用者のサービストークンで呼ぶ（再起動の後の復元も認証方式を戻す）。
         return "標準の接続（RAG / NL2SQL）の認証方式と audience は変えられません。"
@@ -4760,7 +4881,9 @@ def _upsert_mcp_connection(server_id: str, payload: McpConnectionPatch) -> McpCo
     config = runtime_config_store.upsert_mcp_server(
         server_id,
         label=payload.label,
+        protocol=payload.protocol,
         base_url=payload.base_url,
+        agent_card_url=payload.agent_card_url,
         auth_mode=payload.auth_mode,
         api_key=payload.api_key,
         timeout_seconds=payload.timeout_seconds,
@@ -4790,6 +4913,9 @@ async def create_mcp_connection(
     existing = {config.server_id for config in runtime_config_store.list_mcp_servers()}
     if payload.server_id in existing:
         raise HTTPException(status_code=409, detail="MCP 接続の ID はすでに使われています。")
+    combination_error = _protocol_auth_error(payload.protocol or "mcp", payload.auth_mode)
+    if combination_error:
+        raise HTTPException(status_code=400, detail=combination_error)
     config = _upsert_mcp_connection(payload.server_id, payload)
     return ApiResponse(data=_mcp_connection_settings(config))
 
@@ -4807,8 +4933,11 @@ async def patch_mcp_connection(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="MCP 接続が見つかりません。") from exc
     builtin_error = _builtin_patch_error(current, patch) if current.source == "builtin" else None
-    if builtin_error:
-        raise HTTPException(status_code=400, detail=builtin_error)
+    combination_error = builtin_error or _protocol_auth_error(
+        patch.protocol or current.protocol, patch.auth_mode or current.effective_auth_mode()
+    )
+    if combination_error:
+        raise HTTPException(status_code=400, detail=combination_error)
     config = _upsert_mcp_connection(server_id, patch)
     return ApiResponse(data=_mcp_connection_settings(config))
 
