@@ -735,8 +735,8 @@ class Settings(
     aidp_ocid: str = Field(
         default="",
         description=(
-            "Oracle AI Data Platform Workbench の OCID（任意の配備。stack が配備のときに書く。#5917）。"
-            "未設定なら連携の機能を出さない。"
+            "Oracle AI Data Platform Workbench の OCID（任意の配備。stack が配備のときに書く）。"
+            "未設定なら連携の機能を出さない（#5917）。"
         ),
     )
     aidp_region: str = Field(
