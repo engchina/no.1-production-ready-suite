@@ -1,6 +1,8 @@
 import { BookOpen, RotateCcw, Search, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { ListSkeleton, Skeleton } from "../ui/skeleton";
+import { ProcessingIndicator, TimedLoadingState, staleContentClass, REFRESH_REVEAL_DELAY_MS } from "./processing-state";
 import { Button } from "../ui/button";
 import { RadioOptionGroup } from "../ui/radio-option-group";
 import { SearchField } from "../ui/search-field";
@@ -21,11 +23,19 @@ import {
 } from "./file-review-model";
 
 type Mode = "only" | "mix" | "replace";
+type Activity = FileReviewAction["action"] | "more" | "open" | "reload" | "original" | "vote";
+const progressLabels = {
+  open: "fileReview.loading", reload: "fileReview.loading", original: "fileReview.reading",
+  discover: "fileReview.discovering", more: "fileReview.discovering", answer: "fileReview.answering",
+  restore: "fileReview.restoring", reset: "fileReview.restarting", back: "fileReview.returning",
+} as const;
+
 interface Props {
   rootId: string;
   t: ReviewText;
   readOnly?: boolean;
   disabled?: boolean;
+  loadingRating?: boolean;
   load: () => Promise<FileReviewState>;
   original?: (task: string, documentId: string) => Promise<Record<string, string>>;
   change: (action: FileReviewAction) => Promise<FileReviewState>;
@@ -41,6 +51,7 @@ export function AnswerFileReview({
   t,
   readOnly,
   disabled,
+  loadingRating,
   load,
   original,
   change,
@@ -53,7 +64,11 @@ export function AnswerFileReview({
   const [state, setState] = useState<FileReviewState | null>(null);
   const [rating, setRating] = useState<AnswerRating | null>(initialRating ?? null);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [activity, setActivity] = useState<Activity | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  const running = useRef(false);
+  const retryFailed = useRef<(() => void) | undefined>(undefined);
+  const busy = activity !== null;
   const [open, setOpen] = useState(false);
   const [task, setTask] = useState("");
   const [mode, setMode] = useState<Mode | null>(null);
@@ -81,7 +96,8 @@ export function AnswerFileReview({
       .then((s) => {
         if (!cancelled && initialAction === userAction.current && Array.isArray(s?.versions)) setState(s);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoadingHistory(false); });
     return () => {
       cancelled = true;
       active.current = false;
@@ -92,8 +108,9 @@ export function AnswerFileReview({
     if (hasHistory) onHistory(rootId);
   }, [rootId, hasHistory, onHistory]);
   const latest = state?.versions.at(-1);
-  const pending = state?.pending[task];
-  const source = pending ?? latest?.sources[task];
+  const candidates = state?.pending[task];
+  const pending = !!candidates && !state?.method_tasks?.includes(task);
+  const source = candidates ?? latest?.sources[task];
   const groups = useMemo(
     () => files(source?.citations ?? []).filter((file) => !Object.hasOwn(state?.excluded ?? {}, file.id)),
     [source?.citations, state?.excluded],
@@ -120,21 +137,30 @@ export function AnswerFileReview({
     );
     if (list.current) list.current.scrollTop = 0;
   }
-  async function operation(fn: () => Promise<void>) {
-    if (busy) return;
-    setBusy(true);
+  async function operation(kind: Activity, fn: () => Promise<void>, retry?: () => void) {
+    if (running.current) return;
+    running.current = true;
+    retryFailed.current = retry;
+    setActivity(kind);
     setError("");
     try {
       await fn();
     } catch (e) {
       if (active.current) setError(e instanceof Error ? e.message : t("fileReview.error"));
     } finally {
-      if (active.current) setBusy(false);
+      running.current = false;
+      if (active.current) setActivity(null);
     }
   }
   function mark(value: AnswerRating) {
-    void operation(async () => {
+    void operation(value === "not_helpful" ? "open" : "vote", async () => {
       userAction.current += 1;
+      if (value === "not_helpful") {
+        setOpen(true);
+        setPreview("");
+        setManage(false);
+        setReset(false);
+      }
       const current = latest ? latest.rating : (rating ?? initialRating);
       const id = latest?.id ?? rootId;
       if (current !== value) await vote(id, value);
@@ -156,11 +182,18 @@ export function AnswerFileReview({
         const keys = Object.keys(s.versions.at(-1)?.sources ?? {});
         choose(s, keys.length === 1 ? keys[0] : "");
       }
-    });
+    }, () => mark(value));
   }
-  function submit(action: FileReviewAction["action"], selected = checked) {
+  function readOriginal(documentId: string) {
+    if (!original) return;
+    void operation("original", async () => {
+      const result = await original(task, documentId);
+      if (active.current) setPassages(result);
+    }, () => readOriginal(documentId));
+  }
+  function submit(action: FileReviewAction["action"], selected = checked, kind: Activity = action) {
     if (!state) return;
-    void operation(async () => {
+    void operation(kind, async () => {
       const s = await change({ task, action, selected, revision: state.revision });
       if (!active.current) return;
       setState(s);
@@ -185,6 +218,10 @@ export function AnswerFileReview({
     } else if (manage || reset) {
       setManage(false);
       setReset(false);
+    } else if (pending) {
+      submit("back", []);
+    } else if (task && latest && Object.keys(latest.sources).length > 1 && state) {
+      choose(state, "");
     } else close();
   };
   const errorView = error && (
@@ -192,12 +229,16 @@ export function AnswerFileReview({
       <p>{error}</p>
       <Button
         size="sm"
+        icon={RotateCcw}
+        loading={activity === "reload"}
         variant="secondary"
-        onClick={() =>
-          void operation(async () => {
+        onClick={() => retryFailed.current ? retryFailed.current() :
+          void operation("reload", async () => {
             const s = await load();
+            if (!active.current) return;
             setState(s);
-            if (task) choose(s, task);
+            const keys = Object.keys(s.versions.at(-1)?.sources ?? {});
+            if (open && (!task || s.revision !== state?.revision)) choose(s, keys.includes(task) ? task : keys.length === 1 ? keys[0] : "");
           })
         }
       >
@@ -206,7 +247,7 @@ export function AnswerFileReview({
     </div>
   );
   const currentRating = latest ? latest.rating : (rating ?? initialRating);
-  const title = selectedFile
+  const title = activity === "open" ? t("fileReview.title") : selectedFile
     ? t("fileReview.original")
     : manage
       ? t("fileReview.manage", { count: Object.keys(excluded).length })
@@ -225,6 +266,10 @@ export function AnswerFileReview({
         : mode === "replace" && groups.length
           ? t("fileReview.replaceFind")
           : t("fileReview.find");
+  const processing = activity && activity !== "vote" ? t(progressLabels[activity]) : null;
+  const replaceBody = activity === "open" || activity === "reset" || activity === "answer" ||
+    activity === "discover" || activity === "original" || (activity === "more" && !groups.length) || (activity === "reload" && !state);
+  const initialLoading = !open && (loadingRating || (loadingHistory && !state?.versions.length));
   return (
     <div className="space-y-2" data-testid="answer-file-review">
       {state && state.versions.length > 1 && (
@@ -252,7 +297,12 @@ export function AnswerFileReview({
           })}
         </div>
       )}
-      {!readOnly && (
+      {initialLoading && (
+        <TimedLoadingState label={t("fileReview.loading")} operationKey={rootId} showSlowMessage={false}>
+          <Skeleton className="h-8 w-48" />
+        </TimedLoadingState>
+      )}
+      {!readOnly && !initialLoading && (
         <div role="group" aria-labelledby={selectionId + "-question"} className="space-y-1.5">
           <p id={selectionId + "-question"} className="text-sm">
             {t("fileReview.question")}
@@ -264,7 +314,8 @@ export function AnswerFileReview({
                 size="sm"
                 variant="secondary"
                 icon={value === "helpful" ? ThumbsUp : ThumbsDown}
-                disabled={busy || disabled}
+                loading={value === "helpful" && activity === "vote"}
+                disabled={busy || disabled || loadingRating}
                 aria-pressed={currentRating === value}
                 className={currentRating === value ? "border-primary bg-primary-subtle ring-1 ring-primary" : undefined}
                 onClick={() => mark(value)}
@@ -276,7 +327,7 @@ export function AnswerFileReview({
         </div>
       )}
       {!open && errorView}
-      {state && (
+      {(state || open) && (
         <SideSheet
           side="right"
           size="md"
@@ -290,7 +341,7 @@ export function AnswerFileReview({
           footer={
             <div className="space-y-2">
               {errorView}
-              {task && !selectedFile && !manage && !reset && (
+              {task && !replaceBody && !selectedFile && !manage && !reset && (
                 <p className="flex flex-col text-xs text-fg-muted tnum sm:flex-row sm:flex-wrap sm:gap-x-3" role="status" aria-atomic="true">
                   <span>
                     {t("fileReview.selectionCount", {
@@ -305,7 +356,7 @@ export function AnswerFileReview({
                   </span>
                 </p>
               )}
-              {task && !selectedFile && !manage && !reset && (
+              {task && !replaceBody && !selectedFile && !manage && !reset && (
                 <SelectedSources
                   label={t("fileReview.selected")}
                   removeLabel={(name) => t("fileReview.remove", { name })}
@@ -316,26 +367,27 @@ export function AnswerFileReview({
                 />
               )}
               <div className="flex flex-wrap items-center gap-2">
-                {task && !selectedFile && !manage && !reset && (
+                {task && activity !== "open" && !selectedFile && !manage && !reset && (
                   <>
                     <Button
                       icon={Search}
+                      loading={activity === "discover" || activity === "answer"}
                       disabled={
-                        busy || (!pending && !mode) || (!checked.length && (pending != null || mode !== "replace"))
+                        busy || (!pending && !mode) || (!checked.length && (pending || mode !== "replace"))
                       }
                       onClick={() => submit(pending || mode === "only" ? "answer" : "discover")}
                     >
                       {actionTitle}
                     </Button>
                     {pending && (
-                      <Button variant="secondary" disabled={busy} onClick={() => submit("discover")}>
+                      <Button icon={Search} variant="secondary" loading={activity === "more"} disabled={busy} onClick={() => submit("discover", checked, "more")}>
                         {t("fileReview.more")}
                       </Button>
                     )}
                   </>
                 )}
                 {reset && (
-                  <Button icon={RotateCcw} disabled={busy} onClick={() => submit("reset", [])}>
+                  <Button icon={RotateCcw} loading={activity === "reset"} disabled={busy} onClick={() => submit("reset", [])}>
                     {t("fileReview.reset")}
                   </Button>
                 )}
@@ -346,14 +398,23 @@ export function AnswerFileReview({
             </div>
           }
         >
-          {!task &&
+          {processing && (replaceBody ? (
+            <TimedLoadingState label={processing} operationKey={activity} activityIcon={activity === "open" ? "spinner" : "none"} testId="file-review-progress">
+              <ListSkeleton rows={{ base: 3, md: 5 }} rowClassName="h-16" />
+            </TimedLoadingState>
+          ) : (
+            <ProcessingIndicator active label={processing} operationKey={activity} revealDelayMs={REFRESH_REVEAL_DELAY_MS}
+              activityIcon={activity === "more" || activity === "reload" ? "none" : "spinner"} reserveSlowLine={false} testId="file-review-progress" />
+          ))}
+          {!replaceBody && reset && <p className="text-sm">{t("fileReview.resetDescription")}</p>}
+          {!replaceBody && !task && state &&
             latest &&
             Object.entries(latest.sources).map(([id, s], index) => (
               <Button key={id} variant="secondary" onClick={() => choose(state, id)}>
                 {taskLabel?.(id, s.title, index + 1) ?? s.title}
               </Button>
             ))}
-          {task && (
+          {!replaceBody && task && state && (
             <div
               hidden={!!selectedFile || manage || reset}
               className={selectedFile || manage || reset ? "hidden" : "flex h-full min-h-0 flex-col gap-2"}
@@ -371,6 +432,7 @@ export function AnswerFileReview({
                     },
                   ]}
                   value={mode}
+                  disabled={busy}
                   onValueChange={(v) => {
                     setMode(v);
                     if (v === "replace") setChecked(carried.filter((id) => groups.some((f) => f.id === id)));
@@ -378,7 +440,7 @@ export function AnswerFileReview({
                 />
               )}
               <div className="flex h-[var(--button-height-sm)] shrink-0 items-center justify-between gap-1">
-                <h3 className="text-sm font-semibold">{t(pending ? "fileReview.found" : "fileReview.given")}</h3>
+                <h3 className="text-sm font-semibold">{t(candidates ? "fileReview.found" : "fileReview.given")}</h3>
                 {hidden > 0 && (
                   <Button variant="ghost" size="sm" aria-controls={selectionId} onClick={() => setQuery("")}>
                     {t("fileReview.showHidden")}
@@ -388,6 +450,7 @@ export function AnswerFileReview({
               <SearchField
                 id={selectionId + "-search"}
                 value={query}
+                disabled={busy}
                 onSearch={setQuery}
                 label={t("fileReview.filename")}
                 labelHidden
@@ -402,7 +465,8 @@ export function AnswerFileReview({
                 role="region"
                 aria-label={t("fileReview.candidates")}
                 tabIndex={0}
-                className="min-h-32 flex-1 space-y-2 overflow-y-auto overscroll-contain rounded-md border border-border bg-surface-sunken p-2"
+                aria-busy={activity === "more" || undefined}
+                className={`min-h-32 flex-1 space-y-2 overflow-y-auto overscroll-contain rounded-md border border-border bg-surface-sunken p-2 ${staleContentClass(activity === "more")}`}
               >
                 {!matching.length && (
                   <p className="text-sm text-fg-muted">{t(query ? "fileReview.noMatch" : "fileReview.none")}</p>
@@ -435,12 +499,13 @@ export function AnswerFileReview({
                           size="sm"
                           icon={BookOpen}
                           variant="ghost"
+                          disabled={busy}
                           onClick={(e) => {
                             opener.current = e.currentTarget;
                             setPassages({});
                             setPreview(f.id);
                             if (original && f.hits.some((hit) => hit.truncated)) {
-                              void operation(async () => setPassages(await original(task, f.id)));
+                              readOriginal(f.id);
                             }
                           }}
                         >
@@ -464,18 +529,18 @@ export function AnswerFileReview({
               {(state.revision > 0 || Object.keys(excluded).length > 0) && (
                 <div className="flex shrink-0 flex-wrap gap-2">
                   {Object.keys(excluded).length > 0 && (
-                    <Button variant="ghost" size="sm" onClick={() => setManage(true)}>
+                    <Button variant="ghost" size="sm" disabled={busy} onClick={() => setManage(true)}>
                       {t("fileReview.manage", { count: Object.keys(excluded).length })}
                     </Button>
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => setReset(true)}>
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={() => setReset(true)}>
                     {t("fileReview.reset")}
                   </Button>
                 </div>
               )}
             </div>
           )}
-          {selectedFile && (
+          {!replaceBody && selectedFile && (
             <div className="space-y-3 overflow-y-auto">
               <h3 className="break-all font-semibold">{selectedFile.name}</h3>
               {[...selectedFile.hits]
@@ -498,7 +563,7 @@ export function AnswerFileReview({
                 ))}
             </div>
           )}
-          {manage &&
+          {!replaceBody && manage &&
             Object.entries(excluded).map(([id, name]) => (
               <div className="flex items-center justify-between gap-2" key={id}>
                 <span>{name}</span>

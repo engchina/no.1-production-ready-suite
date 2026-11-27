@@ -39,6 +39,16 @@ class ReviewVersion(BaseModel):
     rating: Literal["helpful", "not_helpful"] | None = None
 
 
+class DiscoveryStep(BaseModel):
+    """直前に表示していた候補と、その検索だけが変更した選択を保持する。"""
+
+    previous_source: ReviewSource | None = None
+    excluded: set[str] = Field(default_factory=set)
+    discovered: set[str] = Field(default_factory=set)
+    previous_kept: list[str] = Field(default_factory=list)
+    removed_from_other_tasks: dict[str, list[str]] = Field(default_factory=dict)
+
+
 class FileReview(BaseModel):
     revision: int = 0
     versions: list[ReviewVersion]
@@ -47,8 +57,12 @@ class FileReview(BaseModel):
     seen: set[str] = Field(default_factory=set)
     pending: dict[str, ReviewSource] = Field(default_factory=dict)
 
+    method_tasks: set[str] = Field(default_factory=set)
+    previous_discovery: dict[str, DiscoveryStep] = Field(default_factory=dict)
+
     def visible(self, permitted: set[str]) -> "FileReview":
-        state = self.model_copy(deep=True)
+        # 操作を元に戻す内部記録を HTTP 応答に出さない。
+        state = self.model_copy(update={"previous_discovery": {}}, deep=True)
         state.excluded = {k: v for k, v in state.excluded.items() if k in permitted}
         state.seen &= permitted
         state.kept = {k: [x for x in ids if x in permitted] for k, ids in state.kept.items()}
@@ -63,6 +77,13 @@ class FileReview(BaseModel):
         return (
             self.seen
             | set(self.excluded)
+            | {doc for source in self.pending.values() for doc in source.documents()}
+            | {
+                doc
+                for step in self.previous_discovery.values()
+                if step.previous_source
+                for doc in step.previous_source.documents()
+            }
             | {
                 doc
                 for version in self.versions
@@ -74,7 +95,7 @@ class FileReview(BaseModel):
 
 class ReviewAction(BaseModel):
     revision: int = Field(ge=0)
-    action: Literal["answer", "discover", "restore", "reset"]
+    action: Literal["answer", "discover", "restore", "reset", "back"]
     task: str = Field(min_length=1, max_length=128)
     selected: list[str] = Field(default_factory=list, max_length=10000)
 
@@ -105,18 +126,49 @@ async def advance_review(
     state.revision += 1
     allowed = set(readable)
     selected = set(command.selected)
+    if command.action == "back":
+        if key not in state.pending or key in state.method_tasks:
+            raise ValueError("候補の確認画面から戻ってください。")
+        step = state.previous_discovery.pop(key, None)
+        state.pending.pop(key)
+        if step:
+            for doc in step.excluded:
+                state.excluded.pop(doc, None)
+            state.kept[key] = [
+                doc for doc in step.previous_kept if doc in allowed and doc not in state.excluded
+            ]
+            for task, removed in step.removed_from_other_tasks.items():
+                other_kept = state.kept.setdefault(task, [])
+                other_kept.extend(
+                    doc
+                    for doc in removed
+                    if doc not in other_kept and doc in allowed and doc not in state.excluded
+                )
+            if step.previous_source is not None:
+                state.pending[key] = step.previous_source
+                state.method_tasks.add(key)
+            used_elsewhere = {
+                doc for source in state.pending.values() for doc in source.documents()
+            } | set(state.excluded)
+            state.seen -= step.discovered - used_elsewhere
+        # 旧形式には操作前の差分がないため、保存済みの除外を維持して回答版の資料へ戻す。
+        return state
     if command.action == "restore":
         if not selected <= state.excluded.keys() & allowed:
             raise ValueError("除外中の資料を選んでください。")
         for doc in selected:
             del state.excluded[doc]
         state.seen -= selected
+        for step in state.previous_discovery.values():
+            step.excluded -= selected
         return state
     if command.action == "reset":
         state.excluded.clear()
         state.kept.clear()
         state.seen.clear()
         state.pending.clear()
+        state.previous_discovery.clear()
+        state.method_tasks = set(latest.sources)
         for task in latest.sources:
             found = await retrieve(task, [], [], False)
             state.pending[task] = found
@@ -127,6 +179,22 @@ async def advance_review(
     if not selected <= shown.keys():
         raise ValueError("表示中の資料から選んでください。")
     rejected = {doc: name for doc, name in shown.items() if doc not in selected}
+    for other, checkpoint in state.previous_discovery.items():
+        if other != key:
+            checkpoint.removed_from_other_tasks.pop(key, None)
+            checkpoint.excluded.difference_update(rejected)
+    if command.action == "discover":
+        state.previous_discovery[key] = DiscoveryStep(
+            previous_source=state.pending.get(key),
+            excluded=set(rejected),
+            previous_kept=state.kept.get(key, []),
+            removed_from_other_tasks={
+                task: [doc for doc in ids if doc in rejected]
+                for task, ids in state.kept.items()
+                if task != key
+            },
+        )
+    state.method_tasks.discard(key)
     state.excluded.update(rejected)
     state.seen.update(shown)
     for task, ids in state.kept.items():
@@ -140,6 +208,7 @@ async def advance_review(
         state.pending[key] = fresh.model_copy(
             update={"citations": retained.citations + fresh.citations, "answer": ""}
         )
+        state.previous_discovery[key].discovered = set(fresh.documents())
         state.seen.update(fresh.documents())
         return state
     if not selected:
@@ -179,4 +248,5 @@ async def advance_review(
         )
     )
     state.pending.pop(key, None)
+    state.previous_discovery.pop(key, None)
     return state

@@ -386,3 +386,43 @@ test(
     await shot(page, info, "chat-40");
   },
 );
+
+test("検索の待ち時間を示し、チャットから現場に戻り、新しい検索で条件を引き継ぐ", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  await data(page);
+  let release: (() => void) | undefined;
+  await page.route(/\/wiki-search\/profiles\/[^/]+\/search\?/, async r => {
+    await new Promise<void>(done => { release = done; });
+    return r.fallback();
+  }, { times: 1 });
+  await page.goto("/wiki-search");
+  await selectSearchAnswerProfile(page, profiles[0].name);
+  await page.getByText("詳細条件", { exact: true }).click();
+  await page.locator("#wiki-search-method").click();
+  await page.getByRole("option", { name: "キーワード", exact: true }).click();
+  await page.locator("#wiki-search-kb").click();
+  await page.getByRole("option", { name: kbs[1].name }).click();
+  await page.locator("#wiki-question").fill("資料の確認方法");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  const progress = page.getByTestId("wiki-wait-results");
+  await expect(progress.getByRole("timer")).toHaveText(/00:0[1-9]/);
+  await shot(page, info, "wiki-loading");
+  release!();
+  await result(page, 81).click();
+  await detail(page, phone).getByRole("button", { name: "質問に追加" }).click();
+  if (phone) await detail(page, phone).getByRole("button", { name: "選択を解除" }).click();
+  await page.getByRole("button", { name: "チャットで質問" }).click();
+  await page.getByRole("button", { name: "Wiki 検索に戻る" }).click();
+  await expect(page.locator("#wiki-question")).toHaveValue("資料の確認方法");
+  await expect(page.getByRole("list", { name: "Wiki で選んだ原文" })).toHaveCount(1);
+  await page.getByRole("button", { name: "新しい検索" }).click();
+  await expect(page.locator("#wiki-question")).toBeFocused();
+  await expect(page.locator("#wiki-question")).toHaveValue("");
+  await expect(page.getByText("質問を入力して原文を検索してください。")).toBeVisible();
+  await expect(page.getByRole("list", { name: "Wiki で選んだ原文" })).toHaveCount(0);
+  await page.getByText("詳細条件", { exact: true }).click();
+  await expect(page.locator("#wiki-search-method")).toContainText("キーワード");
+  await expect(page.locator("#wiki-search-kb")).toContainText(kbs[1].name);
+  await expect(page.locator("#wiki-search-profile")).toContainText(profiles[0].name);
+  await shot(page, info, "wiki-new");
+});

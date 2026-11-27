@@ -34,11 +34,12 @@ export interface FileReviewState {
   seen: string[];
   excluded: Record<string, string>;
   pending: Record<string, ReviewSource>;
+  method_tasks?: string[];
 }
 export interface FileReviewAction {
   revision: number;
   task: string;
-  action: "answer" | "discover" | "reset" | "restore";
+  action: "answer" | "discover" | "reset" | "restore" | "back";
   selected: string[];
 }
 export const FILE_REVIEW_JA = {
@@ -86,6 +87,14 @@ export const FILE_REVIEW_JA = {
   "fileReview.none": "新しい候補はありません。",
   "fileReview.noMatch": "一致するファイルはありません。",
   "fileReview.version": "回答 {version}",
+  "fileReview.loading": "回答と資料を読み込んでいます",
+  "fileReview.discovering": "ほかの候補を検索しています",
+  "fileReview.answering": "選んだ資料で回答を作成しています",
+  "fileReview.reading": "原文を読み込んでいます",
+  "fileReview.restoring": "資料の選択を更新しています",
+  "fileReview.restarting": "この質問の資料を最初から検索しています",
+  "fileReview.returning": "検索前の選択に戻しています",
+  "fileReview.resetDescription": "この質問の資料の選択と除外をすべて解除し、もう一度検索します。",
   "fileReview.error": "操作を完了できませんでした。",
   "fileReview.retry": "再読み込み",
 } as const;

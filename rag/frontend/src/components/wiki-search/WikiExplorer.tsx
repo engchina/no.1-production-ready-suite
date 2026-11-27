@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
   BookOpen,
   ChevronLeft,
@@ -19,6 +19,10 @@ import {
   Disclosure,
   SelectField,
   OffsetPagination,
+  ListSkeleton,
+  ProcessingIndicator,
+  REFRESH_REVEAL_DELAY_MS,
+  staleContentClass,
   SideSheet,
   Skeleton,
   TimedLoadingState,
@@ -48,28 +52,36 @@ interface Props {
   picks?: WikiPick[];
   toggle?: (p: WikiPick) => void;
   initialUnit?: string;
+  initialSelection?: string;
+  onSelectUnit: (id: string) => void;
+  initialOffset: number;
+  onOffset: (offset: number) => void;
   onRoot?: (id: string) => void;
 }
 const RESULT_PAGE = 5;
-function Busy({ name }: { name: string }) {
+function Busy({ name, label, large = false }: { name: string; label: string; large?: boolean }) {
   return (
-    <TimedLoadingState label={t("wiki.graph.loading")} operationKey={name}>
-      <Skeleton className="h-20 w-full" />
+    <TimedLoadingState label={label} operationKey={name} testId={"wiki-wait-" + name}>
+      {large ? <div className="min-h-80"><ListSkeleton rows={{ base: 5, md: 5 }} /></div> : <Skeleton className="h-20 w-full" />}
     </TimedLoadingState>
   );
+}
+function Refresh({ name, label }: { name: string; label: string }) {
+  return <ProcessingIndicator active label={label} operationKey={name} revealDelayMs={REFRESH_REVEAL_DELAY_MS} reserveSlowLine={false} testId={"wiki-refresh-" + name} />;
 }
 function Failed({ error, retry }: { error: unknown; retry: () => void }) {
   return <ApiErrorState error={error} fallback={t("wiki.graph.error")} onRetry={retry} />;
 }
-export function WikiExplorer({ scope, question, method, kbs, picks, toggle, initialUnit, onRoot }: Props) {
+export function WikiExplorer({ scope, question, method, kbs, picks, toggle, initialUnit, initialSelection, onSelectUnit, onRoot, initialOffset, onOffset }: Props) {
   const base = ["wiki-explorer", scope] as const;
   const small = useMediaQuery("(max-width: 767px)", false);
   const [view, setView] = useState<"graph" | "list">(() =>
     window.matchMedia("(max-width: 767px)").matches ? "list" : "graph",
   );
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useState(initialOffset);
   const [kind, setKind] = useState("");
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
+  const [resumeUnit, setResumeUnit] = useState(initialSelection);
   const [anchor, setAnchor] = useState<WikiNode | null>(null);
   const [selection, setSelection] = useState<WikiNode | null>(null);
   const [edge, setEdge] = useState<Connection | null>(null);
@@ -85,12 +97,14 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   const hits = useQuery({
     queryKey: [...base, "search", question, method, offset],
     queryFn: ({ signal }) => wikiApi.hits(scope, question, method, offset, RESULT_PAGE, signal),
+    placeholderData: keepPreviousData,
     enabled: search,
     retry: false,
   });
   const docs = useQuery({
     queryKey: [...base, "docs", offset],
     queryFn: ({ signal }) => wikiApi.documents(scope, offset, RESULT_PAGE, signal),
+    placeholderData: keepPreviousData,
     enabled: !search,
     retry: false,
   });
@@ -109,9 +123,16 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
         document_id: n.document_id,
         document_name: n.name,
       }));
-  const total = search ? hits.data?.total : docs.data?.has_more ? count.data?.total : offset + rows.length;
+  const total = search ? hits.data?.total : !docs.data ? undefined : docs.data.has_more ? count.data?.total : offset + rows.length;
   const mainResult = search ? hits : docs;
-  const root = anchor ?? rows.find((n) => n.id === initialUnit) ?? rows[0];
+  const resume = useQuery({
+    queryKey: [...base, "original", resumeUnit],
+    queryFn: ({ signal }) => wikiApi.original(scope, resumeUnit!, signal),
+    enabled: !!resumeUnit && !rows.some((n) => n.id === resumeUnit),
+    retry: false,
+  });
+  const restored = rows.find((n) => n.id === resumeUnit) ?? (resumeUnit && resume.data ? { ...resume.data, kind: "unit" as const } : undefined);
+  const root = anchor ?? restored ?? rows.find((n) => n.id === initialUnit) ?? rows[0];
   const node = selection ?? root;
   const key = (n: WikiNode | undefined) => n?.id ?? "";
   const firstRing = useQuery({
@@ -179,6 +200,9 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     ),
   };
   function pick(n: WikiNode, asRoot = false) {
+    if (!asRoot && restored) setAnchor(restored);
+    setResumeUnit(undefined);
+    onSelectUnit(n.kind === "unit" ? n.id : "");
     if (asRoot) {
       setAnchor(n);
       setBranches({});
@@ -193,7 +217,9 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     if (small) setSheet(true);
   }
   function changePage(n: number) {
+    setResumeUnit(undefined);
     setOffset(n);
+    onOffset(n);
     setAnchor(null);
     setSelection(null);
     setEdge(null);
@@ -245,6 +271,14 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     setRelOffset(0);
   };
   const section = node?.kind === "unit" ? relationQuery : childQuery;
+  const showSheet = small && sheet;
+  const needsGraph = view === "graph" && root?.kind === "unit";
+  const graphPending = needsGraph && (rootOriginal.isPending || firstRing.isPending);
+  const graphError = needsGraph && (rootOriginal.isError || firstRing.isError);
+  const detailRequest = node?.kind === "unit" && tab !== "relations" ? detail : section;
+  const detailLabel = t(node?.kind === "unit" && tab !== "relations" ? "wiki.search.loadingSource" : "wiki.search.loadingRelations");
+  const listLabel = t(search ? "wiki.search.loadingHits" : "wiki.search.loadingDocs");
+  const reloadList = mainResult.isFetching && !!mainResult.data;
   const panel = edge ? (
     <RelationInspector edge={edge} nodes={scene.nodes} onPick={(n) => pick(n)} />
   ) : node ? (
@@ -264,7 +298,9 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
       expand={expand}
       picks={picks}
       toggle={toggle}
-      loading={((node.kind === "unit" && detail.isPending) || section.isFetching) && <Busy name={node.id} />}
+      loading={detailRequest.isPending
+        ? (graphPending && !showSheet ? <Skeleton className="h-20 w-full" /> : <Busy name="detail" label={detailLabel} />)
+        : detailRequest.isFetching && <Refresh name="detail" label={detailLabel} />}
       error={
         <>
           {node.kind === "unit" && detail.isError && (
@@ -287,6 +323,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
             <button
               type="button"
               key={n.id}
+              disabled={mainResult.isPlaceholderData}
               aria-pressed={node?.id === n.id && !edge}
               data-surface-tint={node?.id === n.id && !edge ? "accent" : undefined}
               onClick={() => pick(n, true)}
@@ -435,25 +472,32 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
             </div>
           </Disclosure>
         )}
+        {reloadList && <Refresh name="results" label={listLabel} />}
+        {mainResult.isError && mainResult.data && <Failed error={mainResult.error} retry={() => void mainResult.refetch()} />}
         {mainResult.isPending ? (
-          <Busy name="wiki-results" />
-        ) : mainResult.isError ? (
+          <Busy name="results" label={listLabel} large />
+        ) : mainResult.isError && !mainResult.data ? (
           <Failed error={mainResult.error} retry={() => void mainResult.refetch()} />
+        ) : !rows.length && offset > 0 ? (
+          <div className="min-h-80">{left}</div>
         ) : !rows.length ? (
           <EmptyState title={t(search ? "search.noResults" : "wiki.graph.empty")} />
         ) : (
           <div
-            className={`grid min-h-80 ${full ? "flex-1" : "h-[clamp(26rem,65dvh,60rem)]"} ${view === "graph" ? (inspector ? "md:grid-cols-[minmax(11rem,0.65fr)_minmax(0,1.65fr)_minmax(17rem,0.85fr)]" : "md:grid-cols-[minmax(11rem,0.65fr)_minmax(0,2.5fr)]") : inspector ? "md:grid-cols-[minmax(0,1fr)_minmax(17rem,0.55fr)]" : "grid-cols-1"}`}
+            aria-busy={reloadList || undefined}
+            className={`grid min-h-80 ${staleContentClass(mainResult.isPlaceholderData)} ${full ? "flex-1" : "h-[clamp(26rem,65dvh,60rem)]"} ${view === "graph" ? (inspector ? "md:grid-cols-[minmax(11rem,0.65fr)_minmax(0,1.65fr)_minmax(17rem,0.85fr)]" : "md:grid-cols-[minmax(11rem,0.65fr)_minmax(0,2.5fr)]") : inspector ? "md:grid-cols-[minmax(0,1fr)_minmax(17rem,0.55fr)]" : "grid-cols-1"}`}
           >
             {(view === "list" || !small) && left}
             {view === "graph" && (
               <div className="flex min-h-0 min-w-0 flex-col border-x border-border">
                 <div className="flex items-center justify-between gap-2 border-b border-border p-2 text-xs text-fg-muted">
                   <strong>{t("wiki.search.graph")}</strong>
-                  {t("wiki.search.figures", { nodes: scene.nodes.length, edges: scene.edges.length })}
+                  {!graphPending && !graphError && t("wiki.search.figures", { nodes: scene.nodes.length, edges: scene.edges.length })}
                 </div>
                 <div className="min-h-0 flex-1">
-                  <WikiScene
+                  {graphPending ? (showSheet ? <Skeleton className="h-full w-full" /> : <Busy name="graph" label={t("wiki.search.loadingRelations")} large />) : graphError ? (
+                    <Failed error={firstRing.error ?? rootOriginal.error} retry={() => { if (firstRing.isError) void firstRing.refetch(); if (rootOriginal.isError) void rootOriginal.refetch(); }} />
+                  ) : <WikiScene
                     root={key(root)}
                     scene={scene}
                     selected={edge ? undefined : node?.id}
@@ -464,7 +508,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
                       setInspector(true);
                       if (small) setSheet(true);
                     }}
-                  />
+                  />}
                 </div>
               </div>
             )}
