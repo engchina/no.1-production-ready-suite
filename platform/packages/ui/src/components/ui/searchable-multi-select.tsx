@@ -506,13 +506,15 @@ export function SearchableMultiSelect({
         {/* 下部の行: 左に「N 件選択中」（折り返さない）、右に操作の組（表示中をすべて選択・クリア・完了）。
             幅が足りない（375px など）ときは件数の文と操作の組を 2 段にし、操作の組は分けない（#2091）。 */}
         <div
-          className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-t border-border px-3 py-1.5"
+          className="@container flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-t border-border px-3 py-1.5"
           data-searchable-panel-footer=""
         >
           <span className="tnum shrink-0 whitespace-nowrap text-xs text-fg-muted">{footerText}</span>
-          {/* ボタンの地・枠が接しないよう、操作の間は gap-1 を空ける（#5465。gap-2 は lg 28rem の popover で件数の文と
-              1 行に入らない）。 */}
-          <span className="ml-auto flex flex-wrap items-center justify-end gap-1" data-searchable-panel-actions="">
+          {/* 狭い一覧ではボタンの左右の余白を詰め、件数を先に折り返す。タッチ時の最小幅・高さと操作間の隙間は保つ。 */}
+          <span
+            className="ml-auto flex flex-wrap items-center justify-end gap-1 @max-sm:[&>button]:px-2 @max-xs:[&>button]:px-1"
+            data-searchable-panel-actions=""
+          >
             <Button
               type="button"
               size="sm"
