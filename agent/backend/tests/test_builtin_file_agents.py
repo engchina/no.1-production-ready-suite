@@ -23,12 +23,14 @@ from agents.testing import ScriptedModel, assistant_message, function_call
 from mcp_support import DEFAULT_OUTPUTS, fake_product_mcp
 from openpyxl import load_workbook  # type: ignore[import-untyped]
 from pytest import MonkeyPatch
+from security_support import client
 
 from app.features.agent import builtin_runtime
 from app.features.agent.artifact_file_store import FILE_ARTIFACT_KIND, MARKDOWN_MIME_TYPE
 from app.features.agent.builtin_runtime import ModelTarget
 from app.features.agent.docx_tool import DOCX_CREATE_TOOL
 from app.features.agent.markdown_tool import MARKDOWN_CREATE_TOOL
+from app.features.agent.mcp_server import run_output
 from app.features.agent.pptx_tool import PPTX_CREATE_TOOL
 from app.features.agent.runtime import (
     FILE_CREATE_AGENT_ID,
@@ -50,7 +52,7 @@ from app.features.agent.skills import (
     RAG_SEARCH_SKILL_ID,
     XLSX_CREATE_SKILL_ID,
 )
-from app.features.agent.tool_grounding import UNGROUNDED_NOTICE
+from app.features.agent.tool_grounding import POLICY_REFUSE, REFUSAL_HEAD, UNGROUNDED_NOTICE
 from app.features.agent.tools import MCP_TOOL_SEPARATOR
 from app.features.agent.xlsx_tool import XLSX_CREATE_TOOL
 
@@ -100,12 +102,13 @@ def _sheet(**changes: Any) -> dict[str, Any]:
 def combo() -> Iterator[Any]:
     """利用者が調べるスキルとファイルを作るスキルを選んだ業務 Agent を作る関数（後で消す）。"""
 
-    def create(search_skill_id: str) -> str:
+    def create(search_skill_id: str, **settings: Any) -> str:
         runtime_repository.create_agent(
             AgentProfile(
                 id=COMBO_AGENT_ID,
                 name="合成の組み合わせの業務 Agent",
                 skill_ids=[search_skill_id, *FILE_SKILL_IDS],
+                **settings,
             )
         )
         runtime_repository.publish_agent(COMBO_AGENT_ID)
@@ -357,4 +360,54 @@ def test_data_and_file_agent_treats_a_file_only_run_like_other_answers(
     assert run_answer_text(run) == answer
     assert [event for event in run.events if "tool_grounding" in event.model_dump_json()] == []
     assert (run_answer_notice(run) or "").startswith(UNGROUNDED_NOTICE)
+    model.assert_complete()
+
+
+def test_refused_run_drops_the_files_it_made(
+    monkeypatch: MonkeyPatch, script: Any, combo: Any
+) -> None:
+    """拒答の設定で回答を拒答の文に置き換える Run は、その Run で作ったファイルも出さない（#5912）。
+
+    根拠のツールを呼ばずにファイルだけを作り、差し戻しの後も同じ回答を返す台本。回答は拒答の文に
+    なり、ファイルは成果物の一覧・Run の詳細・ダウンロード・MCP の応答のどこからも取れない。
+    """
+    fake_product_mcp(monkeypatch)
+    answer = "ファイル「合成の一覧.xlsx」を作りました。シート「合成の表」に 2 行あります。"
+
+    run, model = script(
+        combo(RAG_CHAT_AND_DATA_SKILL_ID, ungrounded_answer_policy=POLICY_REFUSE),
+        "次の 2 つの名前を Excel のファイルにして: record-1、record-2",
+        [
+            function_call(
+                XLSX_CREATE_TOOL,
+                {"title": "合成の一覧", "sheets": [_sheet(rows=[["record-1"], ["record-2"]])]},
+                call_id="call-xlsx",
+            )
+        ],
+        [assistant_message(answer)],
+        [assistant_message(answer)],
+    )
+
+    assert run.status == RunStatus.COMPLETED, run.events[-1].model_dump_json()
+    grounding = [event for event in run.events if "tool_grounding" in event.payload]
+    assert [event.payload["tool_grounding"]["action"] for event in grounding] == [
+        "retry",
+        "refused",
+    ]
+    assert "ファイルも出しません" in grounding[-1].message
+    assert (run_answer_text(run) or "").startswith(REFUSAL_HEAD)
+    # ツールはファイルを作って参照を返したが、Run の成果物には残っていない。
+    [step] = [item for item in run.steps if item.tool_call and item.tool_result]
+    assert step.tool_result is not None and step.tool_result.output is not None
+    artifact_id = step.tool_result.output["file"]["artifact_id"]
+    assert [item for item in run.artifacts if item.kind == FILE_ARTIFACT_KIND] == []
+    with pytest.raises(KeyError):
+        runtime_repository.read_artifact_file(run.id, artifact_id)
+    repository: Any = runtime_repository
+    assert [key for key in repository._artifact_files if key[0] == run.id] == []  # noqa: SLF001
+    assert run_output(run).files == []
+    listed = client.get(f"/api/runs/{run.id}/artifacts").json()["data"]["artifacts"]
+    assert [item["kind"] for item in listed if item["kind"] == FILE_ARTIFACT_KIND] == []
+    for path in (f"artifacts/{artifact_id}", f"artifacts/{artifact_id}/download"):
+        assert client.get(f"/api/runs/{run.id}/{path}").status_code == 404, path
     model.assert_complete()

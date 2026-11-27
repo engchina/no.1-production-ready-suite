@@ -37,14 +37,13 @@ import {
   type DataTableColumn,
   type EntityAction,
   type StatusVariant,
-  ApiErrorBanner,
   apiErrorMessage,
   displayTimeZone,
   INFORMATION_TABLE_VISIBLE_ROWS,
   dataLoadView,
 } from "@production-ready/ui";
 
-import { DataLoadFailure } from "@/components/DataLoadStates";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { useAuth } from "@/components/security/AuthProvider";
 import { MissingEditorTarget } from "@/components/EntityLayout";
 import { PagedDataTable, listScrollLabel } from "@/components/ListViews";
@@ -274,6 +273,8 @@ function AutomationList({
   const visibleItems = allItems.filter((item) =>
     matchesSearch(query, [item.name, item.goal, item.agent_id, agentNames.get(item.agent_id)])
   );
+  // 読み取れなかった一覧を 0 件と見せない。前回の一覧があれば残す（messaging.md §3.6.1。#4222・#5937）。
+  const listView = dataLoadView(list, { isEmpty: allItems.length === 0 });
 
   const columns: DataTableColumn<Automation>[] = [
     {
@@ -360,7 +361,7 @@ function AutomationList({
                   label: t("automation.create"),
                   icon: Plus,
                   // 一覧を読み取れていない間は作らない（messaging.md §3.6.1。#4222）。
-                  disabled: dataLoadView(list, { isEmpty: allItems.length === 0 }).blockCreate,
+                  disabled: listView.blockCreate,
                   onClick: onCreate,
                 },
               ]
@@ -375,8 +376,14 @@ function AutomationList({
               <TimedLoadingState label={t("loading.automations")} testId="automations-loading">
                 <TableSkeleton columns={5} />
               </TimedLoadingState>
-            ) : list.error ? (
-              <ApiErrorBanner error={list.error} fallback={t("common.error.load")} />
+            ) : listView.phase === "failed" ? (
+              <DataLoadFailure
+                error={list.error}
+                fallback={t("common.error.load")}
+                onRetry={() => void list.refetch()}
+                retrying={list.isFetching}
+                testId="automations-load-failed"
+              />
             ) : allItems.length === 0 ? (
               <EmptyState
                 title={t("automation.list.empty")}
@@ -391,6 +398,15 @@ function AutomationList({
               />
             ) : (
               <div className="space-y-3">
+                {listView.phase === "stale" ? (
+                  <DataLoadStaleNotice
+                    error={list.error}
+                    dataUpdatedAt={list.dataUpdatedAt}
+                    onRetry={() => void list.refetch()}
+                    retrying={list.isFetching}
+                    testId="automations-load-stale"
+                  />
+                ) : null}
                 <ListToolbar
                   search={
                     <ListSearchField

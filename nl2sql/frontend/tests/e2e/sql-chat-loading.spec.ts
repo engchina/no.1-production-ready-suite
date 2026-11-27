@@ -190,3 +190,76 @@ test("業務プロファイルの一覧を読めなかったときは、空の�
     page.getByText("質問を入力して会話を始めます", { exact: true }),
   ).toBeVisible();
 });
+
+// #5937: 会話の内容・会話の履歴の一覧の読み取りの失敗は、3 製品で同じ領域の失敗の表示（帯・「再試行」・閉じた「詳細」）。
+const savedConversation = {
+  id: "chat-1",
+  title: "カテゴリ別売上",
+  profile_id: "sales",
+  created_at: "2026-10-02T22:00:00Z",
+};
+
+/** 会話の一覧（1 件）と会話の内容の応答。`failing()` が指す方だけ 500 にする。 */
+async function mockSavedConversation(page: Page, failing: () => "list" | "detail" | null) {
+  await page.route("**/api/nl2sql/profiles/search**", (route) => route.fulfill(profilePage));
+  await page.route("**/api/nl2sql/chats**", (route) => {
+    const list = new URL(route.request().url()).pathname === "/api/nl2sql/chats";
+    if (failing() === (list ? "list" : "detail")) {
+      return route.fulfill({
+        status: 500,
+        json: { error: list ? "会話の履歴を取得できません。" : "会話を取得できません。" },
+      });
+    }
+    return route.fulfill({
+      json: {
+        data: list
+          ? { items: [savedConversation], next_cursor: null, total: 1, limit: 25 }
+          : { conversation: savedConversation, turns: [] },
+      },
+    });
+  });
+}
+
+test("開いている会話の内容を読めなかったときは、空の状態ではなく失敗と再試行を出す", async ({ page }) => {
+  await setup(page);
+  let failing: "detail" | null = "detail";
+  await mockSavedConversation(page, () => failing);
+  await page.goto("/chat");
+  await page.getByTestId("sql-chat-history-toggle").click();
+  await page
+    .getByTestId("sql-chat-history")
+    .getByRole("button", { name: /^カテゴリ別売上/ })
+    .click();
+  // 取得は TanStack Query の既定の再試行の後に失敗になる。
+  const error = page.getByTestId("sql-chat-conversation-error");
+  await expect(error).toContainText("会話を取得できません。", { timeout: 20_000 });
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+  await expect(
+    page.getByText("質問を入力して会話を始めます", { exact: true }),
+  ).toHaveCount(0);
+
+  failing = null;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(error).toHaveCount(0);
+});
+
+test("会話の履歴の一覧を読めなかったときは、0 件ではなく失敗と再試行を出す", async ({ page }) => {
+  await setup(page);
+  let failing: "list" | null = "list";
+  await mockSavedConversation(page, () => failing);
+  await page.goto("/chat");
+  await page.getByTestId("sql-chat-history-toggle").click();
+  const history = page.getByTestId("sql-chat-history");
+  const error = history.getByRole("alert");
+  await expect(error).toContainText("会話の履歴を取得できません。", { timeout: 20_000 });
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+  await expect(history.getByText("まだ会話がありません")).toHaveCount(0);
+
+  failing = null;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(history.getByRole("button", { name: /^カテゴリ別売上/ })).toBeVisible();
+  await expect(error).toHaveCount(0);
+});

@@ -175,7 +175,13 @@ test("会話の内容の読み込み中は会話の形の Skeleton と経過時�
   await expect(composer).toHaveValue("続きの質問");
 
   release();
-  await expect(page.getByTestId("chat-thread-error")).toContainText("会話を取得できません。");
+  const error = page.getByTestId("chat-thread-error");
+  await expect(error).toContainText("会話を取得できません。");
+  // 3 製品で同じ領域の失敗の表示（帯・「詳細」は閉じる・「再試行」。messaging.md §11.7。#5937）。
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+  await expect(error.getByRole("button", { name: "再試行" })).toBeVisible();
   await expect(page.getByText("質問を入力して会話を始めます")).toHaveCount(0);
   await expect(composer).toHaveValue("続きの質問");
   await expect(page.getByTestId("chat-send")).toBeDisabled();

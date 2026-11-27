@@ -1,4 +1,3 @@
-import { RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { INFORMATION_LIST_ROW_CLASS } from "../../lib/list-density";
@@ -9,9 +8,8 @@ import {
   type CursorPaginationProps,
   type OffsetPaginationProps,
 } from "../data/pagination";
-import { ApiErrorBanner } from "../feedback/api-error-banner";
+import { ApiErrorState } from "../feedback/api-error-banner";
 import { TimedLoadingState } from "../feedback/processing-state";
-import { Button } from "../ui/button";
 import { ListSkeleton } from "../ui/skeleton";
 
 /** 履歴の 1 行（製品の会話・スレッドの型から写す）。 */
@@ -91,7 +89,7 @@ export interface ChatHistoryListProps {
  * チャットの会話の履歴の一覧（3 製品共通。UX 契約 page-archetypes.md §6、#1161）。`ChatLayout` の `historyContent` に渡す。
  *
  * - 行は名前（1 行で省略し `title` で全文）・補足（更新日時・件数）・状態のバッジ。開いている会話は地の色と `aria-current`。
- * - 読み込み中は文言と経過時間と行の形の `Skeleton`、失敗は `ApiErrorBanner` と再試行、0 件は短い文（messaging.md §3.6）。
+ * - 読み込み中は文言と経過時間と行の形の `Skeleton`、失敗は `ApiErrorState`（再試行・閉じた「詳細」）、0 件は短い文（messaging.md §3.6）。
  * - 「新しい会話」は一覧に置かない（会話の領域の上端の行の 1 か所。#889）。
  * - パネル・シートの高さまで伸ばし、超えたら一覧の中をスクロールする。`pagination` のページ送りは一覧の下に常に見せる
  *   （3 製品とも 25 件/ページ。件数「a - b / n 件」と「前へ / N / M ページ / 次へ」。#1265）。
@@ -133,18 +131,15 @@ export function ChatHistoryList({
     );
   }
   if (error) {
+    // 一覧の読み取りの失敗は領域の失敗の表示（帯・「詳細」は閉じる。messaging.md §3.6 / §10.3。#5937）。
     return (
-      <ApiErrorBanner
+      <ApiErrorState
         error={error}
         fallback={labels.error}
         testId={testIds?.error}
-        action={
-          onRetry ? (
-            <Button type="button" variant="secondary" size="sm" icon={RefreshCw} loading={retrying} onClick={onRetry}>
-              {labels.retry}
-            </Button>
-          ) : undefined
-        }
+        onRetry={onRetry}
+        retrying={retrying}
+        retryLabel={labels.retry}
       />
     );
   }

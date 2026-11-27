@@ -1,9 +1,10 @@
 import { RunProgressCard, callBodyPath, CollapsedListToggle, useCollapsedList, CombinedBanner } from "@production-ready/ui";
 import { useCallback, useId, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { Check, ListChecks, Play, RefreshCw, Sparkles } from "lucide-react";
+import { Check, ListChecks, Play, Sparkles } from "lucide-react";
 import {
   ApiErrorBanner,
+  ApiErrorState,
   ChatReadOnlyNotice,
   Banner,
   AnswerNotice,
@@ -379,20 +380,14 @@ export function DbAdminChatPage() {
           </TimedLoadingState>
         ) : null}
         {conversationId && conversation.isError ? (
-          <ApiErrorBanner
+          // 会話の内容の読み取りの失敗は、チャットと同じ領域の失敗の表示（「詳細」は閉じる。messaging.md §11.7。#5937）。
+          <ApiErrorState
             error={conversation.error}
             fallback={t("chat.loadFailed")}
-            action={
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                icon={RefreshCw}
-                onClick={() => void conversation.refetch()}
-              >
-                {t("common.action.retry")}
-              </Button>
-            }
+            testId={`${TEST_ID}-conversation-error`}
+            onRetry={() => void conversation.refetch()}
+            retrying={conversation.isFetching}
+            retryLabel={t("common.action.retry")}
           />
         ) : null}
         {!conversationId && !pending ? (

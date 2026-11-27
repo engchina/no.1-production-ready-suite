@@ -4020,9 +4020,13 @@ class AgentRuntimeRepository:
         `declined` は、ツールで調べずに範囲外・答えられないと判断した回答（`retry` と `refused`。
         #2608）。イベントに `declined` を付け、拒答なら metadata にも残す（回答の対応の basis を
         `declined_without_tools` にするのに使う）。
+        `refused` は、その Run でツールが作ったファイル（成果物のファイル）も消す（#5912。拒答の
+        設定は確かめていない出力を出さないので、回答と同じ扱い。ファイルの中身は見ない）。成果物の
+        一覧・Run の詳細・ダウンロードはどれも Run の成果物から読むので、どこからも取れなくなる。
         """
         from app.features.agent.tool_grounding import METADATA_KEY, retried
 
+        dropped_files: list[str] = []
         with self._lock:
             run = self._require_run(run_id)
             record = run.metadata.get(METADATA_KEY)
@@ -4103,6 +4107,14 @@ class AgentRuntimeRepository:
                         "回答を出さずにお答えできない旨の文に置き換えました。"
                     )
                 )
+                dropped_files = [
+                    item.id for item in run.artifacts if item.kind == FILE_ARTIFACT_KIND
+                ]
+                if dropped_files:
+                    run.artifacts = [
+                        item for item in run.artifacts if item.kind != FILE_ARTIFACT_KIND
+                    ]
+                    message += "この実行で作ったファイルも出しません。"
             else:
                 record["text_clarification"] = True
                 message = (
@@ -4124,6 +4136,17 @@ class AgentRuntimeRepository:
             )
             run.updated_at = _now()
             self._persist_locked()
+        # 中身の削除（I/O）は lock の外で行う。成果物はもう Run に無いので、消せなくても読めない
+        # （残った中身は Run の行を消すときに消える）。
+        for artifact_id in dropped_files:
+            try:
+                self._discard_artifact_file(run_id, artifact_id)
+            except Exception:  # noqa: BLE001 - 中身の後始末の失敗で拒答を止めない
+                logger.warning(
+                    "agent_artifact_file_discard_failed",
+                    extra={"run_id": run_id, "artifact_id": artifact_id},
+                    exc_info=True,
+                )
 
     def record_context_compaction(self, run_id: str, payload: JsonObject) -> None:
         """モデルの入力の上限に収めるためにツールの結果を縮めたことをイベントに残す（#2383）。

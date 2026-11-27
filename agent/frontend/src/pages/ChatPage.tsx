@@ -3,7 +3,6 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { useSearchParams } from "react-router-dom";
 import {
   Check,
-  RefreshCw,
   RotateCcw,
   SearchX,
   Square,
@@ -861,22 +860,14 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
           </TimedLoadingState>
         ) : threadFailed ? (
           // 会話を読めなかった（一時的な失敗）。選んだ会話のまま、理由と再試行を出す。
-          <ApiErrorBanner
+          // 会話の内容の読み取りの失敗は、3 製品で同じ領域の失敗の表示（「詳細」は閉じる。messaging.md §11.7。#5937）。
+          <ApiErrorState
             error={thread.error}
             fallback={t("chat.loadFailed")}
             testId="chat-thread-error"
-            action={
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                icon={RefreshCw}
-                loading={thread.isFetching}
-                onClick={() => void thread.refetch()}
-              >
-                {t("common.retry")}
-              </Button>
-            }
+            onRetry={() => void thread.refetch()}
+            retrying={thread.isFetching}
+            retryLabel={t("common.retry")}
           />
         ) : runs.length === 0 && !pending ? (
           <EmptyState

@@ -1,7 +1,7 @@
 import { expectLocalUiFonts } from "./_helpers/local-fonts";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady } from "./_helpers/database-gate";
-import { clickOntologyEdge, expectLegacyOntologyControls } from "./_helpers/ontology-controls";
+import { clickOntologyEdge, expectLegacyOntologyControls, ontologyViewTab, ontologyViewTabs } from "./_helpers/ontology-controls";
 import { chooseSelectFieldOption } from "./_helpers/select-field";
 
 test.beforeEach(async ({ page }) => mockDatabaseGateReady(page));
@@ -351,8 +351,8 @@ async function expectNoHorizontalScroll(page: Page) {
  */
 async function openCardGraph(page: Page, playground: Locator) {
   await openGraphIfCollapsed(page, playground);
-  const grounding = playground.getByTestId("ontology-graph-mode-grounding");
-  if ((await grounding.getAttribute("aria-pressed")) !== "true") await grounding.click();
+  const grounding = ontologyViewTab(playground, "接地パス");
+  if ((await grounding.getAttribute("aria-selected")) !== "true") await grounding.click();
 }
 
 async function openGraphIfCollapsed(page: Page, playground: Locator) {
@@ -416,7 +416,7 @@ function hasVisibleBoxShadow(value: string) {
 async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
   const field = playground.getByTestId("ontology-graph-search-field");
   const input = playground.getByTestId("ontology-graph-search");
-  const modeControl = playground.getByTestId("ontology-graph-view-mode");
+  const modeControl = ontologyViewTabs(playground);
   const detailsToggleField = playground.getByTestId("ontology-graph-details-toggle-field");
 
   await expect(field).toBeVisible();
@@ -438,7 +438,8 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
   const coarse = await page.evaluate(() => window.matchMedia("(pointer: coarse)").matches);
   expect(fieldBox!.height).toBeGreaterThanOrEqual(coarse ? 43 : 39);
   expect(fieldBox!.height).toBeLessThanOrEqual(45);
-  expect(Math.abs(fieldBox!.height - modeBox!.height)).toBeLessThanOrEqual(1);
+  // 表示の切り替えは共有の Tabs（高さは部品の --tab-height。#5949）。操作部品の高さ（lg）とは比べない。
+  expect(modeBox!.height).toBeLessThanOrEqual(fieldBox!.height + 1);
   expect(Math.abs(fieldBox!.height - detailsBox!.height)).toBeLessThanOrEqual(1);
 
   const fieldCenterY = fieldBox!.y + fieldBox!.height / 2;
@@ -456,8 +457,8 @@ async function expectGraphSearchFieldLayout(page: Page, playground: Locator) {
   const kindFilter = playground.getByRole("combobox", { name: "概念の種類", exact: true });
   await kindFilter.focus();
   await page.keyboard.press("Tab");
-  await expect(playground.getByTestId("ontology-graph-mode-grounding")).toBeFocused();
-  await playground.getByTestId("ontology-graph-mode-physical_er").focus();
+  // Tabs は選んだタブだけが Tab の停止位置（roving tabIndex）。次の Tab で検索欄へ進む。
+  await expect(ontologyViewTab(playground, "接地パス")).toBeFocused();
   await page.keyboard.press("Tab");
   await expect
     .poll(() => page.evaluate(() => document.activeElement?.getAttribute("data-testid")))
@@ -616,16 +617,18 @@ for (const theme of ["light", "dark"]) {
       const toolbar = playground.getByTestId("ontology-graph-toolbar");
       const filter = toolbar.getByRole("combobox", { name: "概念の種類", exact: true });
       await expect(toolbar.locator("select, button, input").first()).toHaveAttribute("aria-label", "概念の種類");
-      const controls = [filter, ...["ontology-graph-view-mode", "ontology-graph-search-field", "ontology-graph-details-toggle-field"].map(id => toolbar.getByTestId(id))];
+      const controls = [filter, ontologyViewTabs(toolbar), ...["ontology-graph-search-field", "ontology-graph-details-toggle-field"].map(id => toolbar.getByTestId(id))];
       const boxes = await Promise.all(controls.map(control => control.boundingBox()));
-      for (const box of boxes) {
+      const bottom = (box: { y: number; height: number } | null) => box!.y + box!.height;
+      for (const [index, box] of boxes.entries()) {
         expect(box).not.toBeNull();
-        expect(Math.abs(box!.height - boxes[0]!.height)).toBeLessThanOrEqual(1);
-        if (testInfo.project.name === "desktop" && width === 1920) expect(Math.abs(box!.y - boxes[0]!.y)).toBeLessThanOrEqual(1);
+        // 表示の切り替え（index 1）は共有の Tabs で、高さは部品が決める（#5949）。操作部品（lg）と下端をそろえる。
+        if (index !== 1) expect(Math.abs(box!.height - boxes[0]!.height)).toBeLessThanOrEqual(1);
+        if (testInfo.project.name === "desktop" && width === 1920) expect(Math.abs(bottom(box) - bottom(boxes[0]))).toBeLessThanOrEqual(1);
       }
       if (testInfo.project.name === "desktop" && width === 1280) {
-        // 右側の詳細パネルを含む狭いグラフでは2行。各行で上下端を揃える。
-        expect(Math.abs(boxes[0]!.y - boxes[1]!.y)).toBeLessThanOrEqual(1);
+        // 右側の詳細パネルを含む狭いグラフでは2行。各行で下端を揃える。
+        expect(Math.abs(bottom(boxes[0]) - bottom(boxes[1]))).toBeLessThanOrEqual(1);
         expect(Math.abs(boxes[2]!.y - boxes[3]!.y)).toBeLessThanOrEqual(1);
         expect(boxes[2]!.y).toBeGreaterThanOrEqual(boxes[0]!.y + boxes[0]!.height);
       }
@@ -749,8 +752,8 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expectNoHorizontalScroll(page);
   await openCardGraph(page, playground);
   await expectLegacyOntologyControls(page, playground);
-  await expect(playground.getByTestId("ontology-graph-view-mode")).toBeVisible();
-  await expect(playground.getByTestId("ontology-graph-mode-grounding")).toHaveAttribute("aria-pressed", "true");
+  await expect(ontologyViewTabs(playground)).toBeVisible();
+  await expect(ontologyViewTab(playground, "接地パス")).toHaveAttribute("aria-selected", "true");
   await expect(playground.getByTestId("ontology-graph-lane-business")).toContainText("業務概念");
   await expect(playground.getByTestId("ontology-graph-lane-attribute")).toContainText("属性・指標");
   // 詳細(列・列挙値)ノードが畳まれている間は空レーンのラベルを出さない
@@ -802,7 +805,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await playground.getByTestId("ontology-graph-search").fill("");
   await expect(orderCard).toHaveCSS("opacity", "1");
 
-  const modeButtons = playground.getByTestId("ontology-graph-view-mode").getByRole("button");
+  const modeButtons = ontologyViewTabs(playground).getByRole("tab");
   for (const button of await modeButtons.all()) {
     const geometry = await button.evaluate(node => ({
       right: node.getBoundingClientRect().right,
@@ -993,7 +996,7 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(result).toContainText("関係の一致");
   await expect(result).toContainText("注文する");
   await expect(playground.getByTestId("ontology-playground-ready-state")).toHaveCount(0);
-  await expect(playground.getByTestId("ontology-graph-mode-grounding")).toHaveAttribute("aria-pressed", "true");
+  await expect(ontologyViewTab(playground, "接地パス")).toHaveAttribute("aria-selected", "true");
   await expect(playground.getByTestId("ontology-grounding-path-panel")).toContainText("接地パス");
   await expect(playground.getByTestId("ontology-grounding-path-panel")).toContainText("顧客");
   await expect(playground.getByTestId("ontology-grounding-path-panel")).toContainText("注文");
@@ -1013,7 +1016,7 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(playground.getByTestId("ontology-playground-ready-state")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
   // 質問を消すと全体の表示（Cytoscape の探索の画布。#5922）に戻る。
-  await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
+  await expect(ontologyViewTab(playground, "全体")).toHaveAttribute("aria-selected", "true");
   await expect(playground.getByTestId("ontology-concept-graph-canvas")).toBeVisible();
   await expect(playground.getByTestId("ontology-selection-details-panel")).toContainText(
     "グラフ上のノードや関係の線を選択"
@@ -1035,7 +1038,7 @@ test("質問を接地すると分類とグラフ強調が表示され、入力�
   await expect(playground.getByTestId("ontology-playground-ready-state")).toBeVisible();
   await expect(playground.getByTestId("ontology-playground-result")).toHaveCount(0);
   // 質問を消すと全体の表示（Cytoscape の探索の画布。#5922）に戻る。
-  await expect(playground.getByTestId("ontology-graph-mode-all")).toHaveAttribute("aria-pressed", "true");
+  await expect(ontologyViewTab(playground, "全体")).toHaveAttribute("aria-selected", "true");
   await expect(playground.getByTestId("ontology-concept-graph-canvas")).toBeVisible();
   await expect(playground.getByTestId("ontology-selection-details-panel")).toContainText(
     "グラフ上のノードや関係の線を選択"
@@ -1111,7 +1114,7 @@ test("Ontology グラフはデスクトップとモバイルで主要ノード�
   await expect(playground.locator(".react-flow")).toBeVisible();
   await expect(playground.locator(".react-flow__node")).toHaveCount(3);
   await expect(playground.getByTestId("ontology-graph-lane-business")).toContainText("業務概念");
-  await expect(playground.getByTestId("ontology-graph-mode-grounding")).toHaveAttribute("aria-pressed", "true");
+  await expect(ontologyViewTab(playground, "接地パス")).toHaveAttribute("aria-selected", "true");
   await expect(playground.getByTestId("ontology-graph-legend")).toBeVisible();
   await expect(playground.locator(".react-flow__node", { hasText: "顧客" })).toBeVisible();
   await expect(playground.locator(".react-flow__node", { hasText: "注文" })).toBeVisible();
@@ -1884,9 +1887,9 @@ test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter 
   expect(await count("graphZoom")).toBeGreaterThanOrEqual(0.1);
   if (process.env.GRAPH_ACCEPTANCE_DIR) await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/" + info.project.name + "-ontology-256.png" });
   // 物理 ER は表のカード（React Flow）で、隣接をまとめて隠さない。
-  await area.getByTestId("ontology-graph-mode-physical_er").click();
+  await ontologyViewTab(area, "物理 ER").click();
   await expect(area.locator(".react-flow")).toBeVisible();
   await expect(area.getByTestId("ontology-group-point")).toHaveCount(0);
-  await area.getByTestId("ontology-graph-mode-all").click();
+  await ontologyViewTab(area, "全体").click();
   await expect(area.getByTestId("ontology-concept-graph-canvas")).toBeVisible();
 });

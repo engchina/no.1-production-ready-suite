@@ -859,6 +859,11 @@ test("一覧の読み込みに失敗したら一覧の位置に再試行付き�
   await page.goto("/history");
   const error = page.getByTestId("history-list-error");
   await expect(error).toBeVisible();
+  // 3 製品で同じ領域の失敗の表示（帯・「再試行」・閉じた「詳細」。messaging.md §3.6.1。#5937）。
+  const alert = error.getByRole("alert");
+  await expect(alert).toContainText("履歴更新テストエラー");
+  await expect(alert).toHaveAttribute("data-failure-layout", "region");
+  await expect(alert.locator("details")).not.toHaveAttribute("open", "");
   // 取得できていない条件の結果を「0 件」と取り違えさせない。
   await expect(page.getByText("条件に一致する実行がありません")).toHaveCount(0);
   failing = false;
@@ -866,10 +871,45 @@ test("一覧の読み込みに失敗したら一覧の位置に再試行付き�
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
   await expect(error).toHaveCount(0);
 
+  // 前の一覧があれば残し、いつの内容かを示す（前回の内容は読めるので warning）。
   failing = true;
   await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
-  await expect(error).toBeVisible();
+  const stale = page.getByTestId("history-list-card").locator("[data-failure-kind]");
+  await expect(stale).toContainText("時点の内容を表示しています");
+  await expect(stale).toContainText("履歴更新テストエラー");
+  await expect(error).toHaveCount(0);
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  failing = false;
+  await stale.getByRole("button", { name: "再試行" }).click();
+  await expect(stale).toHaveCount(0);
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+});
+
+test("詳細の読み込みに失敗したら再試行付きの失敗を出し、前の内容があれば残す", async ({ page }) => {
+  await mockHistory(page);
+  let failing = true;
+  // 後から登録した route が先に呼ばれる（mockHistory の成功の応答を上書きする）。
+  await page.route("**/api/nl2sql/history/history-new", (route) =>
+    failing ? fulfillJson(route, "実行の詳細を取得できません。", 503) : route.fallback(),
+  );
+  await page.goto("/history?id=history-new");
+  const error = page.getByTestId("history-detail-error");
+  const alert = error.getByRole("alert");
+  await expect(alert).toContainText("実行の詳細を取得できません。");
+  await expect(alert).toHaveAttribute("data-failure-layout", "region");
+  await expect(alert.locator("details")).not.toHaveAttribute("open", "");
+  await expect(page.getByTestId("history-detail-not-found")).toHaveCount(0);
+  failing = false;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(page.getByTestId("history-detail-summary")).toBeVisible();
+  await expect(error).toHaveCount(0);
+
+  failing = true;
+  await page.getByRole("button", { name: "最新情報を取得", exact: true }).click();
+  const stale = page.locator("[data-failure-kind]");
+  await expect(stale).toContainText("時点の内容を表示しています");
+  await expect(page.getByTestId("history-detail-summary")).toBeVisible();
+  await expect(error).toHaveCount(0);
 });
 
 for (const theme of ["light", "dark"] as const) {
