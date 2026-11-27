@@ -17352,6 +17352,25 @@ def _test_oracle_connection_sync(settings: Settings) -> None:
         connection.close()
 
 
+async def run_on_oracle_connection[T](
+    settings: Settings, operation: Callable[[OracleConnectionProtocol], T]
+) -> T:
+    """保存済みの設定の接続を共有 pool から借りて `operation` を実行する（#5931）。
+
+    システム設定の読み取りに使う。新しい接続を毎回は張らない（#793）。借りた接続は pool に返す。
+    待ちの上限は呼び出し側が決める。
+    """
+
+    def run() -> T:
+        connection = OracleClient(settings).acquire_connection()
+        try:
+            return operation(connection)
+        finally:
+            connection.close()
+
+    return await asyncio.to_thread(run)
+
+
 def shared_pool_connect_kwargs(settings: Settings | None = None) -> dict[str, object]:
     """共有 pool の接続引数（pool の引数を除く）。接続の失敗の診断の直接の接続も使う（#1744）。
 

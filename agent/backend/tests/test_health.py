@@ -12,6 +12,8 @@ import sys
 import threading
 import time
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -72,6 +74,7 @@ from app.observability import (
     trace_export_retry_worker_running,
     trace_exporter_status,
 )
+from app.security.permissions import permission_for_route
 from app.settings import Settings, reset_settings_cache
 
 
@@ -1311,6 +1314,115 @@ def test_adb_settings_save_writes_dedicated_region_env(
     assert "PLATFORM_ORACLE_ADB_OCID=ocid1.autonomousdatabase.oc1..agent" in env_text
     assert "PLATFORM_ORACLE_ADB_REGION=ap-tokyo-1" in env_text
     assert "PLATFORM_OCI_REGION=ap-tokyo-1" not in env_text
+
+
+class _AidpFakeCursor:
+    """`ALL_USERS` の参照の代役（ADB_AIDP_USER が在る）。"""
+
+    def __init__(self, log: list[object]) -> None:
+        self._log = log
+        self._row: tuple[int] | None = None
+
+    def execute(self, statement: str, parameters: dict[str, object]) -> None:
+        self._log.append((statement, dict(parameters)))
+        self._row = (1,) if parameters["user_name"] == "ADB_AIDP_USER" else None
+
+    def fetchone(self) -> tuple[int] | None:
+        return self._row
+
+    def close(self) -> None:
+        self._log.append("cursor_closed")
+
+
+class _AidpFakeConnection:
+    def __init__(self, log: list[object]) -> None:
+        self._log = log
+
+    def cursor(self) -> _AidpFakeCursor:
+        return _AidpFakeCursor(self._log)
+
+    def close(self) -> None:
+        self._log.append("connection_returned")
+
+
+def _configure_aidp(monkeypatch: MonkeyPatch, settings: Any) -> None:
+    monkeypatch.setattr(settings, "aidp_ocid", "ocid1.aidataplatform.oc1..synthetic")
+    monkeypatch.setattr(settings, "aidp_region", "ap-osaka-1")
+    monkeypatch.setattr(settings, "aidp_url", "https://aidp.example.invalid/?ocid=synthetic")
+    monkeypatch.setattr(settings, "aidp_db_user", "adb_aidp_user")
+    # Wallet のファイルを置かずに、設定の判定（readiness）だけを通す。
+    monkeypatch.setattr(shared_database, "database_readiness", lambda *_args: "ok")
+
+
+def test_aidp_integration_is_not_configured_without_ocid(monkeypatch: MonkeyPatch) -> None:
+    """Oracle AI Data Platform の OCID が無ければ「未設定」だけを返す（#5931）。"""
+    settings = Settings(_env_file=None)
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["configured"] is False
+    # 権限は「データベース」の既存の区画と同じ。
+    assert permission_for_route("GET", "/settings/database/aidp") == {"menu.settings_database"}
+
+
+def test_aidp_integration_checks_the_database_user_on_the_platform_pool(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """AIDP 用の DB ユーザーは、pool の接続で `ALL_USERS` を引いて確かめ、接続を返す（#5931）。"""
+    settings = Settings(_env_file=None)
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+    _configure_aidp(monkeypatch, settings)
+    log: list[object] = []
+
+    @contextmanager
+    def fake_platform_oracle_connection(connection_settings: object) -> Iterator[object]:
+        assert connection_settings is settings
+        yield _AidpFakeConnection(log)
+        log.append("connection_returned")
+
+    monkeypatch.setattr(agent_router, "platform_oracle_connection", fake_platform_oracle_connection)
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["configured"] is True
+    assert data["url"] == "https://aidp.example.invalid/?ocid=synthetic"
+    assert (data["db_user"], data["db_user_status"]) == ("ADB_AIDP_USER", "exists")
+    assert log == [
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :user_name", {"user_name": "ADB_AIDP_USER"}),
+        "cursor_closed",
+        "connection_returned",
+    ]
+    assert not [key for key in data if "password" in key]
+    assert client.get("/api/settings/database").json()["data"]["aidp_configured"] is True
+
+
+def test_aidp_integration_reports_unknown_when_the_database_is_unreachable(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = Settings(_env_file=None)
+    monkeypatch.setattr(agent_router, "get_settings", lambda: settings)
+    _configure_aidp(monkeypatch, settings)
+
+    @contextmanager
+    def failing_platform_oracle_connection(_settings: object) -> Iterator[object]:
+        raise RuntimeError("DPY-6005: cannot connect to database")
+        yield
+
+    monkeypatch.setattr(
+        agent_router, "platform_oracle_connection", failing_platform_oracle_connection
+    )
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["configured"] is True
+    assert data["db_user_status"] == "unknown"
+    assert "DPY-6005" not in resp.text
 
 
 def test_database_connection_test_uses_oracledb_like_rag(

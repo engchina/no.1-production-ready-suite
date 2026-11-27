@@ -49,6 +49,7 @@ export type {
 import type {
   AdbInfoData,
   AdbSettingsUpdate,
+  AidpIntegrationData,
   DatabaseConnectionTestResult,
   DatabaseSettingsData,
   DatabaseSettingsUpdate,
@@ -4444,6 +4445,9 @@ export const api = {
     }),
   stopAdb: () =>
     request<AdbInfoData>("/api/settings/database/adb/stop", { method: "POST" }),
+  // 設定: Oracle AI Data Platform の連携の情報（読み取り専用。#5931）
+  getAidpIntegration: (options: SettingsRequestOptions = {}) =>
+    request<AidpIntegrationData>("/api/settings/database/aidp", { signal: options.signal }),
 
   // 設定: HuggingFace モデルダウンロード
   getHuggingFaceSettings: () =>

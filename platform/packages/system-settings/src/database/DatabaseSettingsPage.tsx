@@ -50,6 +50,7 @@ import {
   SettingsTestResultPanel,
   toSettingsTestResultDetails,
 } from "../oci/SettingsTestResultPanel";
+import { AidpIntegrationCard } from "./AidpIntegrationCard";
 import {
   useAdbInfo,
   useDatabaseSettings,
@@ -709,6 +710,11 @@ export function DatabaseSettingsPage({
             </CardContent>
           </Card>
         </form>
+
+        {/* Oracle AI Data Platform の連携の情報（読み取り専用。OCID が設定されているときだけ出す。#5931）。 */}
+        {settings.aidp_configured ? (
+          <AidpIntegrationCard api={api} errorMessage={errorMessage} />
+        ) : null}
 
         {children ? (
           // 製品が足すカードには押したボタンが無いので、処理中は fieldset でまとめて無効にする。

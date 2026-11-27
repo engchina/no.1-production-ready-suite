@@ -52,6 +52,41 @@ export const DATABASE_MESSAGES = {
   "settings.adb.processing.stop": "Autonomous Database を停止しています",
   "settings.adb.statusUnknown": "不明",
   "settings.adb.title": "Autonomous Database 管理",
+  "settings.aidp.action.refresh": "情報を再取得",
+  "settings.aidp.catalog.description":
+    "External Catalog の登録は Oracle AI Data Platform の画面で行います（Master Catalog › Create catalog › External catalog）。次の値と、配備のときに指定した DB ユーザーのパスワードを入力してください。パスワードはこの画面に表示しません。",
+  "settings.aidp.catalog.title": "External Catalog の登録に使う値",
+  "settings.aidp.dbUser.checkFailed":
+    "データベースに接続できないため、DB ユーザーが在るかを確かめられませんでした。接続設定と Autonomous Database の状態を確認して、情報を再取得してください。",
+  "settings.aidp.dbUser.missing":
+    "Autonomous Database に DB ユーザー {user} がありません。配備の手順（terraform/README.md「Oracle AI Data Platform」）で作成してください。",
+  "settings.aidp.dbUser.notSet":
+    "DB ユーザーの名前（PLATFORM_AIDP_DB_USER）が未設定のため、在るかを確かめられません。",
+  "settings.aidp.dbUser.status.exists": "作成済み",
+  "settings.aidp.dbUser.status.missing": "未作成",
+  "settings.aidp.dbUser.status.unknown": "確認できません",
+  "settings.aidp.dbUser.statusLabel": "DB ユーザー",
+  "settings.aidp.description":
+    "配備した Oracle AI Data Platform と、External Catalog の登録に使う値を表示します（読み取り専用）。",
+  "settings.aidp.field.dbName": "データベース名",
+  "settings.aidp.field.dbUser": "ユーザー名",
+  "settings.aidp.field.ocid": "OCID",
+  "settings.aidp.field.region": "リージョン",
+  "settings.aidp.field.serviceName": "サービス名",
+  "settings.aidp.field.url": "URL",
+  "settings.aidp.helper.ocidReadonly":
+    "この区画の値は platform/.env(PLATFORM_AIDP_*)を正本とする読み取り専用項目です。",
+  "settings.aidp.helper.dbNameUnknown":
+    "接続のサービス名から読み取れませんでした。OCI コンソールで Autonomous Database の名前を確認してください。",
+  "settings.aidp.loadError":
+    "Oracle AI Data Platform の連携の情報を取得できませんでした。",
+  "settings.aidp.loading":
+    "Oracle AI Data Platform の連携の情報を読み込んでいます",
+  "settings.aidp.openLink": "Oracle AI Data Platform を開く（新しいタブ）",
+  "settings.aidp.placeholder.notSet": "未設定",
+  "settings.aidp.title": "Oracle AI Data Platform",
+  "settings.aidp.urlNotSet":
+    "URL（PLATFORM_AIDP_URL）が未設定か、https の URL ではありません。",
   "settings.database.actions.save": "保存",
   "settings.database.actions.label": "データベース設定の操作",
   "settings.database.actions.saveDb": "DB設定を保存",

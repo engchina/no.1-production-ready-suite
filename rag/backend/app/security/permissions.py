@@ -626,6 +626,8 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], frozenset[str]] = {
     ("POST", "/settings/database/adb/settings"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/start"): _any(MENU_SETTINGS_DATABASE),
     ("POST", "/settings/database/adb/stop"): _any(MENU_SETTINGS_DATABASE),
+    # Oracle AI Data Platform の連携の情報（読み取り専用。#5931）。
+    ("GET", "/settings/database/aidp"): _any(MENU_SETTINGS_DATABASE),
     # 回答の注意書き（設定は製品ごと。#2449）。
     ("GET", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),
     ("PUT", "/settings/answer-notice"): _any(MENU_SETTINGS_ANSWER_NOTICE),

@@ -26,6 +26,7 @@ from pytest import MonkeyPatch
 
 from app import config as app_config
 from app.api.routes import settings as settings_routes
+from app.clients import oracle as oracle_client_module
 from app.clients.external_parser import ExternalParserClient
 from app.clients.oracle import (
     OracleClient,
@@ -45,6 +46,7 @@ from app.rag import parser_adapter_readiness
 from app.schemas.settings import (
     EnterpriseAiModelSettings,
 )
+from app.security.permissions import permission_for_route
 from app.services.control import service_runtime_env
 from tests.support import AsgiTestClient
 
@@ -2979,6 +2981,113 @@ def test_get_adb_info_returns_not_configured_without_ocid(
     data = resp.json()["data"]
     assert data["status"] == "not_configured"
     assert data["lifecycle_state"] is None
+
+
+class _AidpFakeCursor:
+    """`ALL_USERS` の参照の代役（ADB_AIDP_USER が在る）。"""
+
+    def __init__(self, log: list[object]) -> None:
+        self._log = log
+        self._row: tuple[int] | None = None
+
+    def execute(self, statement: str, parameters: dict[str, object]) -> None:
+        self._log.append((statement, dict(parameters)))
+        self._row = (1,) if parameters["user_name"] == "ADB_AIDP_USER" else None
+
+    def fetchone(self) -> tuple[int] | None:
+        return self._row
+
+    def close(self) -> None:
+        self._log.append("cursor_closed")
+
+
+class _AidpFakeConnection:
+    def __init__(self, log: list[object]) -> None:
+        self._log = log
+
+    def cursor(self) -> _AidpFakeCursor:
+        return _AidpFakeCursor(self._log)
+
+    def close(self) -> None:
+        self._log.append("connection_returned")
+
+
+def _configure_aidp(monkeypatch: MonkeyPatch, settings: Any) -> None:
+    monkeypatch.setattr(settings, "aidp_ocid", "ocid1.aidataplatform.oc1..synthetic")
+    monkeypatch.setattr(settings, "aidp_region", "ap-osaka-1")
+    monkeypatch.setattr(settings, "aidp_url", "https://aidp.example.invalid/?ocid=synthetic")
+    monkeypatch.setattr(settings, "aidp_db_user", "adb_aidp_user")
+    # Wallet のファイルを置かずに、設定の判定（readiness）だけを通す。
+    monkeypatch.setattr(shared_database, "database_readiness", lambda *_args: "ok")
+
+
+def test_aidp_integration_is_not_configured_without_ocid(monkeypatch: MonkeyPatch) -> None:
+    """Oracle AI Data Platform の OCID が無ければ「未設定」だけを返す（#5931）。"""
+    monkeypatch.setattr(get_settings(), "aidp_ocid", "")
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["configured"] is False
+    # 権限は「データベース」の既存の区画と同じ。
+    assert permission_for_route("GET", "/settings/database/aidp") == {"menu.settings_database"}
+
+
+def test_aidp_integration_checks_the_database_user_on_the_shared_pool(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """AIDP 用の DB ユーザーは、共有 pool の接続で `ALL_USERS` を引き、接続を返す（#5931）。"""
+    settings = get_settings()
+    _configure_aidp(monkeypatch, settings)
+    log: list[object] = []
+
+    class FakeOracleClient:
+        def __init__(self, client_settings: Settings) -> None:
+            assert client_settings is settings
+
+        def acquire_connection(self) -> _AidpFakeConnection:
+            return _AidpFakeConnection(log)
+
+    monkeypatch.setattr(oracle_client_module, "OracleClient", FakeOracleClient)
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["configured"] is True
+    assert data["url"] == "https://aidp.example.invalid/?ocid=synthetic"
+    assert (data["db_user"], data["db_user_status"]) == ("ADB_AIDP_USER", "exists")
+    assert log == [
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :user_name", {"user_name": "ADB_AIDP_USER"}),
+        "cursor_closed",
+        "connection_returned",
+    ]
+    assert not [key for key in data if "password" in key]
+    assert client.get("/api/settings/database").json()["data"]["aidp_configured"] is True
+
+
+def test_aidp_integration_reports_unknown_when_the_database_is_unreachable(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    _configure_aidp(monkeypatch, settings)
+
+    class FailingOracleClient:
+        def __init__(self, _settings: Settings) -> None:
+            pass
+
+        def acquire_connection(self) -> _AidpFakeConnection:
+            raise RuntimeError("DPY-6005: cannot connect to database")
+
+    monkeypatch.setattr(oracle_client_module, "OracleClient", FailingOracleClient)
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["configured"] is True
+    assert data["db_user_status"] == "unknown"
+    assert "DPY-6005" not in resp.text
 
 
 def test_get_adb_info_returns_lifecycle_from_oci(monkeypatch: MonkeyPatch) -> None:

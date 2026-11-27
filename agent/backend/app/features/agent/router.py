@@ -736,6 +736,8 @@ router.include_router(
         test_connection=lambda candidate: _test_database_connection(candidate),
         # 接続先・Wallet を変えたら、古い設定の接続 pool を閉じる（RAG / NL2SQL と同じ。#793）。
         on_saved=lambda _settings: close_platform_oracle_pool(),
+        # Oracle AI Data Platform 用の DB ユーザーが在るかの確認（pool の接続で読む。#5931）。
+        run_on_connection=lambda settings, operation: _run_on_platform_oracle(settings, operation),
         write_dependencies=[Depends(require_system_settings_write)],
         action_dependencies=[Depends(require_system_settings_write)],
     ),
@@ -1300,6 +1302,19 @@ async def _test_database_status_connection(settings: Any) -> None:
             f"Oracle AI Database の接続確認が {timeout_seconds:g} 秒でタイムアウトしました。"
             "データベースの起動状態、Wallet サービス名、ネットワーク到達性を確認してください。"
         ) from exc
+
+
+async def _run_on_platform_oracle[T](settings: Any, operation: Callable[[Any], T]) -> T:
+    """共有 router の hook。保存済みの設定の接続を pool から借りて `operation` を実行する（#5931）。
+
+    待ちの上限は呼び出し側が決める。時間切れで待つのをやめられるよう、スレッドは手放せるようにする（#1212）。
+    """
+
+    def run() -> T:
+        with platform_oracle_connection(settings) as connection:
+            return operation(connection)
+
+    return await anyio_to_thread.run_sync(run, abandon_on_cancel=True)
 
 
 def _ping_platform_oracle_sync(settings: Any) -> None:

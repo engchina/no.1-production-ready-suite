@@ -123,6 +123,7 @@
 - `POST /api/settings/database/adb/settings`
 - `POST /api/settings/database/adb/start`
 - `POST /api/settings/database/adb/stop`
+- `GET /api/settings/database/aidp`（Oracle AI Data Platform の連携の情報。読み取り専用。#5931）
 - `GET /api/schema/owners`
 
 | ID | 機能 | 手順 | 期待結果 | テストデータ |

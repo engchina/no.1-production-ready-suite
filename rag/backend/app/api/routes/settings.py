@@ -52,6 +52,7 @@ from app.clients.oci_genai import OciGenAiClient
 from app.clients.oracle import (
     OracleClient,
     close_oracle_pool,
+    run_on_oracle_connection,
     test_oracle_connection,
 )
 from app.clients.oracle_run_history import RunHistoryStore
@@ -220,6 +221,8 @@ router.include_router(
         env_file=lambda: app_config.PLATFORM_ENV_FILE,
         test_connection=lambda candidate: test_oracle_connection(candidate),
         on_saved=lambda _settings: close_oracle_pool(),
+        # Oracle AI Data Platform 用の DB ユーザーが在るかの確認（共有 pool の接続で読む。#5931）。
+        run_on_connection=lambda settings, operation: run_on_oracle_connection(settings, operation),
     )
 )
 # 回答の注意書きも3製品共通の実装（pr_system_settings.answer_notice。#2405）。
