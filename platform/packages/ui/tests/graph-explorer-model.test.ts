@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   GRAPH_EDGE_LABELS_ALWAYS_MAX,
+  GRAPH_NAME_STEPS,
   firstGraphNode,
   graphEdgeElasticity,
+  graphNameStep,
   nearestGraphNodeInDirection,
   seedGraphPositions,
   wrapGraphLabel,
@@ -72,5 +74,14 @@ describe("GRAPH_EDGE_LABELS_ALWAYS_MAX", () => {
   it("is a count of labelled edges on screen, well below a dense document graph", () => {
     expect(GRAPH_EDGE_LABELS_ALWAYS_MAX).toBeGreaterThanOrEqual(24);
     expect(GRAPH_EDGE_LABELS_ALWAYS_MAX).toBeLessThan(448);
+  });
+});
+
+describe("graphNameStep", () => {
+  it("keeps the base size while readable, enlarges per step, and hides below the last step", () => {
+    expect(graphNameStep(0.8)).toBe(-1);
+    expect(graphNameStep(0.6)).toBe(0);
+    expect(graphNameStep(0.43)).toBe(1);
+    expect(graphNameStep(0.41)).toBe(GRAPH_NAME_STEPS.length);
   });
 });

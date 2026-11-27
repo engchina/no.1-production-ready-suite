@@ -137,3 +137,20 @@ export function graphEdgeElasticity(nodeCount: number, edgeCount: number): numbe
   const density = nodeCount > 0 ? Math.max(1, edgeCount / nodeCount) : 1;
   return 0.45 / density ** 1.5;
 }
+
+/** 節点の名前の大きさ（座標）。 */
+export const GRAPH_NODE_FONT_SIZE = 13;
+/** 縮んだ図で、名前を画面上でこれより小さくしない（px）。 */
+export const GRAPH_NAME_MIN_PX = 9;
+/**
+ * 名前を大きくする縮尺の段（下限の降順）。段の中では名前を「下限の縮尺で `GRAPH_NAME_MIN_PX`」の大きさにする。
+ * 配置は 13px の名前に合わせた間隔なので、最後の値より縮むと名前どうしが重なって読めない。そこからは隠す（#5953）。
+ */
+export const GRAPH_NAME_STEPS = [0.55, 0.42];
+
+/** 縮尺 → 名前の段。-1 = 元の大きさのまま、`GRAPH_NAME_STEPS.length` = 名前を隠す。 */
+export function graphNameStep(zoom: number): number {
+  if (zoom * GRAPH_NODE_FONT_SIZE >= GRAPH_NAME_MIN_PX) return -1;
+  const index = GRAPH_NAME_STEPS.findIndex((lower) => zoom >= lower);
+  return index < 0 ? GRAPH_NAME_STEPS.length : index;
+}
