@@ -884,7 +884,8 @@ async def _run_search_with_timeout(
 
     pipeline は回答を LLM で生成するため、LLM を何度か呼んでも収まる回答生成の上限を使う。
     ``guide_preview`` は業務ガイドの下書きで試す回答（#1288。trace_id に接頭辞を付ける）。
-    ``run_recorder`` は RAG 検索の画面の実行を実行履歴に残す（#1890。MCP・下書きは渡さない）。
+    ``run_recorder`` は RAG 検索の画面の実行と、資料を選び直した再回答・候補の検索を実行履歴に
+    残す（#1890・#5913。MCP・下書きは渡さない）。
     ``scope`` は回答前の確認の答え（MCP の rag_search のルールの確認。#2117）。
 
     HTTP の要求に依らない実行の入口（画面の RAG 検索・MCP・業務ガイドの下書きの試答が呼ぶ）。

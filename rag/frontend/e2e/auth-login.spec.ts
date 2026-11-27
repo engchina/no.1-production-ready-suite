@@ -277,7 +277,7 @@ test("ログイン中に API が 401 を返したらログイン画面へ戻す"
   await expect(page.getByRole("heading", { name: "システムにログイン" })).toBeVisible();
 });
 
-test("起動時のログインの確認が 503 ならログイン画面へ移さず、再試行で元の画面を開く（#1061）", async ({ page }) => {
+test("起動時のログインの確認が 503 ならログイン画面へ移さず、再試行で元の画面を開く（#1061）", { tag: "@responsive" }, async ({ page }) => {
   await mockAuthApi(page, loginTarget("admin.user"));
   let unavailable = true;
   // mockAuthApi の後に登録した route が優先される。
@@ -295,6 +295,19 @@ test("起動時のログインの確認が 503 ならログイン画面へ移さ
   await expect(error).toContainText("ログインの状態を確認できませんでした。");
   await expect(error).toContainText("一時的に利用できません。");
   await expect(page).toHaveURL(/\/settings\/appearance$/);
+  await expectNoPageOverflow(page);
+  // AppShell の外で画面にこの失敗しか無いので、領域の帯ではなく画面全体の形（中央寄せ・24px のアイコン）で出す。
+  // 「詳細」は閉じていて、開くと枠の中に左揃えで並ぶ（messaging.md §3.6。#5929）。
+  const alert = error.getByRole("alert");
+  await expect(alert).toHaveAttribute("data-failure-layout", "page");
+  await expect(alert).toHaveCSS("text-align", "center");
+  await expect(alert.locator("svg").first()).toHaveAttribute("width", "24");
+  const details = alert.locator("details");
+  await expect(details).not.toHaveAttribute("open", "");
+  await details.locator("summary").click();
+  await expect(details).toHaveAttribute("open", "");
+  await expect(details).toContainText("503");
+  await expect(details.locator("dl")).toHaveCSS("text-align", "left");
   await expectNoPageOverflow(page);
 
   unavailable = false;

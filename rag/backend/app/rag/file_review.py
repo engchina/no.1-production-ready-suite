@@ -16,9 +16,12 @@ from pr_backend_core.file_review import (
 from starlette.concurrency import run_in_threadpool
 
 from app.clients.oracle import OracleClient
+from app.clients.oracle_run_history import RunHistoryStore
+from app.config import get_settings
 from app.rag.chat_attachments import ATTACHMENT_DOCUMENT_PREFIX, chat_attachment_service
-from app.rag.pipeline import BASIC_FLOW, EXPANDED_FLOW
+from app.rag.pipeline import ANSWER_RECORD_SAVE_STAGE, BASIC_FLOW, EXPANDED_FLOW, storage_failure
 from app.rag.request_context import caller_owns
+from app.rag.run_history import RunRecorder, search_run_conditions
 from app.rag.stored_answer import stored_citations
 from app.schemas.search import SearchRequest
 
@@ -118,6 +121,16 @@ async def review_answer(
     )
 
     staged: dict[str, object] = {}
+    # 実行履歴（#1890）には元の回答と同じ種類で残す。チャットは元の回答の会話とメッセージに
+    # 結び付ける（会話の持ち主に見せる条件に使う。#5913）。
+    chat_conversation_id = conversation_id if detail.surface == "chat" else None
+    chat_message_id = (
+        await oracle.get_chat_answer_message_id(chat_conversation_id, trace_id)
+        if chat_conversation_id
+        else None
+    )
+    # 回答を作って返した実行（版の保存が確定しなかったときに、保存できなかったことを足す）。
+    answer_runs: list[RunRecorder] = []
 
     async def retrieve(
         task: str, include: list[str], exclude: list[str], generate: bool
@@ -131,15 +144,27 @@ async def review_answer(
                 "retrieval_only": False,
             }
         )
+        # 再回答と新しい候補の検索も、通常の RAG 検索・チャットと同じく 1 回の実行として残す。
+        run_recorder = RunRecorder(
+            surface=detail.surface,
+            settings=get_settings(),
+            store=RunHistoryStore(oracle),
+            conversation_id=chat_conversation_id,
+            message_id=chat_message_id,
+            conditions=search_run_conditions(req) if detail.surface == "search" else None,
+        )
         result = await _run_search_with_timeout(
             req,
             flow=flow,
             interactive=True,
+            run_recorder=run_recorder,
             attachment_conversation_id=conversation_id,
             staged_answer=staged if generate else None,
         )
         if generate and result.storage_failures:
             raise HTTPException(503, "再回答の記録を保存できませんでした。もう一度お試しください。")
+        if generate:
+            answer_runs.append(run_recorder)
         return ReviewSource(
             title=detail.question,
             trace_id=result.trace_id,
@@ -152,14 +177,21 @@ async def review_answer(
         return sources["question"].answer
 
     try:
-        updated = await advance_review(state, command, permitted, retrieve, compose)
-        if command.action == "answer":
-            if not staged:
-                raise HTTPException(503, "再回答の根拠を保存できませんでした。")
-            staged["surface"] = detail.surface
-        await oracle.save_file_review(
-            trace_id, command.revision, updated.model_dump(mode="json"), staged
-        )
+        try:
+            updated = await advance_review(state, command, permitted, retrieve, compose)
+            if command.action == "answer":
+                if not staged:
+                    raise HTTPException(503, "再回答の根拠を保存できませんでした。")
+                staged["surface"] = detail.surface
+            await oracle.save_file_review(
+                trace_id, command.revision, updated.model_dump(mode="json"), staged
+            )
+        except Exception as exc:
+            # 回答は作ったが版を確定できなかった。成功の実行に、回答の記録が無いことを残す
+            # （#2342 と同じ形）。
+            for run in answer_runs:
+                await run.add_storage_failure(storage_failure(ANSWER_RECORD_SAVE_STAGE, exc))
+            raise
     except StaleReview as exc:
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:

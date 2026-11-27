@@ -653,17 +653,9 @@ function RunDetailView({ run }: { run: RunDetail }) {
 function RunFeedbackSection({ feedback, canOpen }: { feedback: RunFeedback[]; canOpen: boolean }) {
   const columns: DataTableColumn<RunFeedback>[] = [
     {
-      key: "target",
-      header: t("history.feedback.col.target"),
-      rowHeader: true,
-      render: (item) =>
-        item.target_type === "answer"
-          ? t("history.feedback.target.answer")
-          : t("history.feedback.target.citation"),
-    },
-    {
       key: "rating",
       header: t("history.feedback.col.rating"),
+      rowHeader: true,
       render: (item) => (
         <StatusBadge
           variant={item.rating === "helpful" ? "success" : "warning"}

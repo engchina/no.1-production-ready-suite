@@ -254,6 +254,7 @@ export function AgentsPage() {
       modelsLoading={runtimeStatus.isLoading}
       modelsError={runtimeStatus.data === undefined ? runtimeStatus.error : null}
       onRetryModels={() => void runtimeStatus.refetch()}
+      ungroundedNotice={runtimeStatus.data?.ungrounded_notice ?? ""}
       actions={agent ? agentActions(agent) : []}
       readOnly={agent ? !managesAgent(agent) : !canCreate}
       sharing={

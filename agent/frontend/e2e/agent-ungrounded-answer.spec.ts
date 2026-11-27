@@ -5,8 +5,10 @@ import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./fixtures/select-field";
 
 // #5859: 業務 Agent の「資料・データで確かめていない回答」（資料・業務データのツールを 1 つも呼ばずに作った回答の扱い）。
-// - 設定の欄は「回答前の確認」の次の区画。既定は「そのまま出して注意を付ける」、もう 1 つは
-//   「出さずに「お答えできません」と返す」。版の項目なので、保存すると公開していない変更になる。
+// - 設定の欄は「回答前の確認」の次の区画。資料・業務データのツールを宣言したスキル（スキルの一覧の `grounding`）を
+//   選んだときだけ出す。既定は「注意を付けて表示する」、もう 1 つは「表示せず「お答えできません」と返す」。
+//   版の項目なので、保存すると公開していない変更になる。欄の名前は区画の見出しと同じ（見せるラベルは置かない）。
+// - 案内の注意の文は backend の `GET /api/runtime/status` の `ungrounded_notice` を差し込む（文は backend だけが持つ）。
 // - 既定で出した回答は、本文はモデルのまま、回答の注意書きの先頭に注意を出す（backend が成果物の `notice` に足す）。
 // 内容はすべて合成のデータ。
 
@@ -34,7 +36,8 @@ function seedAgent(mockApi: MockApi, overrides: Record<string, unknown> = {}) {
     name: "合成の業務 Agent",
     description: "",
     instructions: "",
-    skill_ids: [],
+    // 資料・業務データのツールを宣言したスキル（api-defaults.json の rag-chat。grounding: true）。
+    skill_ids: ["rag-chat"],
     model_id: "",
     data_scopes: {},
     enabled: true,
@@ -57,13 +60,19 @@ test("業務 Agent の「資料・データで確かめていない回答」の�
   await expect(heading).toBeVisible();
 
   const policy = page.locator(`#${AGENT_ID}-agent-ungrounded-answer-policy`);
-  await expect(page.getByLabel("回答の扱い")).toBeVisible();
-  // 項目の無い業務 Agent は既定（そのまま出して注意を付ける）。
+  // 欄の名前は区画の見出しと同じ。汎用のラベル（「回答の扱い」）は置かない。
+  await expect(page.getByRole("combobox", { name: "資料・データで確かめていない回答" })).toBeVisible();
+  await expect(page.getByText("回答の扱い", { exact: true })).toHaveCount(0);
+  // 案内は backend の注意の文を差し込む。
+  await expect(page.getByTestId("agent-ungrounded-answer")).toContainText(
+    `注意を付ける: 回答の下に「${UNGROUNDED_NOTICE}」を表示します。`,
+  );
+  // 項目の無い業務 Agent は既定（注意を付けて表示する）。
   await expectSelectFieldValue(policy, "annotate");
-  await expect(policy).toHaveText("そのまま出して注意を付ける");
+  await expect(policy).toHaveText("注意を付けて表示する");
   await expect(page.getByRole("button", { name: "変更を破棄" })).toBeDisabled();
 
-  await chooseSelectFieldOption(policy, { label: "出さずに「お答えできません」と返す" });
+  await chooseSelectFieldOption(policy, { label: "表示せず「お答えできません」と返す" });
   await expectSelectFieldValue(policy, "refuse");
   await page.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByText("Agent を保存しました")).toBeVisible();
@@ -87,7 +96,12 @@ test("保存済みの拒答の設定を開き、新しく作る業務 Agent は�
   await expectSelectFieldValue(page.locator(`#${AGENT_ID}-agent-ungrounded-answer-policy`), "refuse");
 
   await page.goto("/agents?id=new");
-  await expect(page.getByRole("heading", { name: "資料・データで確かめていない回答", level: 2 })).toBeVisible();
+  const heading = page.getByRole("heading", { name: "資料・データで確かめていない回答", level: 2 });
+  // スキルを選ぶまでは効かないので出さない。資料・業務データのツールを宣言したスキルを選ぶと出す。
+  await expect(page.getByRole("heading", { name: "回答前の確認", level: 2 })).toBeVisible();
+  await expect(heading).toHaveCount(0);
+  await page.getByTestId("agent-skill-picker").getByRole("option", { name: /^RAG チャット(?!＋)/ }).click();
+  await expect(heading).toBeVisible();
   await page.getByRole("textbox", { name: "名前", exact: true }).fill("合成の新しい業務 Agent");
   await page.getByRole("button", { name: "作成", exact: true }).click();
   await expect
@@ -95,9 +109,32 @@ test("保存済みの拒答の設定を開き、新しく作る業務 Agent は�
     .toMatchObject({ ungrounded_answer_policy: "annotate" });
 });
 
+test("資料・業務データのツールを宣言したスキルが無い業務 Agent には、設定の区画を出さない", async ({ page, mockApi }) => {
+  // ファイルを作るスキルだけ（Control Plane のツール。grounding: false）の業務 Agent。
+  mockApi.state.skills.push({
+    id: "synthetic-file-skill",
+    name: "合成のファイル作成",
+    description: "",
+    instructions: "",
+    mcp_requirements: [{ server_id: "control-plane", tool_names: ["xlsx_create"] }],
+    references: [],
+    enabled: true,
+    tags: [],
+    source: "builtin",
+    grounding: false,
+    created_at: MOCK_NOW,
+    updated_at: MOCK_NOW,
+  });
+  seedAgent(mockApi, { skill_ids: ["synthetic-file-skill"] });
+  await page.goto(`/agents?id=${AGENT_ID}`);
+  await expect(page.getByRole("heading", { name: "回答前の確認", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "資料・データで確かめていない回答", level: 2 })).toHaveCount(0);
+  await expect(page.getByTestId("agent-ungrounded-answer")).toHaveCount(0);
+});
+
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`設定の区画は「回答前の確認」の次に、同じ枠・余白・ラベル・補足の形で出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`設定の区画は「回答前の確認」の次に、同じ枠・余白・補足の形で出す (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       seedAgent(mockApi);
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
@@ -180,9 +217,6 @@ for (const viewport of VIEWPORTS) {
         "cardPaddingBottom",
         "controlLeft",
         "controlHeight",
-        "labelLeft",
-        "labelFont",
-        "labelToControl",
         "helperFont",
         "helperLeft",
         "controlToHelper",

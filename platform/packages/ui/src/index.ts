@@ -547,6 +547,7 @@ export {
   LoadingState,
   ErrorState,
   EmptyState,
+  type ErrorStateLayout,
 } from "./components/feedback/state-views";
 export {
   ProcessingIndicator,
@@ -668,7 +669,10 @@ export {
 } from "./components/feedback/precondition-banner";
 export {
   FeedbackControls,
+  FeedbackDetailsForm,
   isSameFeedback,
+  type FeedbackDetailsFormLabels,
+  type FeedbackDetailsFormProps,
   type FeedbackControlsLabels,
   type FeedbackControlsProps,
   type FeedbackControlsSubmission,
@@ -1075,4 +1079,4 @@ export { failureDiagnosisReason, type FailureDiagnosis, type FailureDiagnosisRea
 export { TracePartialNotice } from "./components/feedback/trace-partial-notice";
 
 export * from "./components/feedback/file-review-model";
-export { AnswerFileReview } from "./components/feedback/answer-file-review";
+export { AnswerFileReview, type AnswerFileReviewDetails } from "./components/feedback/answer-file-review";

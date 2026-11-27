@@ -241,4 +241,66 @@ describe("ApiErrorBanner / ApiErrorDetailList", () => {
     expect(html).toContain("再試行");
     expect(html.indexOf("Failed to fetch")).toBeGreaterThan(html.indexOf("詳細"));
   });
+
+  // #5904・#5929: 読み取りの失敗（ApiErrorState）の「詳細」は閉じて出し、処理・操作の失敗（ApiErrorBanner）は開いて出す。
+  it("「詳細」は ApiErrorState では閉じ、ApiErrorBanner では開く。detailsDefaultOpen で開ける", () => {
+    const state = renderToStaticMarkup(<ApiErrorState error={networkFailure()} fallback="既定" onRetry={() => undefined} />);
+    expect(state).toContain("<details");
+    expect(state).not.toMatch(/<details[^>]* open=""/u);
+    const opened = renderToStaticMarkup(<ApiErrorState error={networkFailure()} fallback="既定" detailsDefaultOpen />);
+    expect(opened).toMatch(/<details[^>]* open=""/u);
+    const banner = renderToStaticMarkup(<ApiErrorBanner error={networkFailure()} fallback="既定" />);
+    expect(banner).toMatch(/<details[^>]* open=""/u);
+  });
+});
+
+describe("ErrorState の形（region / page。#5929）", () => {
+  const render = (layout?: "region" | "page") =>
+    renderToStaticMarkup(
+      <ApiErrorState
+        error={networkFailure()}
+        fallback="読み込めませんでした。"
+        onRetry={() => undefined}
+        layout={layout}
+        testId="load-error"
+      />,
+    );
+
+  it("既定（region）は左揃えの帯で、16px のアイコンを出す", () => {
+    const html = render();
+    expect(html).toContain('data-failure-layout="region"');
+    expect(html).toContain('data-testid="load-error"');
+    expect(html).toContain("text-left");
+    expect(html).toContain("flex-wrap");
+    expect(html).not.toContain("text-center");
+    expect(html).toMatch(/<svg[^>]* width="16"[^>]*lucide-circle-alert/u);
+  });
+
+  it("page（画面全体の失敗）は中央寄せの大きい形で、24px のアイコンを出す", () => {
+    const html = render("page");
+    expect(html).toContain('data-failure-layout="page"');
+    expect(html).toContain("text-center");
+    expect(html).toContain("p-8");
+    expect(html).toMatch(/<svg[^>]* width="24"[^>]*lucide-circle-alert/u);
+  });
+
+  it.each(["region", "page"] as const)("%s は role=alert で、本文 → 再試行 → 閉じた「詳細」の順に出す", (layout) => {
+    const html = render(layout);
+    expect(html.match(/role="alert"/gu)).toHaveLength(1);
+    expect(html).toContain('data-surface-tint="danger"');
+    const message = html.indexOf("サーバーに接続できませんでした。");
+    const retry = html.indexOf("再試行");
+    const details = html.indexOf("<details");
+    expect(message).toBeGreaterThan(-1);
+    expect(retry).toBeGreaterThan(message);
+    expect(details).toBeGreaterThan(retry);
+    expect(html).not.toMatch(/<details[^>]* open=""/u);
+  });
+
+  it("retrying の間は再試行のボタンが処理中になる", () => {
+    const html = renderToStaticMarkup(
+      <ApiErrorState error={networkFailure()} fallback="既定" onRetry={() => undefined} retrying />,
+    );
+    expect(html).toContain('aria-busy="true"');
+  });
 });
