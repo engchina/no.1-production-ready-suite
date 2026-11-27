@@ -48,7 +48,14 @@ export function ApiErrorDetailList({
 }: ApiErrorDetailListProps) {
   if (details.length === 0) return null;
   return (
-    <Disclosure className="max-w-full open:basis-full" variant="plain" size="sm" summary={label} defaultOpen={defaultOpen}>
+    <Disclosure
+      className="max-w-full open:basis-full"
+      summaryClassName="whitespace-nowrap"
+      variant="plain"
+      size="sm"
+      summary={label}
+      defaultOpen={defaultOpen}
+    >
       <ApiErrorDetailItems details={details} />
     </Disclosure>
   );
