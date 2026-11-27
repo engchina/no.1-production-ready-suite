@@ -244,6 +244,17 @@ test(
     await expect(location).toBeVisible();
     expect(await original.locator("..").evaluate(overflow)).toBeLessThanOrEqual(1);
     expect(await location.evaluate(overflow)).toBeLessThanOrEqual(1);
+    const phone = info.project.name === "mobile";
+    const panel = detail(page, phone);
+    await panel.getByRole("button", { name: "質問に追加" }).click();
+    if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+    await page.getByRole("button", { name: "チャットで質問" }).click();
+    const source = page.getByRole("list", { name: "Wiki で選んだ原文" }).getByRole("listitem");
+    const pageNumber = source.getByText("p.1", { exact: true });
+    await expect(pageNumber).toBeVisible();
+    expect(await pageNumber.locator("..").evaluate(overflow)).toBeLessThanOrEqual(1);
+    await source.locator("[data-info-tip]").click();
+    await expect(page.getByRole("tooltip")).toContainText(files[1].name);
     await expectNoPageOverflow(page);
   },
 );

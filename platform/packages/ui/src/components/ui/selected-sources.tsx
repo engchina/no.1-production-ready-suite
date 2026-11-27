@@ -50,7 +50,7 @@ export function SelectedSources({
       <ul
         ref={list}
         aria-label={label}
-        className="flex min-w-0 flex-1 basis-48 flex-wrap content-start gap-1 overflow-y-auto overscroll-contain [--source-row:calc(var(--control-height-sm)+2*var(--space-1)+2px)] max-h-[calc(2*var(--source-row)+var(--space-1))]"
+        className="flex min-w-0 flex-1 basis-48 flex-wrap content-start gap-1 overflow-y-auto overscroll-contain [container-type:inline-size] [--source-row:calc(var(--control-height-sm)+2*var(--space-1)+2px)] max-h-[calc(2*var(--source-row)+var(--space-1))]"
       >
         {items.map((item, index) => {
           const text = [item.name, item.location].filter(Boolean).join(" · ");
@@ -67,7 +67,8 @@ export function SelectedSources({
                 <BookOpen size={14} className="shrink-0" aria-hidden />
                 <span className="min-w-0 truncate">{item.name}</span>
                 {item.location && (
-                  <span className="flex min-w-0 shrink-[0.5] items-center gap-1 text-fg-muted">
+                  // 位置は自然幅を保ち、長い位置だけ一覧の幅から削除ボタン・アイコン・名前の分を引いて収める。
+                  <span className="flex min-w-0 max-w-[calc(100cqi_-_var(--control-height-sm)_-_5rem)] shrink-0 items-center gap-1 text-fg-muted">
                     <span aria-hidden>·</span>
                     <span dir="rtl" className="min-w-0 truncate text-left"><bdi>{item.location}</bdi></span>
                   </span>
