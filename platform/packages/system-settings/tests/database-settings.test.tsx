@@ -22,6 +22,7 @@ const api: DatabaseSettingsApi = {
   updateAdbSettings: pending,
   startAdb: pending,
   stopAdb: pending,
+  getAidpIntegration: pending,
 };
 
 function render(node: React.ReactNode, client = new QueryClient()) {

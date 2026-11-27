@@ -4,6 +4,7 @@
 - Wallet ZIP の安全な展開と差し替え（権限 0700 / 0600、失敗時は元に戻す、同時実行は 409）
 - readiness（Wallet のファイル・Wallet パスワード・DSN の別名）と接続テストの結果
 - Autonomous Database の情報取得・起動・停止と、OCI からの Wallet 取得
+- Oracle AI Data Platform の連携の情報（読み取り専用。`aidp.py`。#5931）
 
 実際の DB 接続（python-oracledb の使い方）と保存後の後始末（接続 pool を閉じる等）は
 製品ごとに違うため、`build_database_router` の hook で受け取る。共有パッケージは
@@ -34,6 +35,7 @@ from fastapi.concurrency import run_in_threadpool
 from pr_backend_core.schemas import ApiResponse
 from pydantic import BaseModel, Field, field_validator
 
+from .aidp import AidpIntegrationData, RunOnConnection, aidp_configured, load_aidp_integration
 from .env_file import write_env_values
 from .oci import oci_config_file, oci_profile, read_runtime_oci_config
 from .oci_auth import pem_file_is_encrypted, resolve_oci_key_file
@@ -89,6 +91,8 @@ class DatabaseSettingsData(BaseModel):
     vector_column: str
     adb_ocid: str
     region: str
+    # Oracle AI Data Platform の OCID が設定されているか（画面が区画を出すかを決める。#5931）。
+    aidp_configured: bool = False
     config_source: Literal["runtime"]
 
 
@@ -259,6 +263,7 @@ def database_settings_data(
         vector_column=f"VECTOR({embedding_dim}, FLOAT32)",
         adb_ocid=_s(settings, "oracle_adb_ocid"),
         region=_s(settings, "resolved_oracle_adb_region"),
+        aidp_configured=aidp_configured(settings),
         config_source="runtime",
     )
 
@@ -1326,6 +1331,7 @@ def build_database_router(
     connection_failure_log_extra: Callable[[Exception], Mapping[str, Any]] | None = None,
     connection_security_enabled: bool = False,
     password_reveal_enabled: bool = False,
+    run_on_connection: RunOnConnection | None = None,
     write_dependencies: Sequence[params.Depends] = (),
     action_dependencies: Sequence[params.Depends] = (),
 ) -> APIRouter:
@@ -1336,6 +1342,9 @@ def build_database_router(
     - `extra_readiness(settings)`：製品固有の readiness（NL2SQL の DeepSec）。問題がなければ None
     - `connection_security_enabled`：Walletless TLS を選べるか（接続処理が対応している製品だけ）
     - `password_reveal_enabled`：保存済み DB パスワードの表示（`write_dependencies` を付ける）
+    - `run_on_connection(settings, operation)`：保存済みの設定の接続を借りて
+      `operation(connection)` を実行し、戻り値を返す（Oracle AI Data Platform 用の DB ユーザーが
+      在るかの確認に使う。渡さなければ確かめない。#5931）
     - `write_dependencies`：設定を書き換える操作（保存・Wallet・ADB の保存/起動/停止）
     - `action_dependencies`：接続テスト
     """
@@ -1588,5 +1597,17 @@ def build_database_router(
     @router.post("/database/adb/stop", response_model=ApiResponse[AdbInfoData], dependencies=write)
     async def stop_adb() -> ApiResponse[AdbInfoData]:
         return ApiResponse(data=await control_adb(get_settings(), action="stop"))
+
+    @router.get("/database/aidp", response_model=ApiResponse[AidpIntegrationData])
+    async def get_aidp_integration() -> ApiResponse[AidpIntegrationData]:
+        """Oracle AI Data Platform の連携の情報（読み取り専用。未設定も 200 で返す。#5931）。"""
+        settings = get_settings()
+        return ApiResponse(
+            data=await load_aidp_integration(
+                settings,
+                run_on_connection=run_on_connection,
+                database_ready=lambda: database_readiness(settings, extra_readiness) == "ok",
+            )
+        )
 
     return router

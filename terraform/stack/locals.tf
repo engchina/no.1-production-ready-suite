@@ -161,7 +161,8 @@ EOT
   # Cookie は HTTPS が on なら Secure にする（3 製品で同じ。#1316）。
   # 時間帯（PLATFORM_TIMEZONE。#3255）は suite-init.sh が Compute の OS の時間帯にも使う。
   # Oracle AI Data Platform（PLATFORM_AIDP_*。#5917）は deploy_aidp=true のときだけ書く（false の配備の cloud-init を
-  # 変えない。変えると既存の stack の Compute が作り直される）。
+  # 変えない。変えると既存の stack の Compute が作り直される）。AIDP 用の DB ユーザーは名前だけを書く（システム設定に
+  # 出す。#5931）。パスワードは書かない。
   platform_env = <<-EOT
 PLATFORM_ENVIRONMENT=${var.platform_environment}
 PLATFORM_AUTH_MODE=authenticated
@@ -199,6 +200,7 @@ PLATFORM_AUTH_CSRF_COOKIE_NAME=pr_csrf
 PLATFORM_AIDP_OCID=${local.aidp_ocid}
 PLATFORM_AIDP_REGION=${var.region}
 PLATFORM_AIDP_URL=${local.aidp_url}
+PLATFORM_AIDP_DB_USER=${local.aidp_db_user}
 %{endif~}
 EOT
 

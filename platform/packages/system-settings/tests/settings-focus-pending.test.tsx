@@ -124,6 +124,7 @@ function databaseApi(overrides: Partial<DatabaseSettingsApi> = {}): DatabaseSett
     updateAdbSettings: () => Promise.resolve(ADB_AVAILABLE),
     startAdb: never,
     stopAdb: never,
+    getAidpIntegration: never,
     ...overrides,
   };
 }

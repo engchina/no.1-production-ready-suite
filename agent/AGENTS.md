@@ -43,6 +43,7 @@
 - RAG / NL2SQL / 外部 MCP は「MCP 接続」1 つの仕組みで管理し、ツールは組み込み Runtime から `tool_registry.invoke` を通してだけ呼ぶ（例外は画面の操作の「RAG の図の根拠・根拠の原文を開く」だけ）。外部 API key・token を snapshot、API、ログ、Artifact に出さない。
 - RAG / NL2SQL へは公開の契約（`platform/contracts/`）だけに依存し、内部の module・表・画面の API・内部の規則の一致を前提にしない（#3240。`tests/test_product_boundaries.py`）。
 - 呼び先へのサービストークンの `sub` は Run の利用者（承認後の実行も承認者ではない）。書き込みのツールは、呼び先に届いた後の失敗では再送しない。
+- 外部の Agent は A2A の client として、接続の 1 つのプロトコル（`a2a`）で 1 つのツールとして呼ぶ（#5932。server は持たない。sub-agent / handoff の概念は足さない。AIDP に固有なのは認証方式と既定値だけ）。
 
 ## UI/UX
 

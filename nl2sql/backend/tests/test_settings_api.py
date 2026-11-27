@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,7 +29,9 @@ from pr_system_settings.oci_database import (
 from pytest import MonkeyPatch
 
 import app.settings as app_settings
+from app.clients import oracle as oracle_client_module
 from app.features.nl2sql.oracle_adapter import (
+    OracleAdapterError,
     OracleNl2SqlAdapter,
     SelectAiCredentialExistsError,
     oracle_connect_kwargs,
@@ -35,6 +39,7 @@ from app.features.nl2sql.oracle_adapter import (
 from app.features.settings import router as settings_router
 from app.main import app
 from app.schemas.settings import SelectAiCredentialCreateRequest
+from app.security.permissions import permission_for_route
 from app.settings import Settings, get_settings, load_persisted_model_settings
 
 
@@ -2279,6 +2284,119 @@ def test_adb_info_not_configured_returns_safe_code(monkeypatch: MonkeyPatch) -> 
     assert data["error_code"] == "ADB_NOT_CONFIGURED"
     assert data["message"] == "ADB OCID が設定されていません。"
     assert data["id"] is None
+
+
+class _AidpFakeCursor:
+    """`ALL_USERS` の参照の代役（ADB_AIDP_USER が在る）。"""
+
+    def __init__(self, log: list[object]) -> None:
+        self._log = log
+        self._row: tuple[int] | None = None
+
+    def execute(self, statement: str, parameters: dict[str, object]) -> None:
+        self._log.append((statement, dict(parameters)))
+        self._row = (1,) if parameters["user_name"] == "ADB_AIDP_USER" else None
+
+    def fetchone(self) -> tuple[int] | None:
+        return self._row
+
+    def close(self) -> None:
+        self._log.append("cursor_closed")
+
+
+class _AidpFakeConnection:
+    def __init__(self, log: list[object]) -> None:
+        self._log = log
+
+    def cursor(self) -> _AidpFakeCursor:
+        return _AidpFakeCursor(self._log)
+
+    def close(self) -> None:
+        self._log.append("connection_returned")
+
+
+def _configure_aidp(monkeypatch: MonkeyPatch, settings: Any) -> None:
+    monkeypatch.setattr(settings, "aidp_ocid", "ocid1.aidataplatform.oc1..synthetic")
+    monkeypatch.setattr(settings, "aidp_region", "ap-osaka-1")
+    monkeypatch.setattr(settings, "aidp_url", "https://aidp.example.invalid/?ocid=synthetic")
+    monkeypatch.setattr(settings, "aidp_db_user", "adb_aidp_user")
+    # Wallet のファイルを置かずに、設定の判定（readiness）だけを通す。
+    monkeypatch.setattr(shared_database, "database_readiness", lambda *_args: "ok")
+
+
+def test_aidp_integration_is_not_configured_without_ocid(monkeypatch: MonkeyPatch) -> None:
+    """Oracle AI Data Platform の OCID が無ければ「未設定」だけを返す（#5931）。"""
+    monkeypatch.setattr(get_settings(), "aidp_ocid", "")
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    assert resp.json()["data"]["configured"] is False
+    # 権限は「データベース」の既存の区画と同じ。
+    assert permission_for_route("GET", "/settings/database/aidp") == frozenset(
+        {"menu.settings_database"}
+    )
+
+
+def test_aidp_integration_checks_the_database_user_on_the_state_pool(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """AIDP 用の DB ユーザーは、アプリの接続の pool で `ALL_USERS` を引いて確かめる（#5931）。"""
+    settings = get_settings()
+    _configure_aidp(monkeypatch, settings)
+    log: list[object] = []
+
+    class FakeAdapter:
+        def __init__(self, adapter_settings: Settings) -> None:
+            assert adapter_settings is settings
+
+        @contextmanager
+        def state_connection(self) -> Iterator[_AidpFakeConnection]:
+            yield _AidpFakeConnection(log)
+            log.append("connection_returned")
+
+    monkeypatch.setattr(oracle_client_module, "OracleNl2SqlAdapter", FakeAdapter)
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["configured"] is True
+    assert data["url"] == "https://aidp.example.invalid/?ocid=synthetic"
+    assert (data["db_user"], data["db_user_status"]) == ("ADB_AIDP_USER", "exists")
+    assert log == [
+        ("SELECT 1 FROM ALL_USERS WHERE USERNAME = :user_name", {"user_name": "ADB_AIDP_USER"}),
+        "cursor_closed",
+        "connection_returned",
+    ]
+    assert not [key for key in data if "password" in key]
+    assert client.get("/api/settings/database").json()["data"]["aidp_configured"] is True
+
+
+def test_aidp_integration_reports_unknown_when_the_database_is_unreachable(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    _configure_aidp(monkeypatch, settings)
+
+    class FailingAdapter:
+        def __init__(self, _settings: Settings) -> None:
+            pass
+
+        @contextmanager
+        def state_connection(self) -> Iterator[_AidpFakeConnection]:
+            raise OracleAdapterError("Oracle 接続に失敗しました: DPY-6005")
+            yield
+
+    monkeypatch.setattr(oracle_client_module, "OracleNl2SqlAdapter", FailingAdapter)
+
+    resp = client.get("/api/settings/database/aidp")
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["configured"] is True
+    assert data["db_user_status"] == "unknown"
+    assert "DPY-6005" not in resp.text
 
 
 def test_update_adb_settings_persists_dedicated_region(

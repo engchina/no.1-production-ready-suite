@@ -150,6 +150,17 @@ variableGroups:
       - aidp_db_user_password
       - aidp_db_user_write_enabled
 
+  - title: "Oracle Analytics Cloud"
+    visible: true
+    variables:
+      - deploy_oac
+      - oac_name
+      - oac_identity_domain_ocid
+      - oac_admin_user
+      - oac_feature_set
+      - oac_license_type
+      - oac_capacity_ocpus
+
   - title: "配備する製品"
     visible: false
     variables:
@@ -1034,6 +1045,67 @@ variables:
     description: "既定で有効。AI Data Platform で加工した結果を、このユーザーの schema に表として書けます（DWROLE と表領域の quota）。ほかの schema には書けません。オフにすると読み取りだけになります。"
     default: true
 
+  deploy_oac:
+    type: boolean
+    required: true
+    visible: true
+    title: "Oracle Analytics Cloud を配備する"
+    description: "既定はオフ。オンにすると、Oracle Analytics Cloud を ADB のコンパートメントに 1 つ作ります（作成に 20〜40 分かかることがあります）。ADB のデータの可視化（dataset・workbook）に使います。ADB との接続は stack では作らず、Oracle Analytics Cloud の画面で作ります（手順は terraform/README.md「Oracle Analytics Cloud」）。後からオンにしても主 Compute は作り直されません。"
+    default: false
+
+  oac_name:
+    type: string
+    required: true
+    visible: deploy_oac
+    title: "Oracle Analytics Cloud の名前"
+    description: "英字で始め、英数字だけで付けます（30 文字まで）。tenancy で一意にし、後から変えられません。"
+    pattern: "^[A-Za-z][A-Za-z0-9]{0,29}$"
+    default: "ProductionReadySuiteOAC"
+
+  oac_identity_domain_ocid:
+    type: string
+    required: true
+    visible: deploy_oac
+    title: "Identity Domain の OCID"
+    description: "Oracle Analytics Cloud へのサインインに使う Identity Domain の OCID です（OCI コンソール › アイデンティティとセキュリティ › ドメイン）。後から変えると Oracle Analytics Cloud が作り直されます。"
+    pattern: "^ocid1\\.domain\\..+$"
+
+  oac_admin_user:
+    type: string
+    required: true
+    visible: deploy_oac
+    title: "Oracle Analytics Cloud の管理者のユーザー名"
+    description: "上の Identity Domain の利用者のユーザー名です（OCID ではなく、サインインに使う名前）。この利用者が Oracle Analytics Cloud の管理者になります。"
+
+  oac_feature_set:
+    type: enum
+    required: true
+    visible: deploy_oac
+    title: "エディション"
+    description: "ENTERPRISE_ANALYTICS（Enterprise Edition）か SELF_SERVICE_ANALYTICS（Professional Edition）。プライベート・エンドポイントの ADB に接続する Private Access Channel は Enterprise Edition だけで使えます。後から変えると Oracle Analytics Cloud が作り直されます。"
+    enum:
+      - "ENTERPRISE_ANALYTICS"
+      - "SELF_SERVICE_ANALYTICS"
+    default: "ENTERPRISE_ANALYTICS"
+
+  oac_license_type:
+    type: enum
+    required: true
+    visible: deploy_oac
+    title: "ライセンス"
+    enum:
+      - "LICENSE_INCLUDED"
+      - "BRING_YOUR_OWN_LICENSE"
+    default: "LICENSE_INCLUDED"
+
+  oac_capacity_ocpus:
+    type: number
+    required: true
+    visible: deploy_oac
+    title: "OCPU の数"
+    description: "1・2・4・6・8・10・12・16・24・36・52 のどれかです。1 は試用だけに使えます。本番は 2 以上にしてください。"
+    default: 2
+
 outputs:
 
   application_url:
@@ -1065,6 +1137,12 @@ outputs:
     displayText: "Oracle AI Data Platform Workbench URL"
     type: copyableString
     visible: deploy_aidp
+
+  oac_url:
+    title: "Oracle Analytics Cloud URL"
+    displayText: "Oracle Analytics Cloud URL"
+    type: copyableString
+    visible: deploy_oac
 
   ca_certificate_url:
     title: "CA certificate URL"
@@ -1143,3 +1221,9 @@ outputs:
     displayText: "Values to register the Autonomous AI Database as an External Catalog in Oracle AI Data Platform"
     type: copyableString
     visible: deploy_aidp
+
+  oac_ocid:
+    title: "Oracle Analytics Cloud OCID"
+    displayText: "Oracle Analytics Cloud instance OCID"
+    type: copyableString
+    visible: deploy_oac

@@ -5,6 +5,8 @@
   （`metadata` の MCP ツールの宣言が RAG / NL2SQL の MCP の契約にあるツールか）を確かめる。
 - Control Plane のツールを宣言するスキル（`control-plane:<ツール>`。#5837）は、MCP の契約の代わりに
   `tool_registry` のツールの定義（引数・結果の schema）と照らす。
+- AIDP の Agent の接続のツールを宣言するスキル（`aidp:send_message`。#5932）は、A2A のツールの定義
+  （`a2a.A2A_TOOL_*`）と照らす。AIDP を配備した構成にだけ登録する。
 - Claude Code の plugin marketplace（`.claude-plugin/marketplace.json` と
   `skills/.claude-plugin/plugin.json`）の必須の項目と、plugin の置き場所。
 """
@@ -19,9 +21,20 @@ import pytest
 import skills_ref  # type: ignore[import-untyped]  # 型の情報（py.typed）が無い
 import yaml
 
+from app.features.agent.a2a import A2A_TOOL_INPUT_SCHEMA, A2A_TOOL_NAME, A2A_TOOL_OUTPUT_SCHEMA
 from app.features.agent.builtin_runtime import CONTROL_PLANE_SERVER_ID
-from app.features.agent.skills import BUILTIN_SKILL_IDS, BUILTIN_SKILLS_DIR, skill_registry
-from app.features.agent.skills_loader import METADATA_FINAL_ANSWER_TOOLS, METADATA_MCP_TOOLS
+from app.features.agent.config import AIDP_CONNECTION_ID
+from app.features.agent.skills import (
+    AIDP_BUILTIN_SKILL_IDS,
+    BUILTIN_SKILL_IDS,
+    BUILTIN_SKILLS_DIR,
+    skill_registry,
+)
+from app.features.agent.skills_loader import (
+    METADATA_FINAL_ANSWER_TOOLS,
+    METADATA_MCP_TOOLS,
+    load_skills_from_dir,
+)
 from app.features.agent.tools import tool_registry
 
 REPO_ROOT = BUILTIN_SKILLS_DIR.parent
@@ -30,6 +43,12 @@ SKILL_DIRS = sorted(
     path for path in BUILTIN_SKILLS_DIR.iterdir() if path.is_dir() and not path.name.startswith(".")
 )
 SKILL_NAMES = [path.name for path in SKILL_DIRS]
+# Agent の中にだけあるツールの出所（MCP サーバーでは提供しない。外部の Agent では使えない）。
+AGENT_ONLY_SERVERS = frozenset({CONTROL_PLANE_SERVER_ID, AIDP_CONNECTION_ID})
+# SKILL.md から読んだ定義（構成によって登録しないスキルも含む。登録の有無は別のテスト）。
+SKILLS = {
+    skill.id: skill for skill in load_skills_from_dir(str(BUILTIN_SKILLS_DIR), source="builtin")
+}
 
 
 def _frontmatter(skill_dir: Path) -> tuple[dict[str, object], str]:
@@ -43,8 +62,17 @@ def _frontmatter(skill_dir: Path) -> tuple[dict[str, object], str]:
 def _tool_contracts(server: str) -> list[dict[str, object]]:
     """接続のツールの定義（名前・引数と結果の schema）。
 
-    MCP 接続（`rag` / `nl2sql`）は公開の契約、`control-plane` は `tool_registry` のツールの定義。
+    MCP 接続（`rag` / `nl2sql`）は公開の契約、`control-plane` は `tool_registry` のツールの定義、
+    `aidp` は A2A のツールの定義。
     """
+    if server == AIDP_CONNECTION_ID:
+        return [
+            {
+                "name": A2A_TOOL_NAME,
+                "inputSchema": A2A_TOOL_INPUT_SCHEMA,
+                "outputSchema": A2A_TOOL_OUTPUT_SCHEMA,
+            }
+        ]
     if server == CONTROL_PLANE_SERVER_ID:
         return [
             {
@@ -64,10 +92,14 @@ def _contract_tools(server: str) -> set[str]:
 
 
 def test_builtin_skills_are_the_skill_folders() -> None:
-    assert set(SKILL_NAMES) == set(BUILTIN_SKILL_IDS)
-    for name in SKILL_NAMES:
+    assert set(SKILL_NAMES) == set(BUILTIN_SKILL_IDS) | set(AIDP_BUILTIN_SKILL_IDS)
+    assert set(SKILLS) == set(SKILL_NAMES)
+    for name in BUILTIN_SKILL_IDS:
         skill = skill_registry.get(name)
         assert skill is not None and skill.source == "builtin"
+    # AIDP のスキルは、AIDP を配備していない構成（テストの既定）では登録しない（#5932）。
+    for name in AIDP_BUILTIN_SKILL_IDS:
+        assert skill_registry.get(name) is None
 
 
 @pytest.mark.parametrize("skill_dir", SKILL_DIRS, ids=SKILL_NAMES)
@@ -81,7 +113,7 @@ def test_skill_md_follows_best_practices(skill_dir: Path) -> None:
     description = str(data["description"])
     # 外部の Agent が選べるよう、何をするか＋いつ使うか（「使う」）と MCP サーバーを書く。
     assert "使う" in description
-    if _declared_servers(skill_dir) == {CONTROL_PLANE_SERVER_ID}:
+    if _declared_servers(skill_dir) <= AGENT_ONLY_SERVERS:
         # Agent の中のツールだけを使うスキルは、業務 Agent 専用（外部の Agent では使えない）と書く。
         assert "業務 Agent" in description
         assert "外部の Agent" in str(data["compatibility"])
@@ -112,15 +144,17 @@ def test_skill_mcp_tools_exist_in_the_mcp_contracts(skill_dir: Path) -> None:
     declared = str(metadata[METADATA_MCP_TOOLS]).split()
     for token in declared:
         server, _, tool = token.partition(":")
-        assert server in {"rag", "nl2sql", CONTROL_PLANE_SERVER_ID}
+        assert server in {"rag", "nl2sql", CONTROL_PLANE_SERVER_ID, AIDP_CONNECTION_ID}
         assert tool in _contract_tools(server), token
         # 本文は MCP サーバー名と、宣言したツールの素の名前で書く（ツールの一覧の節は置かない。
         # 一覧は metadata とモデルに渡すツールの定義にある）。Control Plane のツールに接続は無い。
-        if server != CONTROL_PLANE_SERVER_ID:
+        # AIDP の Agent は MCP サーバーではないので、接続の名前で書く。
+        if server == AIDP_CONNECTION_ID:
+            assert f"接続 `{server}`" in body
+        elif server != CONTROL_PLANE_SERVER_ID:
             assert f"MCP サーバー `{server}`" in body
         assert f"`{tool}`" in body
-    skill = skill_registry.get(skill_dir.name)
-    assert skill is not None
+    skill = SKILLS[skill_dir.name]
     assert sorted(
         f"{item.server_id}:{tool}" for item in skill.mcp_requirements for tool in item.tool_names
     ) == sorted(declared)
@@ -136,8 +170,7 @@ def test_final_answer_tools_are_declared_mcp_tools(skill_dir: Path) -> None:
     finals = set(str(metadata.get(METADATA_FINAL_ANSWER_TOOLS) or "").split())
     assert finals <= declared
     assert finals <= {"rag:rag_search", "rag:rag_chat"}
-    skill = skill_registry.get(skill_dir.name)
-    assert skill is not None
+    skill = SKILLS[skill_dir.name]
     assert {f"{item.server_id}:{item.tool_name}" for item in skill.final_answer_tools} == finals
 
 
