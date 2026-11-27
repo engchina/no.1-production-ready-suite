@@ -3040,10 +3040,12 @@ test("統一グラフの13分類を識別し検索・選択・定義詳細を利
     await category.selectOption(kind);
     await expect(category).toHaveValue(kind);
     if (kind !== "link_type") {
-      const card=panel.getByTestId(`ontology-node-card-concept-${kind}`);
-      await expect(card).toBeVisible();
-      await card.click();
+      // 全体の表示は Cytoscape の探索の画布（#5922）。描いた数を確かめ、図内検索で選ぶ。
+      await expect.poll(()=>panel.getByTestId("ontology-concept-graph-canvas").evaluate(el=>Number((el as HTMLElement).dataset.graphNodes ?? 0))).toBeGreaterThan(0);
+      await panel.getByTestId("ontology-graph-search").fill(`API_${kind}`);
+      await panel.getByTestId("ontology-graph-search-next").click();
       await expect(panel.getByText(`説明_${kind}`,{exact:true}).last()).toBeVisible();
+      await panel.getByTestId("ontology-graph-search").clear();
     } else {
       await panel.getByTestId("ontology-graph-search").fill("API_link_type");
       await panel.getByRole("button",{name:"定義_link_type",exact:true}).click();
@@ -3120,7 +3122,8 @@ test("Function と Action はグラフ上の定義として表示し操作 API �
   const panel=await openUnifiedGraph(page);
   for(const kind of ["function","action_type"]){
     await panel.getByRole("combobox",{name:"概念の種類",exact:true}).selectOption(kind);
-    await panel.getByTestId(`ontology-node-card-concept-${kind}`).click();
+    await panel.getByTestId("ontology-graph-search").fill(`API_${kind}`);
+    await panel.getByTestId("ontology-graph-search-next").click();
     await expect(panel.getByText(`説明_${kind}`,{exact:true}).last()).toBeVisible();
     await expect(panel.getByRole("button",{name:/実行|プレビュー|実装を設定/})).toHaveCount(0);
   }

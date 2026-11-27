@@ -6,6 +6,12 @@ import type { GraphNodeDimensions, GraphPoint } from "./graph-layout";
  */
 export const GRAPH_READABLE_MIN_ZOOM = 0.8;
 
+/**
+ * 利用者が手で縮めるときの下限（総覧）。範囲を合わせる表示（全体表示・選択に合わせる・初期表示）は
+ * この値ではなく `GRAPH_READABLE_MIN_ZOOM` を下限にする（#5520・#5908）。
+ */
+export const GRAPH_OVERVIEW_MIN_ZOOM = 0.1;
+
 export interface GraphRect extends GraphPoint, GraphNodeDimensions {}
 
 export interface GraphViewport extends GraphPoint {

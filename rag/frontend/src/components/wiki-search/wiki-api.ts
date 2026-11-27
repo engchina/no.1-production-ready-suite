@@ -8,6 +8,7 @@ import {
   type WikiGraphSearchItem,
   type WikiGraphTreePage,
   type WikiGraphUnitRef,
+  type WikiGraphLocation,
 } from "@/lib/api";
 import { t } from "@/lib/i18n";
 
@@ -54,6 +55,21 @@ export interface WikiRelations {
   total: number;
   has_more: boolean;
 }
+export interface WikiDocumentGraph {
+  documents: (WikiGraphOverview["documents"][number] & { reference_count: number })[];
+  links: { source_id: string; target_id: string; relation: WikiGraphRelation; count: number }[];
+  total: number;
+  offset: number;
+  has_more: boolean;
+}
+export interface WikiUnitConnection {
+  source_id: string;
+  target_id: string;
+  relation: WikiGraphRelation;
+  scope: WikiGraphRelationItem["scope"];
+}
+/** 単位の関係は 1 回で取り切る（#5916）。 */
+export const WIKI_RELATIONS_LIMIT = 500;
 export interface WikiDraft {
   knowledgeBaseId?: string;
   profileId: string;
@@ -133,16 +149,16 @@ export const wikiApi = {
       { ...(group ? { relation: group } : {}), ...(direction ? { direction } : {}), offset: String(offset), limit: String(limit) },
       signal,
     ),
+  allRelations: (s: WikiScope, id: string, signal?: AbortSignal) =>
+    get<WikiRelations>(s, `units/${encodeURIComponent(id)}/relations`, { offset: "0", limit: String(WIKI_RELATIONS_LIMIT) }, signal),
+  documentGraph: (s: WikiScope, offset: number, limit: number, document?: string, signal?: AbortSignal) =>
+    get<WikiDocumentGraph>(s, "document-graph", { offset: String(offset), limit: String(limit), ...(document ? { document } : {}) }, signal),
+  connections: (s: WikiScope, ids: readonly string[], signal?: AbortSignal) =>
+    get<{ connections: WikiUnitConnection[] }>(s, "connections", { ids: ids.join(",") }, signal),
+  locate: (s: WikiScope, document: string, node: string, signal?: AbortSignal) =>
+    get<WikiGraphLocation>(s, `documents/${encodeURIComponent(document)}/locate`, { node }, signal),
 };
 
-export async function allWikiNeighbors(scope: WikiScope, id: string, signal: AbortSignal) {
-  const items: WikiGraphRelationItem[] = [];
-  for (;;) {
-    const page = await wikiApi.relations(scope, id, "", items.length, 100, signal);
-    items.push(...page.items);
-    if (!page.has_more || !page.items.length) return items;
-  }
-}
 function sourcePosition(chunk: RetrievedChunk | undefined, fallback: string) {
   if (!chunk) return { short: fallback, full: fallback };
   const page = passagePageLabel(chunk);
