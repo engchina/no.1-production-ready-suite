@@ -63,7 +63,10 @@ PAGES = {
         # 今の保存版に無い単位・自分への依存は引かない。
         [(fingerprint("gone"), "reference"), (U["a2"], "warning")],
     ),
-    "a3": _page(_unit(U["a3"], "doc-a", ["第 1 章"], "単位 a3"), [(U["a1"], "prerequisite")]),
+    "a3": _page(
+        _unit(U["a3"], "doc-a", ["第 1 章"], "単位 a3"),
+        [(U["a1"], "prerequisite"), (U["a2"], "continuation")],
+    ),
     "a4": _page(_unit(U["a4"], "doc-a", [], "単位 a4")),
     "b1": _page(_unit(U["b1"], "doc-b", ["付録"], "単位 b1")),
     # 範囲の外の文書（関連の終点が見えない）。
@@ -108,6 +111,17 @@ class FakeOracle:
                 for did in documents[start : start + binds["graph_limit"]]
             ]
         by_id = {page.unit.unit_id: page for _, page in pages}
+        if "WITH shown_pages AS" in statement:
+            shown = set(binds.values())
+            return [
+                {"source_id": src, "target_id": dep.unit_id, "relation": dep.relation}
+                for src, page in by_id.items()
+                for dep in page.navigation.dependencies
+                if src in shown
+                and dep.unit_id in shown
+                and src != dep.unit_id
+                and page.unit.document_id == by_id[dep.unit_id].unit.document_id
+            ]
         if "selected_page AS" in statement:
             uid = binds["graph_unit"]
             result = []
@@ -338,6 +352,20 @@ async def test_unit_detail_separates_directions_and_hides_relations_outside_scop
         # 入る向きは実際に指す章節でのみ表示する。
         ("outgoing", "cross_document", "exception", U["b1"]),
     }
+    directed = await store.relations(
+        KB, U["a1"], 0, 1, relation="exception", direction="outgoing", grouped=True
+    )
+    assert len(directed["items"]) == 1 and directed["has_more"]
+    assert directed["total"] == 2
+    neighborhood = await store.relations(KB, U["a1"], 0, 6, grouped=True)
+    assert {item["unit"]["id"] for item in neighborhood["preview"]} == {U["a2"], U["a3"], U["b1"]}
+    assert neighborhood["connections"] == [
+        {"source_id": U["a3"], "target_id": U["a2"], "relation": "continuation"}
+    ]
+    assert directed["groups"] == [
+        {"relation": "exception", "direction": "outgoing", "count": 2, "neighbor_count": 2},
+        {"relation": "prerequisite", "direction": "incoming", "count": 1, "neighbor_count": 1},
+    ]
     incoming = (await store.relations(KB, U["a3"], 0, 25))["items"]
     assert any(i["unit"]["id"] == U["b1"] and i["direction"] == "incoming" for i in incoming)
     cross = next(

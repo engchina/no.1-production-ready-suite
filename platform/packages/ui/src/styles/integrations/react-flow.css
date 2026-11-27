@@ -60,7 +60,51 @@
   color: var(--color-fg-muted);
 }
 
-/* ノードの計測枠を保ち、低倍率のときだけ点と中心の接続点を描く。 */
+/* 通常倍率では点の外周に接続し、名前はその下に置く。 */
+.graph-point-node {
+  --point-size: 1.7rem;
+  position: relative;
+  height: 100%;
+  color: var(--color-graph-fg);
+}
+.graph-point-node[data-selected] { --point-size: 2.4rem; }
+.graph-point-node[data-group] { --point-size: 3.2rem; }
+.graph-point-symbol {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  width: var(--point-size);
+  height: var(--point-size);
+  border: 2px solid var(--point-stroke);
+  border-radius: 50%;
+  background: var(--point-fill);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+.graph-point-node[data-group] .graph-point-symbol { outline: 1px solid var(--point-stroke); outline-offset: 2px; }
+.graph-point-node[data-matched]:not([data-selected]) .graph-point-symbol { box-shadow: 0 0 0 3px var(--color-warning-fg); }
+.graph-point-node[data-selected] .graph-point-symbol { border: 3px solid var(--color-accent-fg); }
+.graph-point-name {
+  position: absolute;
+  top: calc(50% + var(--point-size) / 2 + .2rem);
+  left: 0;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: center;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  text-shadow: 0 1px 2px var(--color-surface), 0 -1px 2px var(--color-surface);
+}
+.graph-point-node .react-flow__handle-left { left: calc(50% - var(--point-size) / 2); }
+.graph-point-node .react-flow__handle-right { right: calc(50% - var(--point-size) / 2); }
+.graph-point-node .react-flow__handle-top { top: calc(50% - var(--point-size) / 2); }
+.graph-point-node .react-flow__handle-bottom { bottom: calc(50% - var(--point-size) / 2); }
 .graph-overview-node { display: none; }
 [data-graph-overview] [data-graph-detail-only] { visibility: hidden; }
 [data-graph-overview] [data-graph-card] {

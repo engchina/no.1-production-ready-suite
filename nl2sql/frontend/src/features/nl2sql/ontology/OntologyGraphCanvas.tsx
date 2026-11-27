@@ -33,7 +33,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import { Button, SelectField, fieldControlClassName, CollapsedListToggle, useCollapsedList } from "@production-ready/ui";
-import { directedGraphBundles, graphNeighborGroups, expandedGraphNeighborhood, applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasFrame, GraphCanvasProvider, GraphCanvasControls, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphParallelEdge, GraphSearchNavigation, normalizeGraphSearch, selectGraphEdgeHandles, type GraphEdgeHandleSelection, type GraphNodeDimensions } from "@production-ready/ui/graph";
+import { directedGraphBundles, graphNeighborGroups, expandedGraphNeighborhood, applyGraphNodeDimensionChanges, applyGraphNodePositionChanges, GRAPH_EDGE_LABEL_PROPS, GRAPH_EDGE_MARKER, GRAPH_NODE_CARD_SIZE, GraphCanvas, GraphCanvasFrame, GraphCanvasProvider, GraphCanvasControls, graphEdgeStyle, GraphLegend, GraphLegendSwatch, graphNeighborIds, GraphNodeCard, GraphPointNode, GraphParallelEdge, GraphSearchNavigation, normalizeGraphSearch, selectGraphEdgeHandles, type GraphEdgeHandleSelection, type GraphNodeDimensions } from "@production-ready/ui/graph";
 import { cn } from "@/lib/utils";
 import { useValuesChanged } from "@/lib/render-sync";
 
@@ -116,6 +116,8 @@ function nodeShape(node: OntologyNode): string {
 
 interface OntologyNodeData extends Record<string, unknown> {
   node: OntologyNode;
+  point: boolean;
+  group?: { label: string; remaining: number };
   highlighted: boolean;
   /** グラフ内検索の一致(接地ハイライトとは別チャネル: リングで表現)。 */
   searchMatched: boolean;
@@ -193,6 +195,21 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
   ]
     .filter(Boolean)
     .join("\n");
+  if (data.point) {
+    const label = data.group?.label ?? display.primaryLabel;
+    return (
+      <GraphPointNode label={label} count={data.group?.remaining} selected={selected} matched={searchMatched}
+        fill={data.group ? "var(--color-graph-metric)" : nodeFill(node)}
+        stroke={highlighted ? cssVar("--color-accent-fg") : nodeStroke(node, false)}
+        style={{ width: NODE_WIDTH, height: NODE_HEIGHT, opacity: dimmed ? 0.35 : 1 }}
+        title={data.group ? label : [display.kindLabel, hoverTitle].filter(Boolean).join("\n")}
+        data-testid={data.group ? "ontology-group-point" : `ontology-node-card-${node.id}`}
+        data-ontology-node-kind={data.group ? undefined : node.kind}
+        data-ontology-node-grounded={highlighted ? "true" : "false"}>
+        {!data.group && <span className="sr-only">{display.kindLabel} {display.secondaryLabel}</span>}
+      </GraphPointNode>
+    );
+  }
   return (
     <GraphNodeCard
       icon={Icon}
@@ -758,6 +775,7 @@ function OntologyFlow({
           ...(measured ? { measured } : {}),
           data: {
             node,
+            point: currentViewMode === "all" && !conceptKind,
             highlighted,
             searchMatched,
             dimmed: (emphasis.active && !highlighted && !searchMatched) || hoverDimmed,
@@ -770,6 +788,8 @@ function OntologyFlow({
       }),
     [
       visibleGraph.nodes,
+      currentViewMode,
+      conceptKind,
       effectivePositions,
       selectedNodeId,
       emphasis,
@@ -779,6 +799,34 @@ function OntologyFlow({
       measuredById,
     ]
   );
+
+  const groupedPoints = useMemo(() => {
+    const points: Node<OntologyNodeData>[] = [];
+    const links: OntologyFlowEdge[] = [];
+    if (currentViewMode !== "all" || !groups.length) return { points, links };
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const visible = new Set(visibleGraph.edges.map(e => JSON.stringify([e.source_node_id, e.target_node_id, e.kind || e.relationship_name_ja])));
+    const right = nodes.reduce((x, node) => Math.max(x, node.position.x), 0) + NODE_WIDTH * 1.3;
+    for (const group of groups) {
+      const owner = byId.get(group.owner);
+      if (!owner) continue;
+      const remaining = group.neighbors.filter(id => !visible.has(JSON.stringify(group.outgoing ? [group.owner, id, group.kind] : [id, group.owner, group.kind]))).length;
+      if (!remaining) continue;
+      const label = ontologyRelationshipKindLabel(group.kind);
+      const id = `group:${group.id}`;
+      const position = { x: right, y: points.length * NODE_HEIGHT * 1.35 };
+      points.push({
+        id, type: "ontology", position, initialWidth: NODE_WIDTH, initialHeight: NODE_HEIGHT,
+        draggable: false, data: { ...owner.data, point: true, group: { label, remaining }, dimmed: false, searchMatched: false },
+        ariaLabel: t(group.outgoing ? "nl2sql.ontology.graphGroupOut" : "nl2sql.ontology.graphGroupIn", { name: ontologyNodeDisplay(owner.data.node).primaryLabel, relation: label, count: remaining }),
+      });
+      const source = group.outgoing ? owner : { id, position }, target = group.outgoing ? { id, position } : owner;
+      const handles = selectGraphEdgeHandles(source.position, target.position);
+      links.push({ id, source: source.id, target: target.id, sourceHandle: handles.sourceHandle, targetHandle: handles.targetHandle,
+        type: "straight", markerEnd: GRAPH_EDGE_MARKER, style: graphEdgeStyle({ dash: "4 3" }), ariaLabel: label });
+    }
+    return { points, links };
+  }, [currentViewMode, groups, nodes, visibleGraph.edges]);
 
   const edges = useMemo<OntologyFlowEdge[]>(() => {
     const kindById = new Map(visibleGraph.nodes.map((node) => [node.id, node.kind]));
@@ -993,8 +1041,8 @@ function OntologyFlow({
       <p className="text-xs text-fg-muted">{t("nl2sql.ontology.graphSearchScope")}</p>
       <GraphCanvasFrame ref={canvasRef} data-testid="ontology-graph-canvas">
       {canvasVisible && <GraphCanvas
-        nodes={nodes}
-        edges={edges}
+        nodes={groupedPoints.points.length ? [...nodes, ...groupedPoints.points] : nodes}
+        edges={groupedPoints.links.length ? [...edges, ...groupedPoints.links] : edges}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         fitView
@@ -1013,10 +1061,20 @@ function OntologyFlow({
         nodesFocusable
         edgesFocusable
         onlyRenderVisibleElements={visibleGraph.nodes.length > 150}
-        onSelectNode={onSelectNode}
+        onSelectNode={id => {
+          const group = groups.find(g => `group:${g.id}` === id);
+          if (group) {
+            setActiveGroupId(group.id);
+            onSelectNode?.(group.owner);
+          } else onSelectNode?.(id);
+        }}
         onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)}
         onNodeMouseLeave={() => setHoveredNodeId(null)}
-        onSelectEdge={(id) => onSelectEdge?.(id, edges.find((item) => item.id === id)?.members)}
+        onSelectEdge={(id) => {
+          const group = groups.find(g => `group:${g.id}` === id);
+          if (group) { setActiveGroupId(group.id); onSelectNode?.(group.owner); }
+          else onSelectEdge?.(id, edges.find((item) => item.id === id)?.members);
+        }}
         onEdgeMouseEnter={(_event, edge) => setHoveredEdgeId(edge.id)}
         onEdgeMouseLeave={() => setHoveredEdgeId(null)}
         miniMap={visibleGraph.nodes.length > 12 ? {

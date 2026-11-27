@@ -206,12 +206,14 @@ async function data(page: Page, controls: Controls = { calls: [] }) {
   });
   return controls;
 }
-async function begin(page: Page) {
+async function begin(page: Page, openResults = true) {
   await page.goto("/wiki-search");
   await selectSearchAnswerProfile(page, profiles[0].name);
   await page.locator("#wiki-question").fill("資料の確認方法");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   await expect(page.getByRole("heading", { name: /検索結果と関係/ })).toBeVisible();
+  const rail = page.getByRole("button", { name: "検索結果", exact: true });
+  if (openResults && await rail.isVisible() && await rail.getAttribute("aria-pressed") === "false") await rail.click();
 }
 function detail(page: Page, phone: boolean) {
   return phone
@@ -453,6 +455,7 @@ test("検索の待ち時間を示し、チャットから現場に戻り、新�
   await expect(progress.getByRole("timer")).toBeInViewport({ ratio: 1 });
   await shot(page, info, "wiki-loading");
   release();
+  if (!phone) await page.getByRole("button", { name: "検索結果", exact: true }).click();
   await result(page, 81).click();
   await detail(page, phone).getByRole("button", { name: "質問に追加" }).click();
   if (phone) await detail(page, phone).getByRole("button", { name: "選択を解除" }).click();
@@ -487,6 +490,7 @@ test("サイドバー込みの 768px でもグラフの操作を表示し、幅�
     await expect(graph.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
   }
   await page.setViewportSize({ width: 1440, height: 900 });
+  await page.getByRole("button", { name: "検索結果", exact: true }).click();
   await result(page, 2).click();
   await expect(detail(page, false)).toBeVisible();
   await expectNoPageOverflow(page);
@@ -543,6 +547,70 @@ test("二つの展開元を持つ原文を保持し、向き別の関係と折�
   await shot(page, info, "direction");
 });
 
+test("関係図は円と残件を描き、方向別に読み進めて元の表示へ戻る", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  await data(page);
+  const single = ["prerequisite", "continuation", "exception", "expected_result"].map((relation, i) => ({
+    unit: unit(i + 1), relation, direction: i === 2 ? "incoming" : "outgoing", scope: "same_document",
+  }));
+  const rows = [...single, ...Array.from({ length: 250 }, (_, i) => ({
+    unit: unit(i + 6), relation: "reference", direction: "outgoing", scope: "same_document",
+  }))];
+  const groups = [...single.map(({ relation, direction }) => ({ relation, direction, count: 1, neighbor_count: 1 })),
+    { relation: "reference", direction: "outgoing", count: 250, neighbor_count: 250 }];
+  await page.route(/\/wiki-search\/profiles\/[^/]+\/search\?/, r => r.fulfill({ json: ok({ items: [unit(0)], total: 1 }) }));
+  await page.route(/\/units\/[^/]+\/relations\?/, r => {
+    const url = new URL(r.request().url());
+    if (url.pathname.split("/").at(-2) !== hash(1)) return r.fulfill({ json: ok({ items: [], groups: [], counts: {}, preview: [], has_more: false, total: 0 }) });
+    const q = url.searchParams;
+    const subset = rows.filter(x => (!q.has("relation") || x.relation === q.get("relation")) && (!q.has("direction") || x.direction === q.get("direction")));
+    const offset = Number(q.get("offset")), limit = Number(q.get("limit"));
+    return r.fulfill({ json: ok({ items: subset.slice(offset, offset + limit), groups, counts: { prerequisite: 1, continuation: 1, exception: 1, expected_result: 1, reference: 250 },
+      preview: [...single, rows[4]],
+      connections: [
+        ...["reference", "continuation", "expected_result"].map(relation => ({ source_id: hash(2), target_id: hash(3), relation })),
+        { source_id: hash(3), target_id: hash(2), relation: "exception" },
+      ],
+      total: subset.length, has_more: offset + limit < subset.length }) });
+  });
+  await begin(page, false);
+  if (phone) await page.getByRole("button", { name: "関係図", exact: true }).click();
+  const graph = page.locator(".react-flow");
+  const root = graph.locator('.react-flow__node[data-id="' + hash(1) + '"]');
+  const group = graph.getByRole("group", { name: /参照のグループ/ });
+  await expect(group).toContainText("250");
+  await expect(graph.locator(".react-flow__edge.graph-edge-count")).toHaveCount(1);
+  await expect(root.locator(".graph-point-symbol")).toHaveCSS("border-radius", "50%");
+  await expect(graph.getByRole("searchbox", { name: "図の中を検索" })).toBeVisible();
+  await graph.scrollIntoViewIfNeeded();
+  const card = page.getByRole("heading", { name: /検索結果と関係/ }).locator("../..");
+  if (process.env.WIKI_GRAPH_SHOTS) {
+    await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-parity.png" });
+    await shot(page, info, "graph-parity-page");
+  }
+  await group.focus();
+  await group.press("Enter");
+  const panel = detail(page, phone);
+  const expand = panel.getByRole("button", { name: "次の 6 件を展開" });
+  await expand.click();
+  await expect(group).toContainText("244");
+  if (process.env.WIKI_GRAPH_SHOTS) await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-expanded.png" });
+  await page.getByRole("button", { name: "操作を戻す", exact: true }).click();
+  await expect(group).toContainText("250");
+  await page.getByRole("button", { name: "グループ表示", exact: true }).click();
+  await expect(graph.locator(".react-flow__node")).toHaveCount(256);
+  await graph.getByRole("button", { name: "全体表示", exact: true }).click();
+  await expect.poll(() => graph.evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return [...el.querySelectorAll(".react-flow__node")].filter(node => {
+      const r = node.getBoundingClientRect();
+      return r.left >= box.left - 1 && r.right <= box.right + 1 && r.top >= box.top - 1 && r.bottom <= box.bottom + 1;
+    }).length;
+  })).toBe(256);
+  await expectNoPageOverflow(page);
+  if (process.env.WIKI_GRAPH_SHOTS) await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-all-256.png" });
+});
+
 test("総覧で近接する検索一致の名称が重ならない", { tag: "@responsive" }, async ({ page }, info) => {
   await data(page);
   await begin(page);
@@ -566,6 +634,7 @@ test("総覧で近接する検索一致の名称が重ならない", { tag: "@re
   await graph.getByRole("button", { name: "選択を中心に表示" }).click();
   await graph.getByRole("button", { name: "拡大", exact: true }).click();
   await graph.getByRole("button", { name: "全体表示" }).click();
+  for (let i = 0; i < 8 && !(await graph.evaluate(el => el.hasAttribute("data-graph-overview"))); i++) await zoomOut.click();
   await expect(graph).toHaveAttribute("data-graph-overview", "");
   await expect.poll(readable).toBe(true);
 });

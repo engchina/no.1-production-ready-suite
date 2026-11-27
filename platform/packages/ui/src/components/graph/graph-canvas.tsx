@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { useEffect, useId, useImperativeHandle, useRef, useState, type CSSProperties, type ComponentProps, type ReactNode, type Ref } from "react";
 import { ChevronLeft, ChevronRight, Focus, Undo2, Maximize2, Minus, Plus, RotateCcw, type LucideIcon } from "lucide-react";
 import {
   Background,
@@ -169,7 +169,11 @@ export function GraphCanvasControls({
   resetTestId,
   selectedId,
   selectedEdgeId,
+  placement = "top",
+  controlsRef,
 }: {
+  placement?: "top" | "bottom";
+  controlsRef?: Ref<{ focusSelection: () => void; focusNode: (id: string) => void }>;
   labels: GraphControlsLabels;
   onFit?: () => void;
   onReset?: () => void;
@@ -195,10 +199,13 @@ export function GraphCanvasControls({
       void flow.fitView({ nodes: [{ id: edge.source }, { id: edge.target }], padding: 0.2, minZoom: 0, maxZoom: 1.2 });
       return;
     }
-    const nodeId = selectedId ?? edge?.source;
-    if (!nodeId || !flow.getNode(nodeId)) return;
+    const id = selectedId ?? edge?.source;
+    if (id) focusNode(id);
+  }
+  function focusNode(id: string) {
+    if (!flow.getNode(id)) return;
     remember();
-    const bounds = flow.getNodesBounds([nodeId]);
+    const bounds = flow.getNodesBounds([id]);
     void flow.setCenter(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, { zoom: Math.max(flow.getZoom(), 1) });
   }
   function previous() {
@@ -207,14 +214,18 @@ export function GraphCanvasControls({
     setHistory(history.slice(0, -1));
     void flow.setViewport(viewport);
   }
+  useImperativeHandle(controlsRef, () => ({ focusSelection: focus, focusNode }));
+  const bottom = placement === "bottom";
+  const zoomOut = <Button type="button" size="sm" variant="ghost" iconOnly icon={Minus} aria-label={labels.zoomOut} tooltip={labels.zoomOut} onClick={() => void flow.zoomOut({ duration: 0 })} />;
   return (
-    <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-surface p-1 shadow-sm">
+    <div className={cn("absolute right-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-1 rounded-md border border-border bg-surface p-1 shadow-sm", bottom ? "bottom-3" : "top-3")}>
+      {bottom && zoomOut}
       <Button type="button" size="sm" variant="ghost" iconOnly icon={Plus} aria-label={labels.zoomIn} tooltip={labels.zoomIn} onClick={() => void flow.zoomIn({ duration: 0 })} />
-      <Button type="button" size="sm" variant="ghost" iconOnly icon={Minus} aria-label={labels.zoomOut} tooltip={labels.zoomOut} onClick={() => void flow.zoomOut({ duration: 0 })} />
-      <Button type="button" size="sm" variant="ghost" iconOnly icon={Maximize2} aria-label={labels.fit} tooltip={labels.fit} onClick={() => { remember(); if (onFit) onFit(); else void flow.fitView({ padding: 0.18, minZoom: 0, duration: 0 }); }} />
+      {!bottom && zoomOut}
+      <Button type="button" size="sm" variant="ghost" iconOnly={!bottom} icon={Maximize2} aria-label={labels.fit} tooltip={labels.fit} onClick={() => { remember(); if (onFit) onFit(); else void flow.fitView({ padding: 0.18, minZoom: 0, duration: 0 }); }}>{bottom && labels.fit}</Button>
       {selectedId !== undefined && <>
         <Button type="button" size="sm" variant="ghost" iconOnly icon={Focus} aria-label={GRAPH_EXPLORATION_JA.focus} tooltip={GRAPH_EXPLORATION_JA.focus} disabled={!selectedId && !selectedEdgeId} onClick={focus} />
-        <Button type="button" size="sm" variant="ghost" iconOnly icon={Undo2} aria-label={GRAPH_EXPLORATION_JA.previous} tooltip={GRAPH_EXPLORATION_JA.previous} disabled={!history.length} onClick={previous} />
+        <Button type="button" size="sm" variant="ghost" iconOnly={!bottom} icon={Undo2} aria-label={GRAPH_EXPLORATION_JA.previous} tooltip={GRAPH_EXPLORATION_JA.previous} disabled={!history.length} onClick={previous}>{bottom && <span className="hidden @min-lg:inline">{GRAPH_EXPLORATION_JA.previous}</span>}</Button>
       </>}
       {onReset ? <Button type="button" size="sm" variant="ghost" iconOnly icon={RotateCcw} aria-label={labels.reset} tooltip={labels.reset} onClick={onReset} disabled={resetDisabled} data-testid={resetTestId} /> : null}
     </div>
@@ -284,6 +295,29 @@ export function GraphNodeFrame({ selected, matched, children, className, ...prop
 }
 
 const HIDDEN_HANDLE_STYLE = { visibility: "hidden" } as const;
+
+/** 概念と関係グループの点。接続点・選択ラベルを同じ座標でズームする。 */
+export function GraphPointNode({
+  label, count, fill, stroke = "var(--color-graph-line)", selected, matched, children, style, ...props
+}: ComponentProps<"div"> & {
+  label: string; count?: number; fill: string; stroke?: string; selected?: boolean; matched?: boolean;
+}) {
+  const colors = { "--point-fill": fill, "--point-stroke": stroke, ...style } as CSSProperties;
+  return (
+    <div {...props} className="graph-point-node" data-graph-card="" data-graph-point=""
+      data-group={count != null || undefined} data-selected={selected || undefined} data-matched={matched || undefined}
+      style={colors} title={props.title ?? label}>
+      <GraphNodeHandles />
+      <span className="graph-point-symbol" aria-hidden>{count}</span>
+      <span className="graph-point-name">{label}</span>
+      {children}
+      <span className="graph-overview-node" aria-hidden data-selected={selected || undefined}
+        style={{ background: fill, borderColor: selected || matched ? "var(--color-accent-fg)" : stroke }}>
+        {(selected || matched) && <span className="graph-overview-label">{label}</span>}
+      </span>
+    </div>
+  );
+}
 
 /** 4 方向 × source/target の隠しハンドル。辺の側が `selectGraphEdgeHandles` で接続方向を選ぶ。 */
 export function GraphNodeHandles() {

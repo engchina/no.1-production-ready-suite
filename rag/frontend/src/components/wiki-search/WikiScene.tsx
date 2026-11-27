@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, FileText, Heading } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import {
   directedGraphBundles,
@@ -7,17 +6,19 @@ import {
   GraphCanvasControls,
   GraphCanvasFrame,
   GraphCanvasProvider,
-  GraphNodeCard,
+  GraphPointNode,
+  GraphSearchNavigation,
+  normalizeGraphSearch,
   GraphParallelEdge,
   graphEdgeStyle,
   selectGraphEdgeHandles,
   GRAPH_EDGE_LABEL_PROPS,
   GRAPH_EDGE_MARKER,
-  GRAPH_NODE_CARD_SIZE,
 } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
 import { t } from "@/lib/i18n";
 import { wikiRelationText } from "@/components/knowledge-bases/wiki-graph-labels";
+import type { WikiDirectedGroup } from "./wiki-api";
 import type { WikiGraphRelation, WikiGraphRelationItem } from "@/lib/api";
 
 export type NodeKind = "document" | "section" | "unit";
@@ -69,23 +70,59 @@ export function joinScenes(...scenes: Scene[]): Scene {
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
 }
 
-type CardNode = Node<{ item: WikiNode; matched: boolean }>;
-function NodeCard({ data, selected }: NodeProps<CardNode>) {
-  const n = data.item;
-  return (
-    <GraphNodeCard
-      icon={n.kind === "document" ? FileText : n.kind === "section" ? Heading : BookOpen}
-      kindLabel={t(`wiki.graph.kind.${n.kind}`)}
-      primary={n.label}
-      fill={
-        n.kind === "section" ? "var(--color-graph-teal, var(--color-surface-sunken))" : "var(--color-surface)"
+export interface WikiGroupPoint extends WikiDirectedGroup {
+  id: string;
+  label: string;
+  owner: WikiNode;
+  remaining: number;
+}
+type Point = WikiNode | WikiGroupPoint;
+const POINT_SIZE = { width: 150, height: 72 };
+const relationColors: Record<Connection["kind"], [string, string]> = {
+  prerequisite: ["--color-graph-term", "--color-success-fg"],
+  continuation: ["--color-graph-metric", "--color-graph-line"],
+  exception: ["--color-success-subtle", "--color-success-fg"],
+  expected_result: ["--color-warning-subtle", "--color-warning-fg"],
+  warning: ["--color-danger-subtle", "--color-danger-fg"],
+  reference: ["--color-graph-metric", "--color-graph-line"],
+  contains: ["--color-graph-term", "--color-graph-line"],
+};
+export const wikiGroupKey = (owner: string, relation: string, direction?: string) => JSON.stringify([owner, relation, direction ?? ""]);
+
+export function remainingWikiGroups(scene: Scene, summaries: ReadonlyMap<string, WikiDirectedGroup[]>, batch: number): WikiGroupPoint[] {
+  const shown = new Map<string, Set<string>>();
+  function remember(owner: string, kind: string, direction: string, neighbor: string) {
+    const id = wikiGroupKey(owner, kind, direction);
+    const ids = shown.get(id) ?? new Set<string>();
+    ids.add(neighbor);
+    shown.set(id, ids);
+  }
+  for (const e of scene.edges) {
+    remember(e.source, e.kind, "outgoing", e.target);
+    remember(e.target, e.kind, "incoming", e.source);
+  }
+  const points: WikiGroupPoint[] = [];
+  for (const owner of scene.nodes) {
+    for (const group of summaries.get(owner.id) ?? []) {
+      const id = wikiGroupKey(owner.id, group.relation, group.direction);
+      const remaining = group.neighbor_count - (shown.get(id)?.size ?? 0);
+      if (group.neighbor_count > batch && remaining > 0) {
+        points.push({ ...group, id, owner, remaining, label: wikiRelationText(group.relation) });
       }
-      selected={selected}
-      matched={data.matched}
-    />
+    }
+  }
+  return points;
+}
+type PointNode = Node<{ item: Point; matched: boolean; color?: Connection["kind"] }>;
+function NodePoint({ data, selected }: NodeProps<PointNode>) {
+  const { item, color } = data;
+  const [fill, stroke] = color ? relationColors[color] : ["--color-graph-entity", "--color-accent-fg"];
+  return (
+    <GraphPointNode label={item.label} count={"remaining" in item ? item.remaining : undefined}
+      selected={selected} matched={data.matched} fill={`var(${fill})`} stroke={`var(${stroke})`} />
   );
 }
-const nodeTypes = { wiki: NodeCard },
+const nodeTypes = { wiki: NodePoint },
   edgeTypes = { parallel: GraphParallelEdge };
 interface Props {
   scene: Scene;
@@ -93,15 +130,28 @@ interface Props {
   matches: ReadonlySet<string>;
   selected?: string;
   edge?: string;
+  groups: WikiGroupPoint[];
+  onGroup: (item: WikiGroupPoint) => void;
+  onZoom: (percent: number) => void;
+  camera: RefObject<{ focusSelection: () => void; focusNode: (id: string) => void } | null>;
   onNode: (node: WikiNode) => void;
   onEdge: (e: Connection) => void;
 }
-function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props) {
+function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom, camera, onNode, onEdge }: Props) {
   const flow = useReactFlow();
   const lastRoot = useRef("");
 
-  const [slots, setSlots] = useState(() => new Map(scene.nodes.map((n, i) => [n.id, i])));
-  const added = scene.nodes.filter((n) => !slots.has(n.id));
+  const points = useMemo(() => [...scene.nodes, ...groups], [scene.nodes, groups]);
+  const links: Connection[] = [...scene.edges, ...groups.map((g) => ({
+    source: g.direction === "outgoing" ? g.owner.id : g.id,
+    target: g.direction === "outgoing" ? g.id : g.owner.id, kind: g.relation,
+  }))];
+  const [term, setTerm] = useState("");
+  const [cursor, setCursor] = useState(-1);
+  const query = normalizeGraphSearch(term);
+  const found = points.filter((p) => query && normalizeGraphSearch(p.label).includes(query));
+  const [slots, setSlots] = useState(() => new Map(points.map((n, i) => [n.id, i])));
+  const added = points.filter((n) => !slots.has(n.id));
   if (added.length) {
     const next = new Map(slots);
     for (const n of added) next.set(n.id, next.size);
@@ -109,8 +159,8 @@ function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props)
   }
   const positions = useMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
-    const { width, height } = GRAPH_NODE_CARD_SIZE;
-    scene.nodes.forEach((node, fallback) => {
+    const { width, height } = POINT_SIZE;
+    points.forEach((node, fallback) => {
       const index = slots.get(node.id) ?? fallback;
       if (index === 0) {
         map.set(node.id, { x: 0, y: 0 });
@@ -127,20 +177,27 @@ function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props)
           Math.PI) /
           (3 * ring) -
         Math.PI / 6;
-      map.set(node.id, { x: Math.cos(theta) * ring * width * 1.6, y: Math.sin(theta) * ring * height * 2.3 });
+      map.set(node.id, { x: Math.cos(theta) * ring * width * 1.5, y: Math.sin(theta) * ring * height * 2 });
     });
     return map;
-  }, [scene.nodes, slots]);
-  const nodes: CardNode[] = scene.nodes.map((item) => ({
-    id: item.id,
-    type: "wiki",
-    data: { item, matched: matches.has(item.id) },
+  }, [points, slots]);
+  const colors = new Map<string, Connection["kind"]>();
+  for (const e of links) {
+    if (e.source !== root && !colors.has(e.source)) colors.set(e.source, e.kind);
+    if (e.target !== root && !colors.has(e.target)) colors.set(e.target, e.kind);
+  }
+  const foundIds = new Set(found.map((item) => item.id));
+  const nodes: PointNode[] = points.map((item) => ({
+    id: item.id, type: "wiki",
+    data: { item, matched: query ? foundIds.has(item.id) : matches.has(item.id), color: colors.get(item.id) },
     position: positions.get(item.id)!,
     selected: item.id === selected,
-    style: { width: GRAPH_NODE_CARD_SIZE.width },
-    ariaLabel: `${t(`wiki.graph.kind.${item.kind}`)} · ${item.label}`,
+    style: POINT_SIZE, initialWidth: POINT_SIZE.width, initialHeight: POINT_SIZE.height,
+    ariaLabel: "remaining" in item
+      ? t("wiki.search.groupNode", { relation: item.label, count: item.remaining })
+      : `${t(`wiki.graph.kind.${item.kind}`)} · ${item.label}`,
   }));
-  const bundles = directedGraphBundles(scene.edges, (e) => [e.source, e.target]);
+  const bundles = directedGraphBundles(links, (e) => [e.source, e.target]);
   const edges: Edge[] = [...bundles.values()].map((members) => {
     const e = members[0];
     const id = edgeId(e);
@@ -161,6 +218,7 @@ function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props)
       ariaLabel: label,
       className: members.length > 1 ? "graph-edge-count" : undefined,
       markerEnd: GRAPH_EDGE_MARKER,
+      type: "straight",
       ...(reversed
         ? {
             type: "parallel",
@@ -172,7 +230,7 @@ function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props)
       style: graphEdgeStyle({
         emphasized: id === edge,
         width: e.cross ? 2 : 1.25,
-        dash: e.kind === "contains" ? "4 3" : undefined,
+        dash: e.kind === "contains" || groups.some(g => g.id === e.source || g.id === e.target) ? "4 3" : undefined,
       }),
       ...GRAPH_EDGE_LABEL_PROPS,
     };
@@ -181,15 +239,31 @@ function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props)
     if (!root || lastRoot.current === root) return;
     lastRoot.current = root;
     const frame = requestAnimationFrame(() => {
-      void flow.setCenter(GRAPH_NODE_CARD_SIZE.width / 2, GRAPH_NODE_CARD_SIZE.height / 2, { zoom: 0.8 });
+      void flow.fitView({ padding: 0.28, minZoom: 0, maxZoom: 1.1, duration: 0 });
     });
     return () => {
       cancelAnimationFrame(frame);
       lastRoot.current = "";
     };
   }, [flow, root]);
+  function pick(id: string) {
+    const item = points.find(p => p.id === id);
+    if (item) {
+      if ("owner" in item) onGroup(item);
+      else onNode(item);
+    }
+  }
+  function moveMatch(step: number) {
+    if (!found.length) return;
+    const start = cursor < 0 && step < 0 ? 0 : cursor;
+    const next = (start + step + found.length) % found.length;
+    setCursor(next);
+    const target = found[next];
+    pick(target.id);
+    camera.current?.focusNode(target.id);
+  }
   return (
-    <GraphCanvasFrame className="h-full min-h-80 rounded-none border-0">
+    <GraphCanvasFrame className="@container h-full min-h-80 rounded-none border-0">
       <GraphCanvas
         nodes={nodes}
         edges={edges}
@@ -199,17 +273,29 @@ function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props)
         edgeTypes={edgeTypes}
         nodesDraggable={false}
         miniMap={false}
-        onSelectNode={(id) => {
-          const n = scene.nodes.find((x) => x.id === id);
-          if (n) onNode(n);
-        }}
+        onMoveEnd={(_, v) => onZoom(Math.round(v.zoom * 100))}
+        onSelectNode={pick}
         onSelectEdge={(id) => {
           const e = scene.edges.find((x) => edgeId(x) === id);
           if (e) onEdge(e);
+          else {
+            const link = links.find(l => edgeId(l) === id);
+            const group = link && groups.find(g => g.id === link.source || g.id === link.target);
+            if (group) onGroup(group);
+          }
         }}
       >
+        <div className="absolute left-3 top-3 z-10 grid w-fit max-w-[calc(100%-1.5rem)] gap-2">
+          <GraphSearchNavigation value={term} onChange={(s) => { setTerm(s); setCursor(-1); }}
+            count={found.length} cursor={Math.max(0, cursor)} onPrevious={() => moveMatch(-1)} onNext={() => moveMatch(1)} scopeHintHidden
+            labels={{ search: t("wiki.graph.search"), clear: t("wiki.search.clearFind"), previous: t("wiki.graph.previousMatch"), next: t("wiki.graph.nextMatch"), noMatch: t("wiki.graph.noMatch"), scope: t("wiki.search.findScope") }} />
+          <div className="flex w-fit items-center gap-2 rounded-md border border-border bg-surface px-2 py-1 text-xs text-fg-muted" aria-label={t("wiki.graph.legend")}>
+            <span className="inline-flex items-center gap-1"><span aria-hidden className="size-3 rounded-full border-2 border-accent-fg bg-accent-muted text-accent-fg-strong"/>{t("wiki.search.selectedPoint")}</span>
+            <span className="inline-flex items-center gap-1"><span aria-hidden className="size-3 rounded-full border border-warning-fg bg-warning-subtle text-warning-fg-strong"/>{t("wiki.search.matchedPoint")}</span>
+          </div>
+        </div>
         <GraphCanvasControls
-          key={root}
+          key={root} placement="bottom" controlsRef={camera}
           selectedId={selected && positions.has(selected) ? selected : null}
           selectedEdgeId={edges.some((item) => item.id === edge) ? edge : undefined}
           labels={{

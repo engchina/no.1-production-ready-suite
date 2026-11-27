@@ -251,6 +251,7 @@ class WikiGraphStore:
         limit: int,
         *,
         relation: str | None = None,
+        direction: str | None = None,
         grouped: bool = False,
     ) -> dict[str, Any]:
         """現在の単位の関係を一画面だけ返す（同じ文書の依存と、別の文書への参照の両方の向き）。
@@ -263,7 +264,7 @@ class WikiGraphStore:
             return {
                 "has_more": False,
                 "items": [],
-                **({"total": 0, "counts": {}, "preview": []} if grouped else {}),
+                **({"total": 0, "counts": {}, "groups": [], "preview": []} if grouped else {}),
             }
         page: WikiPage = found[unit_id]["page"]
         document_id = page.unit.document_id
@@ -356,8 +357,18 @@ class WikiGraphStore:
                     }
                 )
         counts = Counter(item["relation"] for item in items)
+        directed: Counter[tuple[str, str]] = Counter()
+        targets_by_group: dict[tuple[str, str], set[str]] = {}
+        if grouped:
+            for item in items:
+                key = (item["relation"], item["direction"])
+                directed[key] += 1
+                if item["page_id"]:
+                    targets_by_group.setdefault(key, set()).add(item["page_id"])
         if relation is not None:
             items = [item for item in items if item["relation"] == relation]
+        if direction is not None:
+            items = [item for item in items if item["direction"] == direction]
         ordered = sorted(
             items,
             key=lambda item: (
@@ -369,11 +380,29 @@ class WikiGraphStore:
             ),
         )
         page_items = ordered[offset : offset + limit]
-        representatives: dict[str, dict[str, Any]] = {}
-        if grouped and offset == 0 and not relation:
+        representatives: dict[tuple[str, str, str | None], dict[str, Any]] = {}
+        if grouped and offset == 0 and not relation and not direction:
             for item in ordered:
                 if item["page_id"]:
-                    representatives.setdefault(item["relation"], item)
+                    group = (item["relation"], item["direction"])
+                    target = item["page_id"] if len(targets_by_group[group]) <= limit else None
+                    representatives.setdefault((*group, target), item)
+        preview_ids = {item["page_id"] for item in representatives.values()}
+        connections: list[dict[str, Any]] = []
+        if len(preview_ids) > 1:
+            clause, page_binds = _oracle_in_predicate(
+                "page_id", "preview_page", sorted(preview_ids)
+            )
+            connections = await self.oracle._fetch_all(
+                f"""WITH shown_pages AS (
+                    SELECT page_id,unit_id,document_id FROM rag_wiki_pages WHERE {clause}
+                )
+                SELECT s.unit_id AS source_id,t.unit_id AS target_id,e.relation
+                FROM shown_pages s JOIN rag_wiki_graph_deps e ON e.page_id=s.page_id
+                JOIN shown_pages t ON t.unit_id=e.target_unit_id AND t.document_id=s.document_id
+                WHERE s.unit_id<>t.unit_id ORDER BY s.unit_id,t.unit_id,e.relation""",
+                page_binds,
+            )
         units = await self._unit_refs(
             [
                 item["page_id"]
@@ -396,8 +425,18 @@ class WikiGraphStore:
             **(
                 {
                     "counts": dict(counts),
+                    "groups": [
+                        {
+                            "relation": rel,
+                            "direction": way,
+                            "count": amount,
+                            "neighbor_count": len(targets_by_group.get((rel, way), set())),
+                        }
+                        for (rel, way), amount in sorted(directed.items())
+                    ],
                     "total": len(ordered),
                     "preview": [entry(item) for item in representatives.values()],
+                    "connections": connections,
                 }
                 if grouped
                 else {}

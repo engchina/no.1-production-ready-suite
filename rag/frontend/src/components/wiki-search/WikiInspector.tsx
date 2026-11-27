@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BookOpen, GitFork, Minus, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, Focus, GitFork, Minus, Plus } from "lucide-react";
 import { Banner, Button, OffsetPagination, TabPanel, Tabs, useMediaQuery } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 import { type WikiGraphRelation, type WikiGraphRelationItem } from "@/lib/api";
@@ -8,11 +8,12 @@ import {
   sourceLocation,
   sourcePick,
   MAX_WIKI_SELECTION,
+  type WikiDirection,
   type WikiOriginal,
   type WikiPick,
   type WikiRelations,
 } from "./wiki-api";
-import { edgeName, type Connection, type WikiNode } from "./WikiScene";
+import { edgeName, type Connection, type WikiGroupPoint, type WikiNode } from "./WikiScene";
 
 export const NEIGHBOR_PAGE = 6;
 export function RelationInspector({
@@ -52,7 +53,10 @@ interface Props {
   tab: string;
   setTab: (s: string) => void;
   group: WikiGraphRelation | "";
-  chooseGroup: (g: WikiGraphRelation | "") => void;
+  direction?: WikiDirection;
+  selectedGroup?: WikiGroupPoint;
+  focus?: () => void;
+  chooseGroup: (g: WikiGraphRelation | "", d?: WikiDirection) => void;
   offset: number;
   onPage: (n: number) => void;
   select: (node: WikiNode) => void;
@@ -72,6 +76,9 @@ export function WikiInspector({
   setTab,
   group,
   chooseGroup,
+  direction,
+  selectedGroup,
+  focus,
   offset,
   onPage,
   select,
@@ -90,8 +97,9 @@ export function WikiInspector({
   const counts = Object.entries(relations?.counts ?? {}) as [WikiGraphRelation, number][];
   const count = unit ? relations?.total : children?.total;
   const displayed = unit ? relations?.items.length : children?.items.length;
-  const choose = (r: WikiGraphRelation) => {
-    chooseGroup(group === r && tab === "relations" ? "" : r);
+  const choose = (r: WikiGraphRelation, d?: WikiDirection) => {
+    const clear = group === r && direction === d && tab === "relations";
+    chooseGroup(clear ? "" : r, clear ? undefined : d);
     setTab("relations");
   };
   const detailTabs = unit
@@ -108,7 +116,7 @@ export function WikiInspector({
         className="border-b border-border py-1.5"
       >
         <span className="text-xs text-fg-muted">
-          <WikiRelationLabel relation={row.relation} />
+          {row.direction === "outgoing" ? "→" : "←"} <WikiRelationLabel relation={row.relation} />
         </span>
         {row.unit ? (
           <Button
@@ -130,25 +138,28 @@ export function WikiInspector({
     );
   }
   const chips = counts.length > 0 && (
-    <div className="flex flex-wrap items-center gap-1" aria-label={t("wiki.search.relationsOf")}>
-      {counts.map(([r, n]) => (
-        <Button
-          key={r}
-          size="sm"
-          variant="secondary"
-          pressed={group === r && tab === "relations"}
-          onClick={() => choose(r)}
-        >
-          {wikiRelationText(r)} {n}
-        </Button>
-      ))}
-    </div>
+    <section className="space-y-2" aria-label={t("wiki.search.directRelations")}>
+      <h4 className="font-semibold">{t("wiki.search.directRelations")}</h4>
+      <div className="flex flex-wrap items-center gap-2">
+        {relations?.groups?.length ? relations.groups.map(g => (
+          <Button key={g.direction + g.relation} size="sm" variant="secondary"
+            icon={g.direction === "outgoing" ? ArrowRight : ArrowLeft}
+            aria-label={`${t(g.direction === "outgoing" ? "wiki.search.outgoing" : "wiki.search.incoming")} · ${wikiRelationText(g.relation)} ${g.count}`}
+            pressed={group === g.relation && direction === g.direction && tab === "relations"}
+            onClick={() => choose(g.relation, g.direction)}>{wikiRelationText(g.relation)} {g.count}</Button>
+        )) : counts.map(([r, n]) => (
+          <Button key={r} size="sm" variant="secondary" pressed={group === r && tab === "relations"}
+            onClick={() => choose(r)}>{wikiRelationText(r)} {n}</Button>
+        ))}
+      </div>
+    </section>
   );
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col [overflow-wrap:anywhere]">
       <div className="space-y-1 p-3">
-        <p className="text-xs text-fg-muted">{t(`wiki.graph.kind.${node.kind}`)}</p>
-        <h3 className="font-semibold">{node.label}</h3>
+        <p className="text-xs text-fg-muted">{selectedGroup ? t("wiki.search.grouped") : t(`wiki.graph.kind.${node.kind}`)}</p>
+        <h3 className="text-base font-semibold">{selectedGroup ? selectedGroup.label : node.label}</h3>
+        {selectedGroup && <p className="text-sm">{t("wiki.search.groupLeft", { count: selectedGroup.remaining })}</p>}
         <p className="text-xs text-fg-muted">
           {[node.document_name, ...(original?.path ?? node.path ?? [])]
             .filter((v, i, all) => i === 0 || v !== all[i - 1])
@@ -162,7 +173,7 @@ export function WikiInspector({
         onChange={setTab}
         ariaLabel={t("wiki.search.detail")}
       />
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
+      <div className="relative min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3">
         {error}
         {loading}
         {unit && (
@@ -255,7 +266,8 @@ export function WikiInspector({
         )}
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border px-3 py-2">
-        {unit && toggle && original && (
+        {focus && <Button variant="secondary" size="sm" icon={Focus} onClick={focus}>{t("wiki.search.focus")}</Button>}
+        {unit && !selectedGroup && toggle && original && (
           <Button
             variant="secondary"
             size="sm"
@@ -269,7 +281,7 @@ export function WikiInspector({
         )}
         {collapse && <Button variant="secondary" size="sm" icon={Minus} onClick={collapse}>{t("wiki.search.collapse")}</Button>}
         <Button variant="secondary" size="sm" icon={GitFork} disabled={!displayed} onClick={expand}>
-          {t("wiki.search.expand")}
+          {selectedGroup ? t("wiki.search.expandBatch", { count: Math.min(NEIGHBOR_PAGE, selectedGroup.remaining) }) : t("wiki.search.expand")}
         </Button>
       </div>
     </div>

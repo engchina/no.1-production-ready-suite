@@ -38,7 +38,16 @@ export interface WikiOriginal extends WikiGraphUnitRef {
   possible_questions: string[];
   unresolved: string[];
 }
+export type WikiDirection = WikiGraphRelationItem["direction"];
+export interface WikiDirectedGroup {
+  relation: WikiGraphRelation;
+  direction: WikiDirection;
+  count: number;
+  neighbor_count: number;
+}
 export interface WikiRelations {
+  groups?: WikiDirectedGroup[];
+  connections?: { source_id: string; target_id: string; relation: WikiGraphRelation }[];
   preview: WikiGraphRelationItem[];
   items: WikiGraphRelationItem[];
   counts: Partial<Record<WikiGraphRelation, number>>;
@@ -116,14 +125,24 @@ export const wikiApi = {
     offset: number,
     limit: number,
     signal?: AbortSignal,
+    direction?: WikiDirection,
   ) =>
     get<WikiRelations>(
       s,
       `units/${encodeURIComponent(id)}/relations`,
-      { ...(group ? { relation: group } : {}), offset: String(offset), limit: String(limit) },
+      { ...(group ? { relation: group } : {}), ...(direction ? { direction } : {}), offset: String(offset), limit: String(limit) },
       signal,
     ),
 };
+
+export async function allWikiNeighbors(scope: WikiScope, id: string, signal: AbortSignal) {
+  const items: WikiGraphRelationItem[] = [];
+  for (;;) {
+    const page = await wikiApi.relations(scope, id, "", items.length, 100, signal);
+    items.push(...page.items);
+    if (!page.has_more || !page.items.length) return items;
+  }
+}
 function sourcePosition(chunk: RetrievedChunk | undefined, fallback: string) {
   if (!chunk) return { short: fallback, full: fallback };
   const page = passagePageLabel(chunk);
