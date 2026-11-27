@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { reachableGraphBranches } from "@production-ready/ui/graph";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
@@ -62,6 +62,8 @@ interface Props {
   onRoot?: (id: string) => void;
 }
 const RESULT_PAGE = 5;
+// 一覧と詳細を左右に並べても図の操作領域を保てる幅。サイドバーを除いた実寸で判定する。
+const SPLIT_MIN_WIDTH = 768;
 function Busy({ name, label, large = false }: { name: string; label: string; large?: boolean }) {
   return (
     <TimedLoadingState label={label} operationKey={name} testId={"wiki-wait-" + name}>
@@ -77,10 +79,10 @@ function Failed({ error, retry }: { error: unknown; retry: () => void }) {
 }
 export function WikiExplorer({ scope, question, method, kbs, picks, toggle, initialUnit, initialSelection, onSelectUnit, onRoot, initialOffset, onOffset }: Props) {
   const base = ["wiki-explorer", scope] as const;
-  const small = useMediaQuery("(max-width: 767px)", false);
-  const [view, setView] = useState<"graph" | "list">(() =>
-    window.matchMedia("(max-width: 767px)").matches ? "list" : "graph",
-  );
+  const [small, setSmall] = useState(true);
+  const wideScreen = useMediaQuery("(min-width: 768px)", false);
+  const [chosenView, setView] = useState<"graph" | "list" | null>(null);
+  const view = chosenView ?? (small ? "list" : "graph");
   const [offset, setOffset] = useState(initialOffset);
   const [kind, setKind] = useState("");
   const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
@@ -97,6 +99,15 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     [inspector, setInspector] = useState(true);
   const [full, setFull] = useState(false);
   const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const panel = box.current;
+    if (!panel) return;
+    const measure = () => setSmall(panel.clientWidth < SPLIT_MIN_WIDTH);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, []);
   const search = Boolean(question.trim());
   const hits = useQuery({
     queryKey: [...base, "search", question, method, offset],
@@ -306,6 +317,14 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   const detailLabel = t(node?.kind === "unit" && tab !== "relations" ? "wiki.search.loadingSource" : "wiki.search.loadingRelations");
   const listLabel = t(search ? "wiki.search.loadingHits" : "wiki.search.loadingDocs");
   const reloadList = mainResult.isFetching && !!mainResult.data;
+  let columns = "grid-cols-1";
+  if (!small && view === "graph") {
+    columns = inspector
+      ? "grid-cols-[minmax(11rem,0.65fr)_minmax(0,1.65fr)_minmax(17rem,0.85fr)]"
+      : "grid-cols-[minmax(11rem,0.65fr)_minmax(0,2.5fr)]";
+  } else if (!small && inspector) {
+    columns = "grid-cols-[minmax(0,1fr)_minmax(17rem,0.55fr)]";
+  }
   const panel = edge ? (
     <RelationInspector edge={edge} members={scene.edges.filter((e) => e.source === edge.source && e.target === edge.target)} nodes={scene.nodes} onPick={(n) => pick(n)} />
   ) : node ? (
@@ -452,7 +471,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
                 onClick={() => setInspector(true)}
               />
             )}
-            {!small && !fullError && (
+            {(wideScreen || full) && !fullError && (
               <Button
                 variant="ghost"
                 iconOnly
@@ -513,7 +532,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
         ) : (
           <div
             aria-busy={reloadList || undefined}
-            className={`grid min-h-80 ${staleContentClass(mainResult.isPlaceholderData)} ${full ? "flex-1" : "h-[clamp(26rem,65dvh,60rem)]"} ${view === "graph" ? (inspector ? "md:grid-cols-[minmax(11rem,0.65fr)_minmax(0,1.65fr)_minmax(17rem,0.85fr)]" : "md:grid-cols-[minmax(11rem,0.65fr)_minmax(0,2.5fr)]") : inspector ? "md:grid-cols-[minmax(0,1fr)_minmax(17rem,0.55fr)]" : "grid-cols-1"}`}
+            className={`grid min-h-80 ${columns} ${staleContentClass(mainResult.isPlaceholderData)} ${full ? "flex-1" : "h-[clamp(26rem,65dvh,60rem)]"}`}
           >
             {(view === "list" || !small) && left}
             {view === "graph" && (

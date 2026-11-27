@@ -441,6 +441,26 @@ test("検索の待ち時間を示し、チャットから現場に戻り、新�
   await shot(page, info, "wiki-new");
 });
 
+test("サイドバー込みの 768px でもグラフの操作を表示し、幅が広がれば分割表示に戻る", async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await data(page);
+  await begin(page);
+  await expect(page.getByRole("button", { name: "一覧", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await result(page, 1).click();
+  const sheet = detail(page, true);
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole("button", { name: "選択を解除" }).click();
+  await page.getByRole("button", { name: "関係図", exact: true }).click();
+  const graph = page.locator(".react-flow");
+  for (const name of ["拡大", "縮小", "全体表示", "選択を中心に表示", "前の表示に戻る"]) {
+    await expect(graph.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await result(page, 2).click();
+  await expect(detail(page, false)).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
 test("二つの展開元を持つ原文を保持し、向き別の関係と折りたたみを確認できる", { tag: "@responsive" }, async ({ page }, info) => {
   const phone = info.project.name === "mobile";
   await data(page);
