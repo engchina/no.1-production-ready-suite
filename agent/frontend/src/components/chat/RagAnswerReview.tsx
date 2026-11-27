@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
-import { AnswerFileReview, AnswerFooter, type FileReviewState } from "@production-ready/ui";
-import { agentApi, request, type RunState } from "@/lib/api";
+import { AnswerFileReview, AnswerFooter, apiErrorMessage, toast, type FileReviewState } from "@production-ready/ui";
+import { agentApi, FEEDBACK_REASONS, request, type FeedbackReason, type RunState } from "@/lib/api";
 import { answerEvidenceData } from "@/lib/answer-evidence";
-import { t } from "@/lib/i18n";
+import { t, type I18nKey } from "@/lib/i18n";
 import { AnswerEvidenceBlock } from "./AnswerEvidenceView";
+import { FEEDBACK_COMMENT_MAX_CHARS } from "./AnswerFeedback";
 import { AnswerBody } from "./ResultTables";
 
 export function hasRagAnswer(run: RunState) {
@@ -48,6 +49,40 @@ export function RagAnswerReview({
       }
       change={(action) => request<FileReviewState>(path, { method: "POST", body: JSON.stringify(action) })}
       vote={async (id, rating) => onSaved(await agentApi.putRunFeedback(run.id, { rating }, id))}
+      details={{
+        reasons: FEEDBACK_REASONS.map((reason) => ({
+          value: reason,
+          label: t(`feedback.reason.${reason}` as I18nKey),
+        })),
+        commentMaxLength: FEEDBACK_COMMENT_MAX_CHARS,
+        labels: {
+          reasonLegend: t("chat.fileReview.reasonLegend"),
+          commentLabel: t("chat.feedback.commentLabel"),
+          commentPlaceholder: t("chat.feedback.commentPlaceholder"),
+          commentCount: (count, max) => t("chat.feedback.commentCount", { count, max }),
+          save: t("chat.feedback.save"),
+          cancel: t("common.cancel"),
+        },
+        value: (id) => (id === run.id ? run.feedback : null),
+        save: async (id, submission) => {
+          try {
+            onSaved(
+              await agentApi.putRunFeedback(
+                run.id,
+                {
+                  rating: "not_helpful",
+                  reason: (submission.reason as FeedbackReason | null) ?? undefined,
+                  comment: submission.comment ?? "",
+                },
+                id,
+              ),
+            );
+          } catch (error) {
+            throw new Error(apiErrorMessage(error, t("chat.feedback.saveFailed")), { cause: error });
+          }
+          toast.success(t("chat.feedback.saved"));
+        },
+      }}
       renderVersion={(v) => {
         const items = Object.values(v.sources).flatMap((s) =>
           s.citations.map((hit) => ({

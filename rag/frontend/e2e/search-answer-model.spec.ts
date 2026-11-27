@@ -94,7 +94,7 @@ test.describe("RAG 検索の回答の見出しと段落の印の節", { tag: "@r
     await expect(page.getByTestId("search-answer-body")).toBeVisible();
     const headingBeforeBody = page.locator('[data-testid="search-answer-model-heading"] ~ [data-testid="search-answer-body"]');
     await expect(headingBeforeBody).toHaveCount(1);
-    await expect(page.getByRole("button", { name: "未解決", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "解決しなかった", exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
     if (process.env.RAG_E2E_SCREENSHOT_DIR) {
       await page.getByTestId("search-answer-body").evaluate(element => element.scrollIntoView({ block: "center" }));
@@ -167,7 +167,8 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
     return route.fulfill({json:envelope(state)});
   });
   await ask(page);
-  await page.getByRole("button",{name:"未解決",exact:true}).click();
+  await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
+  await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
   const dialog=page.getByRole("dialog");
   await dialog.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
   await dialog.getByRole("checkbox",{name:"操作ガイド A.pdf"}).check();
@@ -263,7 +264,8 @@ test(
       return r.fulfill({ json: envelope(state) });
     });
     await ask(page);
-    await page.getByRole("button", { name: "未解決", exact: true }).click();
+    await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
+    await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
     const panel = page.getByRole("dialog"),
       selected = panel.getByRole("list", { name: "選択した資料" });
     await panel.getByRole("radio", { name: "選んだ資料を残し、ほかも探す" }).check();
@@ -347,7 +349,8 @@ test("候補がなくても経過時間を示し、今回の選択に戻れる",
     release!();
   }
   await ask(page);
-  await page.getByRole("button", { name: "未解決", exact: true }).click();
+  await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
+  await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
   await waitForProgress("回答と資料を読み込んでいます", "open");
   await dialog.getByRole("radio", { name: "今回の資料を外して探し直す" }).check();
   await dialog.getByRole("button", { name: "今回の資料を除外して、ほかの候補を探す" }).click();
