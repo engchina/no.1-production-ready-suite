@@ -3008,6 +3008,16 @@ def unavailable_skill_ids(skill_ids: Sequence[str]) -> list[str]:
     return [skill_id for skill_id in skill_ids if resolve_skill(skill_id) is None]
 
 
+def model_writes_answer(skill: AgentSkillDefinition) -> bool:
+    """このスキルを選ぶと、RAG の回答をそのまま返さずにモデルが回答を書くか（#5867）。
+
+    回答のツールを宣言せずにツールを使うスキル（データつきのスキル・ファイルを作るスキルなど）。
+    `final_answer_tool_names` と、業務 Agent の編集の案内（スキルの一覧の `model_writes_answer`）が
+    使う。
+    """
+    return not skill.final_answer_tools and bool(skill.mcp_requirements)
+
+
 def final_answer_tool_names(
     skill_ids: Sequence[str], origins: Mapping[tuple[str, str], str]
 ) -> frozenset[str]:
@@ -3024,9 +3034,9 @@ def final_answer_tool_names(
         skill = resolve_skill(skill_id)
         if skill is None or not skill.enabled:
             continue
-        finals = {(item.server_id, item.tool_name) for item in skill.final_answer_tools}
-        if not finals and skill.mcp_requirements:
+        if model_writes_answer(skill):
             return frozenset()
+        finals = {(item.server_id, item.tool_name) for item in skill.final_answer_tools}
         declared |= finals
         for requirement in skill.mcp_requirements:
             for server_id, tool_name in origins:

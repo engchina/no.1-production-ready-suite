@@ -448,12 +448,9 @@ export function AgentEditorView({
   // 公開中の版のものは、選び直して公開するまで残る。
   const unavailableSkillIds = [...new Set([...missingSkillIds, ...(agent?.unavailable_skill_ids ?? [])])];
   // RAG の回答をそのまま返すスキル（final_answer_tools。#5342）を選んでいたら、回答の書き方の置き場を示す。
-  // 回答のツールを宣言せずにツールを使うスキル（データつき・ファイルを作るスキルなど）も選んでいれば、モデルが
-  // 回答を書くので示さない（backend の `final_answer_tool_names` と同じ判定。#5867）。
+  // モデルが回答を書くスキル（判定は backend。スキルの一覧の model_writes_answer。#5867）も選んでいれば示さない。
   const selectedSkills = availableSkills.filter((skill) => skillIds.includes(skill.id));
-  const modelWritesAnswer = selectedSkills.some(
-    (skill) => skill.enabled && !skill.final_answer_tools?.length && skill.mcp_requirements.length > 0
-  );
+  const modelWritesAnswer = selectedSkills.some((skill) => skill.enabled && skill.model_writes_answer);
   // 「資料・データで確かめていない回答」は、資料・業務データのツールを宣言したスキルを選んだときだけ効く（#5859）。
   const usesGroundingSkills = selectedSkills.some((skill) => skill.enabled && skill.grounding);
   const finalAnswerSkillNames = modelWritesAnswer

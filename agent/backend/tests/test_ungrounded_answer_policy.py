@@ -630,7 +630,7 @@ def test_new_builtin_and_saved_agents_default_to_annotate(tmp_path: Path) -> Non
     assert AgentProfile(name="新しい業務 Agent").ungrounded_answer_policy == "annotate"
     assert "ungrounded_answer_policy" in AGENT_VERSIONED_FIELDS
     builtin = [item for item in runtime_repository.list_agents() if item.id in BUILTIN_AGENT_IDS]
-    assert len(builtin) == len(BUILTIN_AGENT_IDS) == 10
+    assert len(builtin) == len(BUILTIN_AGENT_IDS) == 6
     for agent in builtin:
         published = agent.published()
         assert agent.ungrounded_answer_policy == "annotate", agent.id
@@ -761,6 +761,10 @@ def test_skill_list_and_runtime_status_feed_the_editor_setting(mcp: FakeProductM
     assert skills["structured-data-query"]["grounding"] is True
     # Control Plane のツール（ファイルを作るツール）だけのスキルは数えない。
     assert skills["xlsx-create"]["grounding"] is False
+    # RAG の回答をそのまま返さずにモデルが回答を書くか（#5867。final_answer_tool_names と同じ）。
+    assert skills["rag-chat"]["model_writes_answer"] is False
+    assert skills["rag-chat-and-data"]["model_writes_answer"] is True
+    assert skills["xlsx-create"]["model_writes_answer"] is True
     # 一覧・推薦だけ・接続のすべてのツールの宣言の判定。
     listing = AgentSkillDefinition(
         id="listing",

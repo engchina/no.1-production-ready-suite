@@ -23,10 +23,8 @@ from app.features.agent.artifact_file_store import MARKDOWN_MIME_TYPE
 from app.features.agent.file_tool_support import (
     FILE_OUTPUT_SCHEMA,
     MAX_FILES_PER_RUN,
-    check_file_count,
+    create_run_file,
     invalid_content,
-    running_run,
-    save_run_file,
 )
 from app.features.agent.table_columns import SpecIssue
 from app.features.agent.tools import ToolDefinition, ToolHandler, ToolInvocationContext
@@ -97,18 +95,11 @@ def _encoded(content: str) -> bytes:
 
 
 def _create_markdown(arguments: dict[str, Any], context: ToolInvocationContext) -> dict[str, Any]:
-    run = running_run(context.run_id)
-    # 上限はこの module の値を呼ぶたびに読む（形式をまたいで同じ値。`file_tool_support`）。
-    check_file_count(run, MAX_FILES_PER_RUN)
-    data = _encoded(str(arguments.get("content") or ""))
-    reference = save_run_file(
-        run.id,
-        MAX_FILES_PER_RUN,
-        file_name=str(arguments.get("file_name") or ""),
-        mime_type=MARKDOWN_MIME_TYPE,
-        data=data,
-    )
-    return {"file": reference}
+    def build(_run: Any) -> tuple[str, bytes, dict[str, Any]]:
+        data = _encoded(str(arguments.get("content") or ""))
+        return str(arguments.get("file_name") or ""), data, {}
+
+    return create_run_file(context.run_id, mime_type=MARKDOWN_MIME_TYPE, build=build)
 
 
 def markdown_create_tool() -> tuple[ToolDefinition, ToolHandler]:

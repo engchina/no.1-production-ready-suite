@@ -204,7 +204,8 @@
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
       "references": [],
-      "grounding": true
+      "grounding": true,
+      "model_writes_answer": false
     },
     {
       "id": "rag-search",
@@ -236,7 +237,8 @@
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
       "references": [],
-      "grounding": true
+      "grounding": true,
+      "model_writes_answer": false
     },
     {
       "id": "structured-data-query",
@@ -265,7 +267,8 @@
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
       "references": [],
-      "grounding": true
+      "grounding": true,
+      "model_writes_answer": true
     },
     {
       "id": "rag-chat-and-data",
@@ -303,7 +306,8 @@
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
       "references": [],
-      "grounding": true
+      "grounding": true,
+      "model_writes_answer": true
     },
     {
       "id": "rag-search-and-data",
@@ -341,7 +345,8 @@
       "created_at": "2026-06-28T00:00:00Z",
       "updated_at": "2026-06-28T00:00:00Z",
       "references": [],
-      "grounding": true
+      "grounding": true,
+      "model_writes_answer": true
     }
   ],
   "tools": [

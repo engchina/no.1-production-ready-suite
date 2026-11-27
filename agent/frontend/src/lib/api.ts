@@ -1234,6 +1234,11 @@ export interface AgentSkill {
    * 業務 Agent の編集は、これを選んだときだけ「資料・データで確かめていない回答」の設定を出す。
    */
   grounding?: boolean;
+  /**
+   * このスキルを選ぶと、RAG の回答をそのまま返さずにモデルが回答を書くか（スキルの一覧だけが返す。backend の
+   * `model_writes_answer`。#5867）。回答のツールを宣言せずにツールを使うスキル（データつき・ファイルを作るスキルなど）。
+   */
+  model_writes_answer?: boolean;
   /** SKILL.md と同じディレクトリの references/ の参照文書（パスと文字数。本文は返さない。#1803）。 */
   references: { path: string; characters: number }[];
   enabled: boolean;

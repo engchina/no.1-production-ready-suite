@@ -1446,12 +1446,13 @@ async def list_tool_definitions() -> ApiResponse[ToolDefinitionsData]:
 
 
 def _skill_list_output(skills: list[AgentSkillDefinition], **metadata: Any) -> AgentSkillListOutput:
-    """スキルの一覧の応答（各スキルに、根拠・データのツールを宣言したかを足す。#5859）。"""
+    """スキルの一覧の応答（各スキルに、業務 Agent の編集が使う判定を足す。#5859・#5867）。"""
     items = [
         AgentSkillListItem.model_validate(
             {
                 **skill.model_dump(),
                 "grounding": builtin_runtime.declares_grounding_tools(skill),
+                "model_writes_answer": builtin_runtime.model_writes_answer(skill),
             }
         )
         for skill in skills
