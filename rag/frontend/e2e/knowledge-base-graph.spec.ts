@@ -200,6 +200,8 @@ const graphZoom = (canvas: Locator) => canvas.evaluate((el) => Number((el as HTM
 const graphContained = (canvas: Locator) => canvas.evaluate((el) => (el as HTMLElement).dataset.graphContained);
 /** 辺の文字の出し方（all = すべて / focus = 選んだ・ホバーした節点の辺だけ）。 */
 const edgeLabels = (canvas: Locator) => canvas.evaluate((el) => (el as HTMLElement).dataset.graphEdgeLabels);
+/** 同じノードの組に複数あって、文字を曲線に沿って回している辺の数（#5959）。 */
+const parallelLabels = (canvas: Locator) => canvas.evaluate((el) => Number((el as HTMLElement).dataset.graphParallelLabels ?? -1));
 const nodeList = (page: Page) => page.getByRole("region", { name: "図にあるノードの一覧" });
 function detail(page: Page, phone: boolean) {
   return phone ? page.getByRole("dialog", { name: "詳細" }) : page.getByRole("complementary", { name: "詳細" });
@@ -293,6 +295,8 @@ test("ナレッジベース詳細は参照の多い文書の見本で開き、�
   // 開いた直後に図の全体が画布に収まり（desktop・375px。#5953）、辺の少ない図はすべての辺に種類の文字を出す。
   await expect.poll(() => graphContained(canvas)).toBe("true");
   expect(await edgeLabels(canvas)).toBe("all");
+  // 同じ組に 1 本ずつの辺は、文字を回さない（水平のまま）。
+  expect(await parallelLabels(canvas)).toBe(0);
   await shot(page, info, "kb-sample");
   // Tab で画布に入り、矢印キーで選び、Enter で隣接（構成と参照の相手）を展開する。
   await canvas.focus();
@@ -365,6 +369,8 @@ test("関係の多い図は全体が画布に収まり、辺の文字は選ん�
   await expect.poll(() => graphContained(canvas)).toBe("true");
   // 文字つきの辺が多いので、何も選んでいない間は辺の文字を出さない（選んだ・ホバーしたノードの辺だけ）。
   expect(await edgeLabels(canvas)).toBe("focus");
+  // 448 本は 283 組なので、同じ組に複数ある辺（文字を曲線に沿って回す辺）がある。
+  expect(await parallelLabels(canvas)).toBeGreaterThan(0);
   await shot(page, info, "kb-dense");
   // ノードを 1 つ選ぶ（隣接だけがはっきりし、その辺の文字が出る。見た目は screenshot で確かめる）。
   await canvas.focus();

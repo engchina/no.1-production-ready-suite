@@ -210,7 +210,7 @@ const NAME_STEP_CLASSES = GRAPH_NAME_STEPS.map((_, index) => `name-step-${index}
 /**
  * 画布の見た目（C 案）。中くらいの円、名前は円の下に 2 行まで（座標の 13px。読める縮尺の下限 0.8 で 10px 前後）。
  * 種類 = 塗りと大きさ、選択 = 太い枠、検索の一致 = 外側の輪。関係は矢印つきで、`dashed` の種類は点線、
- * `labelled` の種類だけ線の上に種類の文字を出す。文字は水平で、画布の背景色の下地を持つ（辺に沿って回すと
+ * `labelled` の種類だけ線の上に種類の文字を出す。文字は水平で、画布の背景色の下地を持つ（すべてを辺に沿って回すと
  * 密なところで重なって読めない）。全体を収めて縮んだときに画面上で 7px を切る辺の文字（縮尺 0.64 未満）は
  * `unreadable` で隠す（Cytoscape の `min-zoomed-font-size` は 2 の冪の段と画素密度で丸めるので使わない）。節点の
  * 名前は縮尺 0.42 まで画面上で約 9px を保ち（`name-step-*`）、0.42 未満で隠す。隠すときは文字を消さずに透明にする（名前を含む範囲が変わると、全体を収める縮尺が押す
@@ -285,6 +285,8 @@ export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly G
     { selector: "edge:selected", style: { "line-color": colors.accent, "target-arrow-color": colors.accent, width: 3.5, color: colors.fg } },
     // 文字つきの辺が多い図で、選んだ・ホバーした節点につながらない辺（太い線にせず、薄くして、文字を出さない）。
     { selector: "edge.quiet", style: { width: 1.5, opacity: 0.5, "text-opacity": 0, "text-background-opacity": 0 } },
+    // 同じ組に文字つきの辺が複数あるときは、文字をそれぞれの曲線に沿わせる（水平のままだと、縦に近い辺で重なる。#5959）。
+    { selector: "edge.parallel", style: { "text-rotation": "autorotate" as const } },
     ...GRAPH_NAME_STEPS.map((lower, index) => {
       const size = GRAPH_NAME_MIN_PX / lower;
       return { selector: `node.name-step-${index}`, style: { "font-size": size, "text-margin-y": (5 * size) / NODE_FONT_SIZE, "text-max-width": `${(400 * size) / NODE_FONT_SIZE}px` } };
@@ -446,7 +448,9 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     const origin = hover.length ? hover : dense ? cy.elements(":selected") : cy.collection();
     const lit = origin.union(origin.nodes().connectedEdges().not(".hidden"));
     cy.batch(() => {
-      cy.elements().removeClass(`faded quiet unreadable ${NAME_STEP_CLASSES}`);
+      cy.elements().removeClass(`faded quiet unreadable parallel ${NAME_STEP_CLASSES}`);
+      const labelled = edges.filter("[?text]");
+      labelled.edges().filter((edge) => edge.parallelEdges().intersection(labelled).length > 1).addClass("parallel");
       const step = graphNameStep(zoom);
       if (step >= GRAPH_NAME_STEPS.length) cy.nodes().addClass("unreadable");
       else if (step >= 0) cy.nodes().addClass(`name-step-${step}`);
@@ -454,7 +458,10 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
       if (dense) edges.not(lit).addClass("quiet");
       if (zoom * EDGE_FONT_SIZE < LABEL_MIN_PX) cy.edges().addClass("unreadable");
     });
-    if (focusTarget.current) focusTarget.current.dataset.graphEdgeLabels = dense ? "focus" : "all";
+    if (focusTarget.current) {
+      focusTarget.current.dataset.graphEdgeLabels = dense ? "focus" : "all";
+      focusTarget.current.dataset.graphParallelLabels = String(cy.edges(".parallel").length);
+    }
   }, []);
 
   /** 描いた数・縮尺・図の全体が画布に収まっているかを属性に出す（検査と診断用。canvas の中は DOM から読めない）。 */
