@@ -170,29 +170,29 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
   await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
   const dialog=page.getByRole("dialog");
-  await dialog.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
+  await dialog.getByRole("radio",{name:"選んだ資料に追加して探す"}).check();
   await dialog.getByRole("checkbox",{name:"操作ガイド A.pdf"}).check();
   const list = dialog.getByRole("region", { name: "回答に使う資料を選ぶ" });
   const listHeight = await list.evaluate(element => element.clientHeight);
   const search = dialog.getByRole("searchbox");
-  await expect(search).toHaveAccessibleName("ファイル名で絞り込み");
+  await expect(search).toHaveAccessibleName("資料の名前で絞り込み");
   await expect(dialog.getByRole("heading", { name: "AI に渡した資料", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("status")).toHaveText("全 2 件 · 選択 1 件 今回除外 1 件 · 累計除外 1 件");
+  await expect(dialog.getByRole("status")).toHaveText("全 2 件・選択 1 件 今回外す 1 件・除外の合計 1 件");
   await search.fill("ガイド");
   await expect(dialog.getByRole("checkbox")).toHaveCount(1);
-  await expect(dialog.getByRole("status")).toHaveText("表示 1/2 件 · 選択 1 件 今回除外 1 件（うち非表示 1 件） · 累計除外 1 件");
-  const showAll = dialog.getByRole("button", { name: "全件表示", exact: true });
-  await expect(showAll).toBeVisible();
+  await expect(dialog.getByRole("status")).toHaveText("1 件（全 2 件）・選択 1 件 今回外す 1 件（うち非表示 1 件）・除外の合計 1 件");
+  // 絞り込みの解除は検索欄の「絞り込みを解除」だけ（重複の「全件表示」は持たない。#5921）。
+  await expect(dialog.getByRole("button", { name: "全件表示", exact: true })).toHaveCount(0);
   expect(await list.evaluate(element => element.clientHeight)).toBe(listHeight);
-  await showAll.click();
+  await dialog.getByRole("button", { name: "絞り込みを解除", exact: true }).click();
   await expect(dialog.getByRole("checkbox")).toHaveCount(2);
   expect(await list.evaluate(element => element.clientHeight)).toBe(listHeight);
   await search.fill("ガイド");
-  await dialog.getByRole("button",{name:"原文",exact:true}).click();
+  await dialog.getByRole("button",{name:"原文を表示",exact:true}).click();
   await expect(dialog.getByText("設定画面を開きます。",{exact:true})).toBeVisible();
   if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-source-"+testInfo.project.name+".png"});
   await dialog.getByRole("button",{name:"戻る",exact:true}).click();
-  await dialog.getByRole("button",{name:"選んだ資料を残して、ほかの候補を探す"}).click();
+  await dialog.getByRole("button",{ name: "候補を探す", exact: true }).click();
   const selected=dialog.getByRole("list",{name:"選択した資料"});
   await expect(selected.getByRole("listitem")).toHaveCount(1);
   await expect(dialog.getByRole("checkbox",{name:"確認手順 C.pdf"})).not.toBeChecked();
@@ -202,7 +202,7 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   await expect(dialog.getByRole("checkbox",{name:"確認手順 C.pdf"})).not.toBeChecked();
   await dialog.getByRole("checkbox",{name:"確認手順 C.pdf"}).check();
   if(process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-search-candidates-"+testInfo.project.name+".png"});
-  await dialog.getByRole("button",{name:"選んだ資料だけで再回答"}).click();
+  await dialog.getByRole("button",{name:"選んだ資料で再回答"}).click();
   await expect(page.getByText(nextAnswer,{exact:true})).toBeVisible();
   await page.getByRole("button",{name:"解決した",exact:true}).click();
   expect(votes).toEqual(["not_helpful","helpful"]);
@@ -268,7 +268,7 @@ test(
     await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
     const panel = page.getByRole("dialog"),
       selected = panel.getByRole("list", { name: "選択した資料" });
-    await panel.getByRole("radio", { name: "選んだ資料を残し、ほかも探す" }).check();
+    await panel.getByRole("radio", { name: "選んだ資料に追加して探す" }).check();
     for (const name of names.slice(0, 40)) await panel.getByRole("checkbox", { name, exact: true }).check();
     await expect(selected.getByRole("listitem")).toHaveCount(40);
     const size = await selected.evaluate((el) => ({
@@ -279,7 +279,7 @@ test(
     }));
     expect(size.height).toBeLessThanOrEqual(size.row * 2 + size.gap + 1);
     expect(size.total).toBeGreaterThan(size.height);
-    await panel.getByPlaceholder("ファイル名の一部を入力").fill("55");
+    await panel.getByPlaceholder("資料の名前の一部を入力").fill("55");
     await expect(selected.getByRole("listitem")).toHaveCount(40);
     await selected.getByRole("button", { name: names[0], exact: true }).click();
     await expect(panel.locator('[role="tooltip"][data-tooltip-reason="press"]')).toHaveText(names[0]);
@@ -287,13 +287,13 @@ test(
     await selected.locator("button[data-source-id]").first().click();
     expect(commands).toHaveLength(0);
     await expect(selected.getByRole("listitem")).toHaveCount(39);
-    await panel.getByPlaceholder("ファイル名の一部を入力").fill("");
+    await panel.getByPlaceholder("資料の名前の一部を入力").fill("");
     await expect(panel.getByRole("checkbox", { name: names[0] })).not.toBeChecked();
     if (process.env.RAG_E2E_SCREENSHOT_DIR)
       await page.screenshot({
         path: process.env.RAG_E2E_SCREENSHOT_DIR + "/" + info.project.name + "-review.png",
       });
-    await panel.getByRole("button", { name: "選んだ資料を残して、ほかの候補を探す" }).click();
+    await panel.getByRole("button", { name: "候補を探す", exact: true }).click();
     await expect(panel.getByRole("checkbox", { name: names[55] })).not.toBeChecked();
     await panel.getByRole("checkbox", { name: names[55] }).check();
     await expect(selected.getByRole("listitem")).toHaveCount(40);
@@ -351,9 +351,9 @@ test("候補がなくても経過時間を示し、今回の選択に戻れる",
   await ask(page);
   await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
   await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
-  await waitForProgress("回答と資料を読み込んでいます", "open");
-  await dialog.getByRole("radio", { name: "今回の資料を外して探し直す" }).check();
-  await dialog.getByRole("button", { name: "今回の資料を除外して、ほかの候補を探す" }).click();
+  await waitForProgress("評価と資料の選択を読み込んでいます", "open");
+  await dialog.getByRole("radio", { name: "別の資料を探す" }).check();
+  await dialog.getByRole("button", { name: "候補を探す", exact: true }).click();
   await waitForProgress("ほかの候補を検索しています", "discover");
   await expect(dialog.getByText("新しい候補はありません。")).toBeVisible();
   await dialog.getByRole("button", { name: "戻る", exact: true }).click();
