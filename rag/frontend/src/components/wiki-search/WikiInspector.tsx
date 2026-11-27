@@ -140,11 +140,11 @@ export function WikiInspector({
     </div>
   );
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col [overflow-wrap:anywhere]">
       <div className="space-y-1 p-3">
         <p className="text-xs text-fg-muted">{t(`wiki.graph.kind.${node.kind}`)}</p>
-        <h3 className="break-words font-semibold">{node.label}</h3>
-        <p className="break-words text-xs text-fg-muted">
+        <h3 className="font-semibold">{node.label}</h3>
+        <p className="text-xs text-fg-muted">
           {[node.document_name, ...(original?.path ?? node.path ?? [])]
             .filter((v, i, all) => i === 0 || v !== all[i - 1])
             .join(" › ")}
@@ -167,9 +167,11 @@ export function WikiInspector({
                 <div className="space-y-2">
                   {original.chunks.slice(0, more ? undefined : 1).map((chunk) => (
                     <div key={chunk.chunk_id}>
-                      <p className="mb-1 flex items-center gap-1 text-xs text-fg-muted">
-                        <BookOpen size={14} aria-hidden />
-                        {original.document_name} · {sourceLocation(chunk, original.label)}
+                      <p className="mb-1 flex items-start gap-1 text-xs text-fg-muted">
+                        <BookOpen size={14} className="shrink-0" aria-hidden />
+                        <span className="min-w-0">
+                          {original.document_name} · {sourceLocation(chunk, original.label)}
+                        </span>
                       </p>
                       <blockquote className="whitespace-pre-wrap break-words border-l-2 border-accent-fg bg-surface-sunken p-3 text-sm">
                         {chunk.text}

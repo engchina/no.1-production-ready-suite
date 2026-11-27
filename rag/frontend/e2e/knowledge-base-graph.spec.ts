@@ -45,7 +45,8 @@ const files = Array.from({ length: 55 }, (_, i) => ({
   id: "doc-" + i,
   document_id: "doc-" + i,
   name:
-    "合成資料 " + String(i + 1).padStart(2, "0") + "." + ["pdf", "md", "txt", "docx", "pptx", "json"][i % 6],
+    "合成資料 " + String(i + 1).padStart(2, "0") + (i === 1 ? "_" + "Reference".repeat(16) : "") + "." +
+    ["pdf", "md", "txt", "docx", "pptx", "json"][i % 6],
   unit_count: 80,
   outgoing_links: 2,
   incoming_links: 1,
@@ -214,6 +215,26 @@ async function shot(page: Page, info: TestInfo, name: string) {
       path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-" + name + ".png",
     });
 }
+test(
+  "長いファイル名は検索結果の幅に収まり、原文欄で横スクロールせずに全文を読める",
+  { tag: "@responsive" },
+  async ({ page }, info) => {
+    await data(page);
+    await begin(page);
+    const hit = result(page, 81);
+    const list = hit.locator("..");
+    await expect(hit).toBeVisible();
+    const overflow = (el: Element) => el.scrollWidth - el.clientWidth;
+    expect(await list.evaluate(overflow)).toBeLessThanOrEqual(1);
+    await hit.click();
+    const original = detail(page, info.project.name === "mobile").getByRole("tabpanel", { name: "原文" });
+    const location = original.getByText(files[1].name + " · p.1", { exact: true });
+    await expect(location).toBeVisible();
+    expect(await original.locator("..").evaluate(overflow)).toBeLessThanOrEqual(1);
+    expect(await location.evaluate(overflow)).toBeLessThanOrEqual(1);
+    await expectNoPageOverflow(page);
+  },
+);
 test(
   "KB の図は展開時に読み、文書・章節・原文を同じ詳細で開き、失敗から再試行できる",
   { tag: "@responsive" },

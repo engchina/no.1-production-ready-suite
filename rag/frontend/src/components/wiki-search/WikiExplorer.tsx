@@ -290,20 +290,20 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
               aria-pressed={node?.id === n.id && !edge}
               data-surface-tint={node?.id === n.id && !edge ? "accent" : undefined}
               onClick={() => pick(n, true)}
-              className="grid w-full gap-1 border-b border-border border-l-2 border-l-transparent p-3 text-left hover:bg-surface-hover focus-visible:outline-focus-ring aria-pressed:border-l-accent-fg aria-pressed:bg-accent-muted"
+              className="grid w-full grid-cols-1 gap-1 border-b border-border border-l-2 border-l-transparent p-3 text-left hover:bg-surface-hover focus-visible:outline-focus-ring aria-pressed:border-l-accent-fg aria-pressed:bg-accent-muted"
             >
               <span className="flex min-w-0 gap-2">
                 <span className="text-xs tabular-nums text-fg-muted">{offset + i + 1}</span>
-                <strong className="break-words text-sm">{n.label}</strong>
+                <strong className="min-w-0 text-sm [overflow-wrap:anywhere]">{n.label}</strong>
               </span>
               {search && (
                 <span className="flex min-w-0 items-center gap-1 text-xs text-fg-muted">
-                  <BookOpen size={13} aria-hidden />
-                  {n.document_name}
+                  <BookOpen size={13} className="shrink-0" aria-hidden />
+                  <span className="min-w-0 truncate">{n.document_name}</span>
                 </span>
               )}
               {match?.knowledge_base_ids.map((id) => (
-                <span key={id} className="text-xs text-fg-muted">
+                <span key={id} className="min-w-0 truncate text-xs text-fg-muted">
                   {kbs.find((k) => k.id === id)?.name ?? id}
                 </span>
               ))}
