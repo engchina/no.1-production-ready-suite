@@ -5,6 +5,7 @@ from pytest import MonkeyPatch
 
 from app.api.routes import search as search_route
 from app.api.routes import search_answer_profile_knowledge as knowledge_route
+from app.config import get_settings
 from app.main import app
 from app.rag.pipeline import AnswerFlow
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
@@ -126,7 +127,7 @@ async def test_file_review_keeps_profile_terms(
         filters={filter_name: '["doc-a"]'},
     )
     effective, settings, _, profile = await search_route._resolve_query_context(
-        request, search_route.get_settings(), flow=flow
+        request, get_settings(), flow=flow
     )
     assert profile == "bv-1"
     assert effective.filters[filter_name] == request.filters[filter_name]
