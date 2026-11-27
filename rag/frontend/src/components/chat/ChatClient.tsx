@@ -328,6 +328,7 @@ function AssistantColumn({
   passageSource = null,
   notice = null,
   savedAnswer = false,
+  hasFileReview = false,
   progressSource = null,
   stoppedMessage = null,
   onRetry,
@@ -369,6 +370,8 @@ function AssistantColumn({
   onRetry?: () => void;
   /** 他の利用者の会話（system_admin が見る）。回答と根拠の評価を出さない（持ち主だけ。#3244）。 */
   readOnly?: boolean;
+  /** 資料を選び直して回答し直した版があるか（保存した回答だけ。#5938）。 */
+  hasFileReview?: boolean;
   className?: string;
 }) {
   // 「回答に未反映の関連章節」の行から章節の原文を開くリンクは、文書の詳細を開ける利用者だけ（#2040・#303）。
@@ -554,6 +557,8 @@ function AssistantColumn({
                 traceId={traceId}
                 searchAnswerProfileId={searchAnswerProfileId}
                 readOnly={readOnly}
+                // 回答し直した版がある回答だけ、開いたときに以前の版を読む（回答の数だけ読まない。#5938）。
+                hasFileReview={hasFileReview}
                 onHistory={setHistoryId}
                 sourceSurface="chat"
                 messageId={messageId}
@@ -609,6 +614,7 @@ function MessageTurn({
     passageSource?: unknown;
     notice?: string | null;
     savedAnswer?: boolean;
+    hasFileReview?: boolean;
     progressSource?: ColumnProgressSource | null;
     stoppedMessage?: string | null;
   }[];
@@ -682,6 +688,7 @@ function MessageTurn({
               passageSource={column.passageSource}
               notice={column.notice}
               savedAnswer={column.savedAnswer}
+              hasFileReview={column.hasFileReview}
               progressSource={column.progressSource}
               stoppedMessage={column.stoppedMessage}
               onRetry={column.errorMessage ? onRetry : undefined}
@@ -1873,6 +1880,7 @@ export function ChatClient() {
                         notice: reply.status === "COMPLETE" ? (reply.notice ?? null) : null,
                         // 診断の無い保存した回答は、会話のメッセージから読む。
                         passageSource: reply.status === "COMPLETE" ? reply : null,
+                        hasFileReview: reply.has_file_review === true,
                         savedAnswer: Boolean(
                           reply.trace_id && answerTraceIds.has(reply.trace_id)
                         ),

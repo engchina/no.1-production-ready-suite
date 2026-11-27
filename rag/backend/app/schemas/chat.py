@@ -94,6 +94,9 @@ class ChatMessage(BaseModel):
     sender_display_name: str = ""
     # 質問に添付したファイル（#2517。名前・種類・大きさ）。添付の無い質問・回答は空。
     attachments: list[ChatAttachmentReference] = Field(default_factory=list)
+    # 資料を選び直して回答し直した版があるか（#5938）。
+    # 画面は true の回答だけ、開いたときに以前の版を読む。
+    has_file_review: bool = False
     # 生成時の表示形式。古い回答・未完了の回答では None。
     answer_format: dict[str, str] | None = None
     # 回答のモデル（``model``）へ添付した根拠の画像の件数（ASSISTANT の終わった回答だけ。回答の
