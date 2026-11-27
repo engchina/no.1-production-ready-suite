@@ -22,7 +22,7 @@ import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectedControlHeight } from "./_helpers/control-height";
 import { expectSingleSpinner } from "./_helpers/single-spinner";
-import { clickOntologyEdge, expectLegacyOntologyControls } from "./_helpers/ontology-controls";
+import { clickOntologyEdge, expectLegacyOntologyControls, ontologyViewTab } from "./_helpers/ontology-controls";
 import { expectToastPlacement } from "./_helpers/toast";
 import { chooseSelectFieldOption, expectSelectFieldValue } from "./_helpers/select-field";
 import { expectFieldLabelOnOneLine } from "./_helpers/field-label";
@@ -7373,8 +7373,8 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   if (process.env.GRAPH_ACCEPTANCE_DIR) {
     await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/sql-grounding-" + testInfo.project.name + ".png" });
   }
-  await panel.getByTestId("ontology-graph-mode-all").click();
-  await panel.getByTestId("ontology-graph-mode-physical_er").click();
+  await ontologyViewTab(panel, "全体").click();
+  await ontologyViewTab(panel, "物理 ER").click();
   const employee = canvas.locator('.react-flow__node[data-id="employee-table"]');
   await employee.focus();
   await employee.press("Enter");
@@ -7385,7 +7385,7 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   if (process.env.GRAPH_ACCEPTANCE_DIR) {
     await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/physical-er-" + testInfo.project.name + ".png" });
   }
-  await panel.getByTestId("ontology-graph-mode-grounding").click();
+  await ontologyViewTab(panel, "接地パス").click();
   await expect.poll(camera).toBe(groundingCamera);
   await expect(details.getByTestId("ontology-node-details")).toContainText("従業員情報");
   await expect(er).toHaveCount(0);

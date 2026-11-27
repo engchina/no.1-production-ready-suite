@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Locator, type Page, type Route } from "./_helpers/test";
 import { mockDatabaseGateReady, systemAdminMe } from "./_helpers/database-gate";
+import { ontologyViewTab } from "./_helpers/ontology-controls";
 import { dropFiles } from "./_helpers/file-dropzone";
 import { expectLargeActionButton } from "./_helpers/action-button";
 import { expectSingleSpinner, visibleSpinners } from "./_helpers/single-spinner";
@@ -1121,7 +1122,7 @@ test("AI オントロジー構築の実行 → 進捗 → Markdown 下書き編�
   await expect.poll(() => state.ontologyViewCalls).toBe(1);
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-version")).toHaveCount(0);
   await expect(ontologyQueryPanel.getByText("公開済みオントロジーがまだありません", { exact: true })).toBeVisible();
-  await expect(ontologyQueryPanel.getByTestId("ontology-graph-mode-physical_er")).toHaveCount(0);
+  await expect(ontologyViewTab(ontologyQueryPanel, "物理 ER")).toHaveCount(0);
   await expect(ontologyQueryPanel.getByTestId("ontology-playground-question")).toHaveCount(0);
 
   await draftEditor.fill(`${generatedDraftMarkdown}\n\n## 手動メモ\n- 公開確認済み`);
@@ -2984,7 +2985,7 @@ async function unifiedGraphFixture(page: Page) {
 async function openUnifiedGraph(page: Page) {
   const panel=page.locator("#ontology-query-playground-panel");
   const expand=panel.getByRole("button",{name:"グラフを表示",exact:true});
-  const modeAll=panel.getByTestId("ontology-graph-mode-all");
+  const modeAll=ontologyViewTab(panel,"全体");
   // 展開ボタンかモード切替のどちらかが描画されるまで待ってから判断する（その瞬間の isVisible だけでは、遅い環境で展開を飛ばす）。
   await expect(expand.or(modeAll).filter({visible:true}).first()).toBeVisible();
   if(await expand.isVisible()) await expand.click();
