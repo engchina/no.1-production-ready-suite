@@ -5,7 +5,6 @@ import { Link } from "react-router-dom";
 
 import {
   CopyButton,
-  ApiErrorBanner,
   Banner,
   Button,
   ContentActionBar,
@@ -27,6 +26,7 @@ import {
   toast,
   type RunFact,
 } from "@production-ready/ui";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { useAuth } from "@/features/security/AuthProvider";
 import { canOpenRoute } from "@/features/security/route-permissions";
 import { ApiError, apiGet, isAbortError } from "@/lib/api";
@@ -257,6 +257,8 @@ function HistoryRunView({ item }: { item: HistoryItem }) {
 
 export function HistoryRunDetail({ historyId, onBack }: { historyId: string; onBack: () => void }) {
   const [item, setItem] = useState<HistoryItem | null>(null);
+  // 表示している内容を読み取った時刻（取り直しに失敗したとき、いつの内容かを示す。messaging.md §3.6.1）。
+  const [loadedAt, setLoadedAt] = useState(0);
   const [loading, setLoading] = useState(true);
   const [announce, setAnnounce] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -270,6 +272,7 @@ export function HistoryRunDetail({ historyId, onBack }: { historyId: string; onB
       const data = await apiGet<HistoryItem>(`/api/nl2sql/history/${encodeURIComponent(historyId)}`, { signal });
       if (signal.aborted || current !== sequence.current) return;
       setItem(data);
+      setLoadedAt(Date.now());
       setError(null);
       if (notify) toast.success(t("common.action.refreshed"));
     })
@@ -349,17 +352,20 @@ export function HistoryRunDetail({ historyId, onBack }: { historyId: string; onB
           </div>
         ) : (
           <div className="grid min-w-0 gap-4">
+            {/* 読み取りの失敗は領域の失敗の表示（「詳細」は閉じる）。前に読めた内容があれば残し、いつの内容かを示す
+                （messaging.md §3.6.1。#5937）。 */}
             {error !== null ? (
-              <ApiErrorBanner
-                error={error}
-                fallback={t("history.error.detail")}
-                testId="history-detail-error"
-                action={
-                  <Button type="button" variant="secondary" size="sm" icon={RefreshCw} loading={loading} onClick={refresh}>
-                    {t("common.retry")}
-                  </Button>
-                }
-              />
+              item ? (
+                <DataLoadStaleNotice error={error} dataUpdatedAt={loadedAt} onRetry={refresh} retrying={loading} />
+              ) : (
+                <DataLoadFailure
+                  error={error}
+                  fallback={t("history.error.detail")}
+                  onRetry={refresh}
+                  retrying={loading}
+                  testId="history-detail-error"
+                />
+              )
             ) : null}
             {item ? <HistoryRunView item={item} /> : null}
           </div>

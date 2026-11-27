@@ -137,10 +137,13 @@ describe("ChatHistoryList", () => {
     expect(host.querySelector('[data-skeleton="list"]')).not.toBeNull();
 
     const onRetry = vi.fn();
-    // 要約に使える文が無い失敗は `labels.error` を出す（API の文があればそれを出す。ApiErrorBanner）。
+    // 要約に使える文が無い失敗は `labels.error` を出す（API の文があればそれを出す。ApiErrorState）。
     render({ error: {}, onRetry });
     const error = host.querySelector('[data-testid="error"]')!;
     expect(error.textContent).toContain("会話の一覧を読み込めませんでした。");
+    // 読み取りの失敗は領域の失敗の表示（帯）で出す（messaging.md §3.6。#5937）。
+    expect(error.getAttribute("role")).toBe("alert");
+    expect(error.getAttribute("data-failure-layout")).toBe("region");
     const retry = Array.from(error.querySelectorAll("button")).find((b) => b.textContent === "再試行")!;
     act(() => retry.click());
     expect(onRetry).toHaveBeenCalledTimes(1);
@@ -149,5 +152,16 @@ describe("ChatHistoryList", () => {
     render({ items: [] });
     expect(host.textContent).toContain("まだ会話がありません");
     expect(host.querySelector('[data-testid="list"]')).toBeNull();
+  });
+
+  // #5937: 一覧の読み取りの失敗は「詳細」を閉じて出し、再試行の間は再試行のボタンを処理中にする。
+  it("失敗の「詳細」は閉じて出し、再試行の間はボタンが処理中になる", () => {
+    render({ error: new TypeError("Failed to fetch"), onRetry: () => undefined, retrying: true });
+    const error = host.querySelector('[data-testid="error"]')!;
+    const details = error.querySelector("details")!;
+    expect(details.textContent).toContain("Failed to fetch");
+    expect(details.hasAttribute("open")).toBe(false);
+    const retry = Array.from(error.querySelectorAll("button")).find((b) => b.textContent === "再試行")!;
+    expect(retry.getAttribute("aria-busy")).toBe("true");
   });
 });

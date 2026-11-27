@@ -5,7 +5,6 @@ import { RefreshCw } from "lucide-react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import {
-  ApiErrorBanner,
   Button,
   ButtonLink,
   Card,
@@ -26,6 +25,7 @@ import {
   toast,
   type RunHistoryItem,
 } from "@production-ready/ui";
+import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadStates";
 import { useAuth } from "@/features/security/AuthProvider";
 import { canOpenRoute } from "@/features/security/route-permissions";
 
@@ -177,6 +177,8 @@ function HistoryList({
   const { offset: pageOffset, pageSize } = pages;
   // 表示している一覧の取得条件（取得に成功したときだけ入る）。
   const [loadedRequest, setLoadedRequest] = useState("");
+  // 表示している一覧を読み取った時刻（取り直しに失敗したとき、いつの内容かを示す。messaging.md §3.6.1）。
+  const [loadedAt, setLoadedAt] = useState(0);
   const [total, setTotal] = useState(0);
   const [unfilteredTotal, setUnfilteredTotal] = useState(0);
   const [hiddenEvaluationTotal, setHiddenEvaluationTotal] = useState(0);
@@ -201,6 +203,7 @@ function HistoryList({
       }
       setItems(data.items);
       setLoadedRequest(requestSignature);
+      setLoadedAt(Date.now());
       setTotal(data.total);
       setUnfilteredTotal(data.unfiltered_total ?? data.total);
       setHiddenEvaluationTotal(data.hidden_evaluation_total ?? 0);
@@ -277,20 +280,6 @@ function HistoryList({
     pages.reset();
     setStoredFilters(DEFAULT_HISTORY_FILTERS);
   };
-
-  const retryButton = (
-    <Button
-      type="button"
-      variant="secondary"
-      size="sm"
-      icon={RefreshCw}
-      loading={loading && loadOrigin === "retry"}
-      disabled={loading && loadOrigin !== "retry"}
-      onClick={() => void load(false, "retry")}
-    >
-      {t("common.retry")}
-    </Button>
-  );
 
   return (
     <>
@@ -399,13 +388,23 @@ function HistoryList({
                     activityIcon={loadOrigin ? "none" : "spinner"}
                   />
                 ) : null}
+                {/* 読み取りの失敗は領域の失敗の表示（「詳細」は閉じる）。今の条件の一覧を出しているときは残し、
+                    いつの内容かを示す（messaging.md §3.6.1、run-history.md「一覧」。#5937）。 */}
                 {error !== null && !loading ? (
-                  <ApiErrorBanner
-                    error={error}
-                    fallback={t("history.error.load")}
-                    action={retryButton}
-                    testId="history-list-error"
-                  />
+                  listUnavailable ? (
+                    <DataLoadFailure
+                      error={error}
+                      fallback={t("history.error.load")}
+                      onRetry={() => void load(false, "retry")}
+                      testId="history-list-error"
+                    />
+                  ) : (
+                    <DataLoadStaleNotice
+                      error={error}
+                      dataUpdatedAt={loadedAt}
+                      onRetry={() => void load(false, "retry")}
+                    />
+                  )
                 ) : null}
                 <RunHistoryTable
                   testId="history-table"

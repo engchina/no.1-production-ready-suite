@@ -3,6 +3,7 @@ import { chooseSelectFieldOption } from "./fixtures/select-field";
 
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
+import { DATABASE_READ_FAILED_MESSAGE, failDatabaseReads } from "./fixtures/read-failure";
 
 // #770: 業務 Agent の下書き・公開・版の履歴・前の版に戻す。Run の「下書きで実行」。
 
@@ -277,6 +278,24 @@ test("一覧に公開の状態を出す", async ({ page, mockApi }) => {
   const table = page.getByRole("table");
   await expect(table.getByRole("row", { name: /経理の Agent/ }).getByText("未公開")).toBeVisible();
   await expect(table.getByRole("row", { name: /RAG チャット＋データアシスタント/ }).getByText("公開中 v1")).toBeVisible();
+});
+
+// #5937: スキルの一覧の読み取りの失敗は、ほかの読み取りの失敗と同じ領域の失敗の表示（帯・「再試行」・閉じた「詳細」）。
+test("一覧の画面でスキルの一覧を読めなかったときは失敗と再試行を出し、業務 Agent の一覧は出したままにする", { tag: "@responsive" }, async ({ page }) => {
+  const failure = await failDatabaseReads(page, "/api/skills");
+  await page.goto("/agents");
+  // 取得は自動の再試行（1 秒・2 秒）の後に失敗になる。
+  const error = page.getByTestId("agents-skills-error");
+  await expect(error).toContainText(DATABASE_READ_FAILED_MESSAGE, { timeout: 15_000 });
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+  await expect(page.getByRole("table").getByRole("row", { name: /RAG チャット＋データアシスタント/ })).toBeVisible();
+  await expectNoPageHorizontalOverflow(page);
+
+  failure.recover();
+  await error.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(error).toHaveCount(0);
 });
 
 test("公開していない Agent は、管理者が「下書きで実行」にしたときだけ Run で選べる", async ({ page, mockApi }) => {

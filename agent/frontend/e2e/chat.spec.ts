@@ -823,6 +823,10 @@ test("会話を開くときの読み込みに失敗したら、選んだ会話�
   const error = page.getByTestId("chat-thread-error");
   await expect(error).toContainText("会話を読み込めませんでした。");
   await expect(page.getByText("質問を入力して会話を始めます")).toHaveCount(0);
+  // 3 製品で同じ領域の失敗の表示（帯・「詳細」は閉じる・「再試行」。messaging.md §11.7。#5937）。
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
   fail = false;
   await error.getByRole("button", { name: "再試行" }).click();
   await expect(page.getByTestId("chat-conversation").getByText("契約の更新条件は？")).toBeVisible();
@@ -856,6 +860,10 @@ test("会話の履歴の読み込みに失敗したら「まだ会話があり�
   const error = history.getByTestId("chat-threads-error");
   await expect(error).toContainText("会話の一覧を読み込めませんでした。", { timeout: 15_000 });
   await expect(history.getByText("まだ会話がありません")).toHaveCount(0);
+  // 3 製品で同じ領域の失敗の表示（帯・「詳細」は閉じる・「再試行」。messaging.md §3.6。#5937）。
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
   fail = false;
   await error.getByRole("button", { name: "再試行" }).click();
   await expect(history.getByRole("button", { name: /^契約の更新条件は？/ })).toBeVisible();

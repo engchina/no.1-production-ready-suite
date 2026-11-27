@@ -209,7 +209,13 @@ test("開いている会話の内容を読めなかったときは、失敗を�
   await setup(page, { conversationFails: true });
   await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(profilesPage));
   await page.goto("/chat?search_answer_profile_id=bv-1&conversation_id=conv-1");
-  await expect(page.getByText("会話を読み込めませんでした。")).toBeVisible({ timeout: RETRY_TIMEOUT });
+  // 3 製品で同じ領域の失敗の表示（原因・「再試行」・閉じた「詳細」。messaging.md §11.7。#5937）。
+  const error = page.getByTestId("chat-conversation-error");
+  await expect(error).toContainText("会話を取得できません。", { timeout: RETRY_TIMEOUT });
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+  await expect(error.getByRole("button", { name: "再試行" })).toBeVisible();
   await expect(page.getByText(EMPTY_TEXT, { exact: true })).toHaveCount(0);
   const composer = page.getByRole("textbox", { name: COMPOSER, exact: true });
   await composer.fill("続きの質問");
@@ -220,6 +226,38 @@ test("開いている会話の内容を読めなかったときは、失敗を�
   await expect(composer).toHaveValue("続きの質問");
   // 新しい会話には移れる（失敗の後も操作できる）。
   await expect(page.getByRole("button", { name: "新しい会話", exact: true })).toBeEnabled();
+});
+
+// #5937: 会話の履歴の一覧の読み取りの失敗も、3 製品で同じ領域の失敗の表示（帯・「再試行」・閉じた「詳細」）。
+test("会話の履歴の一覧を読めなかったときは、0 件ではなく失敗と再試行を出す", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/search-answer-profiles**", (route) => route.fulfill(profilesPage));
+  let fail = true;
+  // 後から登録した route が先に呼ばれる（setup の一覧の応答を上書きする）。
+  await page.route("**/api/chat/conversations?*", (route) =>
+    fail
+      ? route.fulfill({
+          status: 500,
+          json: { data: null, error_messages: ["会話の一覧を取得できません。"], warning_messages: [] },
+        })
+      : route.fallback()
+  );
+  await page.goto("/chat?search_answer_profile_id=bv-1");
+  const toggle = page.getByTestId("chat-history-toggle");
+  await expect(toggle).toBeEnabled();
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  const history = page.getByTestId("chat-history");
+  const error = history.getByTestId("chat-conversations-error");
+  await expect(error).toContainText("会話の一覧を取得できません。", { timeout: RETRY_TIMEOUT });
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveAttribute("data-failure-layout", "region");
+  await expect(error.locator("details")).not.toHaveAttribute("open", "");
+  await expect(history.getByText("まだ会話がありません")).toHaveCount(0);
+
+  fail = false;
+  await error.getByRole("button", { name: "再試行" }).click();
+  await expect(history.getByRole("button", { name: /^経費の上限/ })).toBeVisible();
+  await expect(error).toHaveCount(0);
 });
 
 // 会話の内容の読み込み中も入力欄は書ける（書いている途中で無効にしてフォーカスと入力を失わせない）。
