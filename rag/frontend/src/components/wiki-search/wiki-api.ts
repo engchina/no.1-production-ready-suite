@@ -45,6 +45,7 @@ export interface WikiRelations {
   has_more: boolean;
 }
 export interface WikiDraft {
+  knowledgeBaseId?: string;
   profileId: string;
   items: WikiPick[];
 }
@@ -54,6 +55,7 @@ export function isWikiDraft(value: unknown): value is WikiDraft {
     typeof value !== "object" ||
     !("profileId" in value) ||
     typeof value.profileId !== "string" ||
+    ("knowledgeBaseId" in value && typeof value.knowledgeBaseId !== "string") ||
     !("items" in value) ||
     !Array.isArray(value.items)
   )

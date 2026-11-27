@@ -33,6 +33,7 @@ import {
   PageBody,
   PageHeader,
   ProcessingIndicator,
+  REFRESH_REVEAL_DELAY_MS,
   StatusBadge,
   TextField,
   isSubmitEnter,
@@ -310,7 +311,8 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
   const [lastOpenedId, setLastOpenedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshRequested, setRefreshRequested] = useState(false);
-  const initialLoading = loading && !refreshRequested;
+  const [loaded, setLoaded] = useState(false);
+  const initialLoading = loading && !loaded;
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [formError, setFormError] = useState("");
@@ -503,6 +505,7 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
         if (signal.aborted || sequence !== loadSequence.current) return;
         setRoles(roleRows.map(normalizedRole));
         setPermissions(permissionRows);
+        setLoaded(true);
         setTargetItems(Object.fromEntries(targetRows.map((row) => [row.key, row.rows])));
         setTargetLoadWarnings(
           Object.fromEntries(targetRows.filter((row) => row.warning).map((row) => [row.key, row.warning])),
@@ -977,20 +980,21 @@ export function RolePermissionsPage<R extends PermissionRole = PermissionRole>({
                 value={search}
                 testId="security-permissions-search"
                 disabled={operationBusy}
-                resultCountLabel={listCountText(roleListCount)}
+                resultCountLabel={loaded ? listCountText(roleListCount) : undefined}
                 onChange={setSearch}
               />
             }
-            count={{ ...roleListCount, live: false, testId: "security-permissions-count" }}
+            count={loaded ? { ...roleListCount, live: false, testId: "security-permissions-count" } : undefined}
           />
-          {/* 再読み込みは前の行を残し、ボタンの loading だけで示す。経過時間と Skeleton は最初の読み込みだけ（#4649）。 */}
-          {initialLoading ? (
+          {loading ? (
             <ProcessingIndicator
               active
               label={m.loading}
+              revealDelayMs={initialLoading ? 0 : REFRESH_REVEAL_DELAY_MS}
+              activityIcon={refreshRequested ? "none" : "spinner"}
               operationKey="security-permissions-load"
               placement="panel"
-              testId="security-permissions-loading"
+              testId={initialLoading ? "security-permissions-loading" : "security-permissions-refreshing"}
             />
           ) : null}
           <div className="grid gap-2">

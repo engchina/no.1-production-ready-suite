@@ -63,7 +63,8 @@ export function FeedbackControls({
         onHistory={onHistory}
         t={t}
         readOnly={readOnly}
-        disabled={current.isLoading || current.isError}
+        disabled={current.isError}
+        loadingRating={!readOnly && current.isLoading}
         load={load}
         initialRating={current.data?.find((item) => item.target_type === "answer")?.rating}
         change={(action) =>

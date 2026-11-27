@@ -114,3 +114,49 @@ async def test_failed_generation_does_not_commit_exclusions() -> None:
     with pytest.raises(RuntimeError, match="生成失敗"):
         await advance_review(first, cmd, first.document_ids(), retrieve, broken)
     assert not first.excluded and len(first.versions) == 1
+
+
+@pytest.mark.anyio
+async def test_back_undoes_only_last_discovery_and_can_answer_from_previous_files() -> None:
+    original = initial(a="AB", b="B")
+    first = await apply(original, "discover", "A")
+    second = await apply(first, "discover", "C")
+    assert set(second.excluded) == {"A", "B", "D"}
+    returned = await apply(FileReview.model_validate_json(second.model_dump_json()), "back")
+    assert returned.revision == second.revision + 1
+    assert returned.versions == original.versions
+    assert set(returned.excluded) == {"B"}
+    assert list(returned.pending["a"].documents()) == ["A", "C", "D"]
+    assert returned.method_tasks == {"a"}
+    assert returned.kept["a"] == ["A"]
+    assert "E" not in returned.seen
+    assert second.visible({"C"}).previous_discovery == {}
+    revised = await apply(returned, "answer", "D")
+    assert set(revised.versions[-1].sources["a"].documents()) == {"D"}
+
+
+@pytest.mark.anyio
+async def test_back_with_no_new_candidates_uses_no_retrieval_and_preserves_other_task() -> None:
+    async def empty(
+        task: str, include: list[str], exclude: list[str], generate: bool
+    ) -> ReviewSource:
+        return source([])
+
+    original = initial(a="B", b="BC")
+    original.excluded["A"] = "A"
+    original.kept["b"] = ["B", "C"]
+    discover = ReviewAction(revision=0, action="discover", task="a")
+    none = await advance_review(original, discover, {"A", "B", "C"}, empty, compose)
+    assert not none.pending["a"].citations and none.kept["b"] == ["C"]
+
+    async def unexpected(*args: object) -> ReviewSource:
+        raise AssertionError("戻る操作は検索しない")
+
+    back = ReviewAction(revision=1, action="back", task="a")
+    before = await advance_review(none, back, {"A", "B", "C"}, unexpected, compose)
+    assert before.excluded == {"A": "A"} and not before.pending
+    assert set(before.kept["b"]) == {"B", "C"}
+    saved_before_change = none.model_dump(exclude={"previous_discovery", "method_tasks"})
+    legacy = await apply(FileReview.model_validate(saved_before_change), "back")
+    assert legacy.excluded == none.excluded and not legacy.pending
+    assert (await apply(legacy, "restore", "B")).excluded == {"A": "A"}
