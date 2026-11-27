@@ -8,6 +8,8 @@ No.1 Production Ready Suite（`platform/`・`rag/`・`nl2sql/`・`agent/`）が�
 
 共有グラフ画布（#4018）は、RAG／NL2SQL が既に使用している `@xyflow/react` 12.12.0（MIT）を、platform UI の任意の peer dependency として使用します。図を使う製品は `@production-ready/ui/graph` を読み込み、配布物のライセンス原文と React Flow の帰属表示を保持します。グラフを使わない製品への必須依存にはしません。
 
+図の探索の画布（#5922）は、`cytoscape` 3.34.4（MIT）と、力の配置の拡張 `cytoscape-fcose` 2.2.0（MIT）・その依存 `cose-base` 2.2.0 / `layout-base` 2.0.1（MIT）を、platform UI の任意の peer dependency として使用します（npm の配布 metadata と各 package の LICENSE で確認）。探索の図を使う製品は `@production-ready/ui/graph-explorer` を読み込み、成果物の `licenses/javascript.md` にライセンス原文を出します。新たな copyleft の部品は追加していません。
+
 Unstructured parser のセキュリティ更新（#3957）では、`pyasn1` 0.6.5（BSD-2-Clause）と `pypdf` 6.21.4（BSD-3-Clause）を PyPI の配布 metadata で確認しました。新たな copyleft の部品は追加していません。これらも再配布する場合は、配布物のライセンス原文を保持してください。
 
 soupsieve のセキュリティ更新（#4992）では、4.1 の PyPI 配布 metadata で MIT と Python >=3.11.5 を確認しました。rag/backend の optional extra・rag_engine・Docling / Unstructured parser の lock を更新し、新たな部品は追加していません。再配布時は配布物のライセンス原文を保持してください。

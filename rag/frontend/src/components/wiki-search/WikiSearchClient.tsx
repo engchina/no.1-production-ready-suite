@@ -6,6 +6,8 @@ import {
   Button,
   Card,
   CardContent,
+  CardHeader,
+  CardTitle,
   Disclosure,
   FieldActionRow,
   FormGrid,
@@ -219,7 +221,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
           actions={
             <>
             {manual && state.submitted && (
-              <Button icon={ListRestart} variant="secondary" onClick={newSearch}>{t("wiki.search.new")}</Button>
+              <Button size="lg" icon={ListRestart} variant="secondary" onClick={newSearch}>{t("wiki.search.new")}</Button>
             )}
             <Button
               size="lg"
@@ -256,12 +258,14 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
   );
   return (
     <section className="space-y-4">
-      {manual ? (
+      {/* ナレッジベース詳細は図の上の欄でナレッジベースの中を検索する（#5922）。質問の欄は Wiki 検索だけ。 */}
+      {manual && (
         <Card>
-          <CardContent className="pt-5">{inputs}</CardContent>
+          <CardHeader>
+            <CardTitle>{t("wiki.search.conditions")}</CardTitle>
+          </CardHeader>
+          <CardContent>{inputs}</CardContent>
         </Card>
-      ) : (
-        inputs
       )}
       {manual && (profiles.isPending || scopePending) && (
         <TimedLoadingState label={t(profiles.isPending ? "wiki.search.loadingProfiles" : "wiki.search.loadingScope")} operationKey={profileId} testId="wiki-scope-progress">
@@ -283,7 +287,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
             key={JSON.stringify([scope, run, state.submitted, appliedMethod])}
             scope={scope}
             kbs={available.data?.knowledge_bases ?? []}
-            question={state.submitted}
+            question={manual ? state.submitted : ""}
             method={appliedMethod}
             initialOffset={state.offset ?? 0}
             onOffset={(offset) => patch({ offset, root: "", selectedUnit: "" })}
@@ -291,8 +295,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
             toggle={canChat ? pick : undefined}
             initialSelection={state.selectedUnit}
             onSelectUnit={(selectedUnit) => patch({ selectedUnit })}
-            initialUnit={state.root}
-            onRoot={(root) => patch({ root })}
+            searchButtonBusy={isSearching}
           />
           {canChat && state.items.length > 0 && (
             <div className="space-y-2 rounded-md border border-border bg-surface p-3">
@@ -337,13 +340,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
         </div>
       ) : (
         manual && !profiles.isPending && !profiles.isError && !scopePending && !available.isError && (
-          <Card>
-            <CardContent className="pt-5">
-              <EmptyState
-                title={t(profileId ? "wiki.search.start" : "searchAnswerProfileSelect.placeholder")}
-              />
-            </CardContent>
-          </Card>
+          <EmptyState title={t(profileId ? "wiki.search.start" : "searchAnswerProfileSelect.placeholder")} />
         )
       )}
     </section>

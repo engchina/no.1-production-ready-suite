@@ -7,6 +7,9 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
+// Wiki の図（Cytoscape の共有画布。#5922）。画布の中は canvas なので、描いた数と縮尺は画布の属性
+// （data-graph-nodes / data-graph-edges / data-graph-zoom）で、操作はキーボードと一覧・詳細で確かめる。
+
 const nullIngestion = {
   preprocess_profile: null,
   parser_adapter_backend: null,
@@ -30,8 +33,8 @@ const kbDetail = {
   description: "合成の説明",
   status: "ACTIVE",
   default_search_mode: "hybrid",
-  document_count: 2,
-  indexed_document_count: 2,
+  document_count: 30,
+  indexed_document_count: 30,
   error_document_count: 0,
   searchable_chunk_count: 10,
   created_at: "2026-06-15T00:00:00Z",
@@ -41,15 +44,10 @@ const kbDetail = {
   adapter_config: { version: 1, ingestion: nullIngestion, query: { guardrail_policy: null } },
 };
 
-const files = Array.from({ length: 55 }, (_, i) => ({
+const files = Array.from({ length: 30 }, (_, i) => ({
   id: "doc-" + i,
   document_id: "doc-" + i,
-  name:
-    "合成資料 " + String(i + 1).padStart(2, "0") + (i === 1 ? "_" + "Reference".repeat(16) : "") + "." +
-    ["pdf", "md", "txt", "docx", "pptx", "json"][i % 6],
-  unit_count: 80,
-  outgoing_links: 2,
-  incoming_links: 1,
+  name: "合成資料 " + String(i + 1).padStart(2, "0") + (i === 1 ? "_" + "Reference".repeat(8) : "") + ".md",
 }));
 const kbs = [
   { id: "kb-1", name: "ナレッジベース A" },
@@ -64,9 +62,10 @@ const profiles = ["A", "B"].map((n, i) => ({
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 }));
+const UNITS_PER_DOC = 40;
 const hash = (n: number) => n.toString(16).padStart(64, "0");
 function unit(index: number) {
-  const file = files[Math.floor(index / 80)];
+  const file = files[Math.floor(index / UNITS_PER_DOC) % files.length];
   return {
     id: hash(index + 1),
     kind: "unit",
@@ -74,38 +73,26 @@ function unit(index: number) {
     document_id: file.id,
     document_name: file.name,
     path: ["第 1 章"],
-    knowledge_base_ids: [kbs[Math.floor(index / 80) % 2].id],
+    knowledge_base_ids: [kbs[Math.floor(index / UNITS_PER_DOC) % 2].id],
   };
 }
-const hitIndexes = [
-  0,
-  1,
-  80,
-  160,
-  ...Array.from({ length: 4400 }, (_, i) => i).filter((i) => ![0, 1, 80, 160].includes(i)),
-];
-const related = Array.from({ length: 137 }, (_, i) => ({
+const hitCount = 60;
+// 原文 1 は 30 件の関係を持つ（25 件ずつ展開し、残りは「さらに展開」）。
+const related = Array.from({ length: 30 }, (_, i) => ({
   unit: unit(i + 1),
   direction: i % 2 ? "outgoing" : "incoming",
-  scope: i < 79 ? "same_document" : "cross_document",
+  scope: i < 20 ? "same_document" : "cross_document",
   relation: i < 2 ? "exception" : "reference",
 }));
-async function expectPagerInsets(page: Page) {
-  const pager = page.getByRole("navigation", { name: "検索結果", exact: true });
-  await expect(pager).toBeVisible();
-  const insets = await pager.evaluate((nav) => {
-    const pane = nav.parentElement!.parentElement!.getBoundingClientRect();
-    const controls = nav.getBoundingClientRect();
-    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
-    return { left: controls.left - pane.left, bottom: pane.bottom - controls.bottom, rem };
-  });
-  expect(insets.left).toBeCloseTo(0.75 * insets.rem, 0);
-  expect(insets.bottom).toBeCloseTo(0.5 * insets.rem, 0);
-}
+// 文書の間の参照（文書 0 を中心に 1〜5、2→3）。参照の多い順に文書 0 が先頭。
+const docLinks = [
+  ...[1, 2, 3, 4, 5].map((n) => ({ source_id: "doc-0", target_id: "doc-" + n, relation: "reference", count: 2 })),
+  { source_id: "doc-2", target_id: "doc-3", relation: "prerequisite", count: 1 },
+];
 function paged<T>(items: T[]) {
   return { items, total: items.length, offset: 0, limit: 50, has_next: false };
 }
-type Controls = { failDocs?: boolean; failRelations?: boolean; failUnit?: boolean; calls: URL[] };
+type Controls = { failRelations?: boolean; failSample?: boolean; calls: URL[] };
 async function data(page: Page, controls: Controls = { calls: [] }) {
   await mockLocalAuth(page);
   await page.route("**/api/search-answer-profiles**", (r) => r.fulfill({ json: ok(paged(profiles)) }));
@@ -118,88 +105,65 @@ async function data(page: Page, controls: Controls = { calls: [] }) {
     r.fulfill({ json: ok({ inherits_default: true, fields: [] }) }),
   );
   await page.route(/\/api\/knowledge-bases\/kb-1\/wiki(?:\?.*)?$/, (r) =>
-    r.fulfill({
-      json: ok({ enabled: false, counts: { READY: 55 }, blocked_reason: null, documents: paged([]) }),
-    }),
+    r.fulfill({ json: ok({ enabled: false, counts: { READY: files.length }, blocked_reason: null, documents: paged([]) }) }),
   );
   await page.route(/\/api\/(?:wiki-search\/profiles\/[^/]+|knowledge-bases\/[^/]+\/wiki\/explore)\//, (r) => {
     const url = new URL(r.request().url());
     controls.calls.push(url);
-    const parts = url.pathname.split("/"),
-      end = parts.at(-1),
-      q = url.searchParams;
-    const offset = Number(q.get("offset")),
-      limit = Number(q.get("limit") ?? 5);
-    const slice = <T>(items: T[]) => ({
-      items: items.slice(offset, offset + limit),
-      total: items.length,
-      offset,
-    });
+    const parts = url.pathname.split("/");
+    const end = parts.at(-1);
+    const q = url.searchParams;
+    const offset = Number(q.get("offset") ?? 0);
+    const limit = Number(q.get("limit") ?? 25);
+    const slice = <T>(items: T[]) => ({ items: items.slice(offset, offset + limit), total: items.length, offset });
     const finish = (v: unknown) => r.fulfill({ json: ok(v) });
     if (end === "scope") return finish({ knowledge_bases: kbs });
-    if (end === "documents")
-      return controls.failDocs
-        ? r.fulfill({ status: 503, json: { detail: "一時的な失敗" } })
-        : finish({
-            documents: files.slice(offset, offset + limit),
-            status: "ok",
-            has_more: offset + limit < files.length,
-          });
+    if (end === "documents") return finish({ documents: files.slice(offset, offset + limit), status: "ok", has_more: offset + limit < files.length });
     if (end === "document-count") return finish({ total: files.length });
-    if (end === "search")
-      return finish(
-        slice(
-          hitIndexes.map(unit).filter((u) => !q.has("kb") || u.knowledge_base_ids.includes(q.get("kb")!)),
-        ),
-      );
+    if (end === "document-graph") {
+      if (controls.failSample) return r.fulfill({ status: 503, json: { detail: "一時的な失敗" } });
+      const degree = (id: string) => docLinks.reduce((sum, l) => sum + (l.source_id === id || l.target_id === id ? l.count : 0), 0);
+      const doc = q.get("document");
+      const pool = doc
+        ? files.filter((f) => docLinks.some((l) => (l.source_id === doc && l.target_id === f.id) || (l.target_id === doc && l.source_id === f.id)))
+        : [...files].sort((a, b) => degree(b.id) - degree(a.id) || a.name.localeCompare(b.name));
+      const shown = pool.slice(offset, offset + limit);
+      const ids = new Set([...shown.map((f) => f.id), ...(doc ? [doc] : [])]);
+      return finish({
+        documents: shown.map((f) => ({ ...f, reference_count: degree(f.id) })),
+        links: docLinks.filter((l) => ids.has(l.source_id) && ids.has(l.target_id)),
+        total: pool.length, offset, has_more: offset + limit < pool.length,
+      });
+    }
+    if (end === "search") return finish(slice(Array.from({ length: hitCount }, (_, i) => unit(i)).filter((u) => !q.has("kb") || u.knowledge_base_ids.includes(q.get("kb")!))));
+    if (end === "connections") {
+      const ids = q.get("ids")!.split(",");
+      return finish({ connections: ids.includes(hash(1)) && ids.includes(hash(2)) ? [{ source_id: hash(1), target_id: hash(2), relation: "exception", scope: "same_document" }] : [] });
+    }
+    if (end === "locate") {
+      const node = q.get("node")!;
+      const index = parseInt(node, 16) - 1;
+      return finish({ path: [{ id: "sec-" + Math.floor(index / UNITS_PER_DOC), index: 0 }, { id: node, index: index % UNITS_PER_DOC }] });
+    }
     if (end === "tree") {
-      const n = Number(parts.at(-2)!.split("-")[1]),
-        file = files[n];
-      return finish(
-        slice(
-          q.has("parent")
-            ? Array.from({ length: 80 }, (_, i) => unit(n * 80 + i))
-            : [
-                {
-                  id: "sec-" + n,
-                  label: "第 1 章",
-                  kind: "section",
-                  knowledge_base_ids: [],
-                  document_id: file.id,
-                  document_name: file.name,
-                  path: ["第 1 章"],
-                },
-              ],
-        ),
-      );
+      const n = Number(parts.at(-2)!.split("-")[1]);
+      const file = files[n];
+      return finish(slice(q.has("parent")
+        ? Array.from({ length: UNITS_PER_DOC }, (_, i) => unit(n * UNITS_PER_DOC + i))
+        : [{ id: "sec-" + n, label: "第 1 章", kind: "section", document_id: file.id, document_name: file.name, path: ["第 1 章"], child_count: UNITS_PER_DOC, unit_count: UNITS_PER_DOC }]));
     }
     if (end === "relations") {
       if (controls.failRelations) return r.fulfill({ status: 503, json: { detail: "一時的な失敗" } });
       const all = parts.at(-2) === hash(1) ? related : [];
-      return finish({
-        ...slice(all.filter((v) => !q.has("relation") || q.get("relation") === v.relation)),
-        counts: all.length ? { exception: 2, reference: 135 } : {},
-        preview: all.length ? [all[0], all[2]] : [],
-        has_more: all.length > offset + limit,
-      });
+      return finish({ ...slice(all), counts: {}, preview: [], has_more: all.length > offset + limit });
     }
-    if (controls.failUnit) return r.fulfill({ status: 503, json: { detail: "一時的な失敗" } });
     const index = parseInt(end!, 16) - 1;
     const hit = unit(index);
     return finish({
       ...hit,
-      parent_id: "sec-" + Math.floor(index / 80),
+      parent_id: "sec-" + Math.floor(index / UNITS_PER_DOC),
       source: { unit_id: hit.id, source_hash: hash(index + 10000) },
-      chunks: [
-        {
-          document_id: hit.document_id,
-          chunk_id: "c-" + index,
-          file_name: hit.document_name,
-          text: "照合済みの合成原文 " + (index + 1) + "。",
-          score: 1,
-          metadata: { page_start: (index % 80) + 1 },
-        },
-      ],
+      chunks: [{ document_id: hit.document_id, chunk_id: "c-" + index, file_name: hit.document_name, text: "照合済みの合成原文 " + (index + 1) + "。", score: 1, metadata: { page_start: (index % UNITS_PER_DOC) + 1 } }],
       context: "公開済みの合成の案内。",
       possible_questions: [],
       unresolved: [],
@@ -207,511 +171,178 @@ async function data(page: Page, controls: Controls = { calls: [] }) {
   });
   return controls;
 }
-async function begin(page: Page, openResults = true) {
-  await page.goto("/wiki-search");
-  await selectSearchAnswerProfile(page, profiles[0].name);
-  await page.locator("#wiki-question").fill("資料の確認方法");
-  await page.getByRole("button", { name: "検索", exact: true }).click();
-  await expect(page.getByRole("heading", { name: /検索結果と関係/ })).toBeVisible();
-  const rail = page.getByRole("button", { name: "検索結果", exact: true });
-  if (openResults && await rail.isVisible() && await rail.getAttribute("aria-pressed") === "false") await rail.click();
-}
+
+const canvasOf = (page: Page) => page.getByTestId("wiki-graph-canvas");
+const graphCount = (canvas: Locator, what: "nodes" | "edges") => canvas.evaluate((el, key) => Number((el as HTMLElement).dataset[key] ?? 0), what === "nodes" ? "graphNodes" : "graphEdges");
+const graphZoom = (canvas: Locator) => canvas.evaluate((el) => Number((el as HTMLElement).dataset.graphZoom ?? 0));
 function detail(page: Page, phone: boolean) {
-  return phone
-    ? page.getByRole("dialog", { name: "詳細" })
-    : page.getByRole("complementary", { name: "詳細" });
-}
-function result(page: Page, n: number) {
-  return page.getByRole("button", { name: new RegExp("合成の原文 " + n + " 合成資料") });
-}
-/** React Flow の画布の縮尺。 */
-function readableZoom(canvas: Locator) {
-  return canvas.locator(".react-flow__viewport").first().evaluate((el) =>
-    Number(/scale\(([\d.]+)\)/.exec((el as HTMLElement).style.transform)?.[1] ?? 0));
+  return phone ? page.getByRole("dialog", { name: "詳細" }) : page.getByRole("complementary", { name: "詳細" });
 }
 async function shot(page: Page, info: TestInfo, name: string) {
-  if (process.env.WIKI_GRAPH_SHOTS)
-    await page.screenshot({
-      path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-" + name + ".png",
-    });
+  if (process.env.WIKI_GRAPH_SHOTS) await page.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-" + name + ".png" });
 }
-test(
-  "長いファイル名は検索結果の幅に収まり、原文欄で横スクロールせずに全文を読める",
-  { tag: "@responsive" },
-  async ({ page }, info) => {
-    await data(page);
-    await begin(page);
-    const hit = result(page, 81);
-    const list = hit.locator("..");
-    await expect(hit).toBeVisible();
-    const overflow = (el: Element) => el.scrollWidth - el.clientWidth;
-    expect(await list.evaluate(overflow)).toBeLessThanOrEqual(1);
-    await hit.click();
-    const original = detail(page, info.project.name === "mobile").getByRole("tabpanel", { name: "原文" });
-    const location = original.getByText(files[1].name + " · p.1", { exact: true });
-    await expect(location).toBeVisible();
-    expect(await original.locator("..").evaluate(overflow)).toBeLessThanOrEqual(1);
-    expect(await location.evaluate(overflow)).toBeLessThanOrEqual(1);
-    const phone = info.project.name === "mobile";
-    const panel = detail(page, phone);
-    await panel.getByRole("button", { name: "質問に追加" }).click();
-    if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
-    await page.getByRole("button", { name: "チャットで質問" }).click();
-    const source = page.getByRole("list", { name: "Wiki で選んだ原文" }).getByRole("listitem");
-    const pageNumber = source.getByText("p.1", { exact: true });
-    await expect(pageNumber).toBeVisible();
-    expect(await pageNumber.locator("..").evaluate(overflow)).toBeLessThanOrEqual(1);
-    await source.locator("[data-info-tip]").click();
-    await expect(page.getByRole("tooltip")).toContainText(files[1].name);
-    await expectNoPageOverflow(page);
-  },
-);
-test(
-  "KB の図は展開時に読み、文書・章節・原文を同じ詳細で開き、失敗から再試行できる",
-  { tag: "@responsive" },
-  async ({ page }, info) => {
-    const phone = info.project.name === "mobile";
-    const control = await data(page, { calls: [], failDocs: true });
-    await page.goto("/knowledge-bases/kb-1");
-    const opener = page.getByTestId("wiki-graph-disclosure").locator("summary");
-    await expect(opener).toBeVisible();
-    expect(control.calls).toHaveLength(0);
-    await opener.focus();
-    await opener.press("Enter");
-    const area = page.getByTestId("wiki-graph-disclosure");
-    control.failDocs = false;
-    await area.getByRole("button", { name: /再試行|再読み込み/ }).click();
-    await expectPagerInsets(page);
-    await area.getByRole("button", { name: /1 合成資料 01/ }).click();
-    const panel = detail(page, phone);
-    await panel.getByRole("button", { name: "関連を展開" }).click();
-    const graph = area.locator(".react-flow");
-    const chapter = graph.locator('.react-flow__node[data-id="sec-0"]');
-    await chapter.focus();
-    await chapter.press("Enter");
-    await panel.getByRole("button", { name: "関連を展開" }).click();
-    const firstUnit = graph.locator('.react-flow__node[data-id="' + hash(1) + '"]');
-    await expect(firstUnit).toBeVisible();
-    await graph.getByRole("button", { name: "全体表示", exact: true }).click();
-    if (process.env.WIKI_GRAPH_SHOTS) {
-      await graph.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-kb-tree.png" });
-    }
-    control.failRelations = true;
-    await firstUnit.focus();
-    await firstUnit.press("Enter");
-    await expect(panel.getByText("照合済みの合成原文 1。")).toBeVisible();
-    await panel.getByRole("tab", { name: "Wiki の案内" }).click();
-    await expect(panel.getByText("公開済みの合成の案内。")).toBeVisible();
-    const retry = panel.getByRole("button", { name: /再試行|再読み込み/ });
-    await expect(retry).toHaveCount(0);
-    await panel.getByRole("tab", { name: "関係", exact: true }).click();
-    await expect(retry).toBeVisible();
-    control.failRelations = false;
-    await retry.click();
-    await expect(panel.getByRole("button", { name: /参照/ }).first()).toBeVisible();
-    await expectNoPageOverflow(page);
-  },
-);
-test(
-  "プロファイル内の Wiki を検索し、関係を部分展開し、選択した原文を通常のチャットで使う",
-  { tag: "@responsive" },
-  async ({ page }, info) => {
-    const phone = info.project.name === "mobile",
-      control = await data(page);
-    await begin(page);
-    await expectPagerInsets(page);
-    await expect
-      .poll(() => control.calls.find((u) => u.pathname.endsWith("/search"))?.searchParams.get("method"))
-      .toBe("hybrid");
-    await result(page, 1).click();
-    const panel = detail(page, phone);
-    await expect(panel.getByText("照合済みの合成原文 1。")).toBeVisible();
-    await shot(page, info, "original");
-    await panel.getByRole("button", { name: "質問に追加" }).click();
-    await panel.getByRole("button", { name: /参照 135/ }).click();
-    await expect
-      .poll(() =>
-        control.calls.some(
-          (u) => u.searchParams.get("relation") === "reference" && u.searchParams.get("limit") === "6",
-        ),
-      )
-      .toBe(true);
-    await panel.getByRole("button", { name: "関連を展開" }).click();
-    const canvas = page.locator(".react-flow");
-    const nodes = canvas.locator(".react-flow__node");
-    await expect(nodes.first()).toBeVisible();
-    expect(await nodes.count()).toBeLessThanOrEqual(13);
-    await expect(canvas.locator('.react-flow__node[data-id="' + hash(161) + '"]')).toHaveCount(1);
-    await page.getByRole("button", { name: "全体表示", exact: true }).click();
-    // 全体表示は読める縮尺（0.8）を下限にする（#5520・#5908）。
-    await expect.poll(() => readableZoom(canvas)).toBeGreaterThanOrEqual(0.8);
-    await shot(page, info, "wiki");
-    if (phone) await page.getByRole("button", { name: "一覧", exact: true }).click();
-    await result(page, 2).click();
-    await panel.getByRole("button", { name: "質問に追加" }).click();
-    if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
-    await page.getByRole("button", { name: "チャットで質問" }).click();
-    await expect(page.locator("#chat-search-answer-profile")).toContainText(profiles[0].name);
-    const composer = page.locator("#chat-composer");
-    await expect(composer).toHaveValue("資料の確認方法");
-    const selected = page.getByRole("list", { name: "Wiki で選んだ原文" });
-    await expect(selected.getByRole("listitem")).toHaveCount(2);
-    const first = selected.getByRole("listitem").first();
-    await first.locator("[data-info-tip]").click();
-    await expect(page.getByRole("tooltip")).toContainText("p.1");
-    await page.keyboard.press("Escape");
-    await first.locator("button[data-source-id]").click();
-    await expect(selected).toContainText("p.2");
-    await expect(selected.getByRole("listitem")).toHaveCount(1);
-    await expectNoPageOverflow(page);
-    await shot(page, info, "chat");
-    await selectSearchAnswerProfile(page, profiles[1].name);
-    await expect(selected).toHaveCount(0);
-  },
-);
-test(
-  "検索方法と KB を絞り込めて、Wiki 権限を持たない利用者は直リンクからも開けない",
-  { tag: "@responsive" },
-  async ({ page }) => {
-    const control = await data(page);
-    await begin(page);
-    await page.getByText("詳細条件", { exact: true }).click();
-    await page.locator("#wiki-search-method").click();
-    await page
-      .getByRole("option", { name: /キーワード/, exact: false })
-      .last()
-      .click();
-    await page.locator("#wiki-search-kb").click();
-    await page.getByRole("option", { name: "ナレッジベース B" }).click();
-    await page.getByRole("button", { name: "検索", exact: true }).click();
-    await expect
-      .poll(() =>
-        control.calls.some(
-          (u) => u.searchParams.get("kb") === "kb-2" && u.searchParams.get("method") === "keyword",
-        ),
-      )
-      .toBe(true);
-    await page.route("**/api/auth/me", (r) =>
-      r.fulfill({ json: ok(dbUser({ permissions: ["menu.search"] })) }),
-    );
-    await page.reload();
-    await expect(page.locator("#wiki-question")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "Wiki 検索" })).toHaveCount(0);
-  },
-);
-
-test(
-  "複数の文書から 40 原文を持ち込んでも入力・送信とプロファイルが見える",
-  { tag: "@responsive" },
-  async ({ page }, info) => {
-    test.setTimeout(90000);
-    const phone = info.project.name === "mobile";
-    await data(page);
-    await begin(page);
-    const panel = detail(page, phone);
-    for (let p = 0; p < 8; p++) {
-      if (p)
-        await page
-          .getByRole("navigation", { name: "検索結果", exact: true })
-          .getByRole("button", { name: "次へ", exact: true })
-          .click();
-      for (const index of hitIndexes.slice(p * 5, (p + 1) * 5)) {
-        await result(page, index + 1).click();
-        await panel.getByRole("button", { name: "質問に追加" }).click();
-        if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
-      }
-    }
-    await page.getByRole("button", { name: "チャットで質問" }).click();
-    const picked = page.getByRole("list", { name: "Wiki で選んだ原文" });
-    await expect(picked.getByRole("listitem")).toHaveCount(40);
-    await expect(page.locator("#chat-search-answer-profile")).toContainText(profiles[0].name);
-    await expect(page.getByRole("button", { name: "送信", exact: true })).toBeInViewport();
-    const size = await picked.evaluate((el) => ({
-      height: el.clientHeight,
-      total: el.scrollHeight,
-      row: el.firstElementChild!.getBoundingClientRect().height,
-      gap: parseFloat(getComputedStyle(el).rowGap),
-    }));
-    expect(size.height).toBeLessThanOrEqual(size.row * 2 + size.gap + 1);
-    expect(size.total).toBeGreaterThan(size.height);
-    await expectNoPageOverflow(page);
-    await shot(page, info, "chat-40");
-  },
-);
-
-test("検索の待ち時間を示し、チャットから現場に戻り、新しい検索で条件を引き継ぐ", { tag: "@responsive" }, async ({ page }, info) => {
-  const phone = info.project.name === "mobile";
-  await data(page);
-  // 開発時は検索の購読を張り直すため、再送したリクエストも同じ応答を待たせる。
-  let release!: () => void;
-  const pending = new Promise<void>(resolve => { release = resolve; });
-  await page.route(/\/wiki-search\/profiles\/[^/]+\/search\?/, async r => {
-    await pending;
-    return r.fallback();
-  });
+async function begin(page: Page) {
   await page.goto("/wiki-search");
   await selectSearchAnswerProfile(page, profiles[0].name);
-  await page.getByText("詳細条件", { exact: true }).click();
-  await page.locator("#wiki-search-method").click();
-  await page.getByRole("option", { name: "キーワード", exact: true }).click();
-  await page.locator("#wiki-search-kb").click();
-  await page.getByRole("option", { name: kbs[1].name }).click();
+  await page.locator("#wiki-question").fill("資料の確認方法");
+  await page.getByRole("button", { name: "検索", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "検索結果と関係" })).toBeVisible();
+}
+async function openKnowledgeBaseGraph(page: Page) {
+  await page.goto("/knowledge-bases/kb-1");
+  const opener = page.getByTestId("wiki-graph-disclosure").locator("summary");
+  await opener.focus();
+  await opener.press("Enter");
+  return page.getByTestId("wiki-graph-disclosure");
+}
+
+test("Wiki 検索は結果で図を置き換え、結果の間の関係をつなぎ、一覧は共通のページングで 25 件ずつ読む", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  const control = await data(page);
+  await begin(page);
+  const canvas = canvasOf(page);
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
+  // 結果の原文 1 と 2 の間の関係（connections）を線にする。
+  await expect.poll(() => graphCount(canvas, "edges")).toBe(1);
+  expect(control.calls.some((u) => u.pathname.endsWith("/connections"))).toBe(true);
+  await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("原文 25");
+  // 全体表示は読める縮尺（0.8）を下限にする（#5520・#5908）。
+  await page.getByRole("button", { name: "全体表示", exact: true }).click();
+  await expect.poll(() => graphZoom(canvas)).toBeGreaterThanOrEqual(0.8);
+  await shot(page, info, "wiki-search-graph");
+  // 関係図と一覧は Tabs（押下のボタンではない）。
+  await page.getByRole("tab", { name: "一覧" }).click();
+  await expect(page.getByText("全 60 件")).toBeVisible();
+  const list = page.getByRole("region", { name: "検索結果の一覧" });
+  await expect(list.getByRole("button")).toHaveCount(25);
+  const pager = page.getByRole("navigation", { name: "検索結果の一覧" });
+  await pager.getByRole("button", { name: "次へ", exact: true }).click();
+  await expect(list.getByRole("button", { name: /合成の原文 26/ })).toBeVisible();
+  // 新しいページの結果で図を置き換える。
+  await page.getByRole("tab", { name: "関係図" }).click();
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
+  await page.getByRole("tab", { name: "一覧" }).click();
+  await list.getByRole("button", { name: /合成の原文 27/ }).click();
+  const panel = detail(page, phone);
+  await expect(panel.getByText("照合済みの合成原文 27。")).toBeVisible();
+  await panel.getByRole("button", { name: "質問に追加" }).click();
+  if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+  await page.getByRole("button", { name: "チャットで質問" }).click();
+  await expect(page.locator("#chat-composer")).toHaveValue("資料の確認方法");
+  await expect(page.getByRole("list", { name: "Wiki で選んだ原文" }).getByRole("listitem")).toHaveCount(1);
+  // 戻るボタンは実際の戻り先（Wiki 検索）を示す。
+  await page.getByRole("button", { name: "Wiki 検索に戻る" }).click();
+  await expect(page.locator("#wiki-question")).toHaveValue("資料の確認方法");
+  await page.getByRole("button", { name: "新しい検索を開始" }).click();
+  await expect(page.locator("#wiki-question")).toHaveValue("");
+  await expectNoPageOverflow(page);
+});
+
+test("ナレッジベース詳細は参照の多い文書の見本で開き、キーボードで展開し、図内検索の当たりを足してクリアできる", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  const control = await data(page, { calls: [], failSample: true });
+  const area = await openKnowledgeBaseGraph(page);
+  await area.getByRole("button", { name: /再試行|再読み込み/ }).first().click().catch(() => undefined);
+  control.failSample = false;
+  await area.getByRole("button", { name: /再試行|再読み込み/ }).first().click();
+  const canvas = canvasOf(page);
+  // 30 文書のうち参照の多い 25 文書と、その間の参照 6 本。
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
+  await expect.poll(() => graphCount(canvas, "edges")).toBe(docLinks.length);
+  await expect(area.getByTestId("wiki-graph-node-kinds")).toContainText("文書 25");
+  await expect(area.getByText(/参照の多い 25 件の文書/)).toBeVisible();
+  await shot(page, info, "kb-sample");
+  // Tab で画布に入り、矢印キーで選び、Enter で隣接（構成と参照の相手）を展開する。
+  await canvas.focus();
+  await page.keyboard.press("ArrowRight");
+  const before = await graphCount(canvas, "nodes");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => graphCount(canvas, "nodes")).toBeGreaterThan(before);
+  // 右クリック（Shift+F10）のメニュー。
+  await page.keyboard.press("Shift+F10");
+  const menu = page.getByRole("menu", { name: "ノードの操作" });
+  await expect(menu).toBeVisible();
+  for (const name of ["関係の種類を選んで展開", "このノードを外す", "選択したノードだけ残す"]) {
+    await expect(menu.getByRole("menuitem", { name: new RegExp(name) })).toBeVisible();
+  }
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  // 凡例を押すとその種類のノードをすべて選ぶ。
+  await area.getByTestId("wiki-graph-kind-document").click();
+  await expect(area.getByTestId("wiki-graph-selected-count")).toContainText("件を選択");
+  // 図内検索はナレッジベース全体をサーバーで検索し、当たった原文を今の図に足して強調する。
+  const nodesBefore = await graphCount(canvas, "nodes");
+  await page.locator("#wiki-graph-find").fill("合成");
+  await expect.poll(() => control.calls.some((u) => u.pathname.endsWith("/search") && u.searchParams.get("method") === "keyword")).toBe(true);
+  await expect.poll(() => graphCount(canvas, "nodes")).toBeGreaterThanOrEqual(nodesBefore + 25);
+  await expect(page.getByTestId("wiki-graph-find-nav")).toContainText("1 / 25");
+  // 当たった原文までの段（文書 → 章節）を位置合わせで開く。
+  await expect.poll(() => control.calls.some((u) => u.pathname.endsWith("/locate"))).toBe(true);
+  const panel = detail(page, phone);
+  if (phone) await page.getByRole("button", { name: "詳細を開く" }).click();
+  await expect(panel.getByText("照合済みの合成原文 1。")).toBeVisible();
+  if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+  await shot(page, info, "kb-find");
+  await area.getByRole("button", { name: "画面をクリア" }).click();
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(0);
+  await expect(area.getByText(/図は空です/)).toBeVisible();
+  await expectNoPageOverflow(page);
+});
+
+test("原文の関係は 1 回で取り切り、25 件ずつ展開して「さらに展開」で続きを出す", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  const control = await data(page);
+  await begin(page);
+  await page.getByRole("tab", { name: "一覧" }).click();
+  await page.getByRole("region", { name: "検索結果の一覧" }).getByRole("button", { name: /合成の原文 1 / }).click();
+  const panel = detail(page, phone);
+  await panel.getByRole("tab", { name: "関係", exact: true }).click();
+  // 関係の一覧は詳細の中でも共通のページング（25 件）。
+  await expect(panel.getByRole("region", { name: "関係の一覧" }).getByRole("listitem")).toHaveCount(25);
+  await panel.getByRole("button", { name: "関連を展開" }).click();
+  const canvas = canvasOf(page);
+  await expect(page.getByRole("tab", { name: "関係図" })).toHaveAttribute("aria-selected", "true");
+  // 25 件の結果に、図に無い隣接を 25 件まで足し、残りは「さらに展開」の点。
+  await expect.poll(() => graphCount(canvas, "nodes")).toBeGreaterThan(25);
+  const relationCalls = control.calls.filter((u) => u.pathname.endsWith("/relations"));
+  // 関係は 1 回の要求で取り切り、ページを繰り返して読まない（#5916）。
+  expect(relationCalls.length).toBeGreaterThan(0);
+  expect(relationCalls.every((u) => u.searchParams.get("limit") === "500" && u.searchParams.get("offset") === "0")).toBe(true);
+  await expectNoPageOverflow(page);
+});
+
+test("関係の読み込みの失敗は詳細の同じ場所で再試行でき、Wiki 権限の無い利用者は開けない", async ({ page }, info) => {
+  const control = await data(page, { calls: [], failRelations: true });
+  await begin(page);
+  await page.getByRole("tab", { name: "一覧" }).click();
+  await page.getByRole("region", { name: "検索結果の一覧" }).getByRole("button", { name: /合成の原文 1 / }).click();
+  const panel = detail(page, info.project.name === "mobile");
+  await panel.getByRole("tab", { name: "関係", exact: true }).click();
+  const retry = panel.getByRole("button", { name: /再試行|再読み込み/ });
+  await expect(retry).toBeVisible();
+  control.failRelations = false;
+  await retry.click();
+  await expect(panel.getByRole("region", { name: "関係の一覧" })).toBeVisible();
+  await page.route("**/api/auth/me", (r) => r.fulfill({ json: ok(dbUser({ permissions: ["menu.search"] })) }));
+  await page.reload();
+  await expect(page.locator("#wiki-question")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Wiki 検索" })).toHaveCount(0);
+});
+
+test("検索の条件の行の部品は同じ高さで、検索中の回転は 1 つだけ", { tag: "@responsive" }, async ({ page }) => {
+  await data(page);
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(/\/wiki-search\/profiles\/[^/]+\/search\?/, async (r) => { await pending; return r.fallback(); });
+  await page.goto("/wiki-search");
+  await selectSearchAnswerProfile(page, profiles[0].name);
   await page.locator("#wiki-question").fill("資料の確認方法");
   await page.getByRole("button", { name: "検索", exact: true }).click();
   const progress = page.getByTestId("wiki-wait-results");
-  await expect(progress.getByRole("timer")).toHaveText(/00:0[1-9]/);
-  await expect(progress.getByRole("timer")).toBeInViewport({ ratio: 1 });
-  await shot(page, info, "wiki-loading");
+  await expect(progress).toBeVisible();
+  await expect(progress).toHaveAttribute("data-processing-activity-icon", "none");
   release();
-  if (!phone) await page.getByRole("button", { name: "検索結果", exact: true }).click();
-  await result(page, 81).click();
-  await detail(page, phone).getByRole("button", { name: "質問に追加" }).click();
-  if (phone) await detail(page, phone).getByRole("button", { name: "選択を解除" }).click();
-  await page.getByRole("button", { name: "チャットで質問" }).click();
-  await page.getByRole("button", { name: "Wiki 検索に戻る" }).click();
-  await expect(page.locator("#wiki-question")).toHaveValue("資料の確認方法");
-  await expect(page.getByRole("list", { name: "Wiki で選んだ原文" })).toHaveCount(1);
-  await page.getByRole("button", { name: "新しい検索" }).click();
-  await expect(page.locator("#wiki-question")).toBeFocused();
-  await expect(page.locator("#wiki-question")).toHaveValue("");
-  await expect(page.getByText("質問を入力して原文を検索してください。")).toBeVisible();
-  await expect(page.getByRole("list", { name: "Wiki で選んだ原文" })).toHaveCount(0);
-  await page.getByText("詳細条件", { exact: true }).click();
-  await expect(page.locator("#wiki-search-method")).toContainText("キーワード");
-  await expect(page.locator("#wiki-search-kb")).toContainText(kbs[1].name);
-  await expect(page.locator("#wiki-search-profile")).toContainText(profiles[0].name);
-  await shot(page, info, "wiki-new");
-});
-
-test("サイドバー込みの 768px でもグラフの操作を表示し、幅が広がれば分割表示に戻る", async ({ page }) => {
-  await page.setViewportSize({ width: 768, height: 1024 });
-  await data(page);
-  await begin(page);
-  await expect(page.getByRole("button", { name: "一覧", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await result(page, 1).click();
-  const sheet = detail(page, true);
-  await expect(sheet).toBeVisible();
-  await sheet.getByRole("button", { name: "選択を解除" }).click();
-  await page.getByRole("button", { name: "関係図", exact: true }).click();
-  const graph = page.locator(".react-flow");
-  for (const name of ["拡大", "縮小", "全体表示", "選択を中心に表示", "前の表示に戻る"]) {
-    await expect(graph.getByRole("button", { name, exact: true })).toBeInViewport({ ratio: 1 });
-  }
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.getByRole("button", { name: "検索結果", exact: true }).click();
-  await result(page, 2).click();
-  await expect(detail(page, false)).toBeVisible();
-  await expectNoPageOverflow(page);
-});
-
-test("二つの展開元を持つ原文を保持し、向き別の関係と折りたたみを確認できる", { tag: "@responsive" }, async ({ page }, info) => {
-  const phone = info.project.name === "mobile";
-  await data(page);
-  const rel = (i: number, relation = "reference", direction = "outgoing") => ({ unit: unit(i), relation, direction, scope: "same_document" });
-  const byUnit = new Map([
-    [hash(1), [rel(1), rel(2)]],
-    [hash(2), [rel(3), rel(3, "exception"), rel(3, "prerequisite"), rel(3, "reference", "incoming"), rel(4)]],
-    [hash(3), [rel(3)]],
-  ]);
-  await page.route(/\/wiki-search\/profiles\/[^/]+\/units\/[^/]+\/relations\?/, async route => {
-    const url = new URL(route.request().url());
-    const items = byUnit.get(url.pathname.split("/").at(-2)!) ?? [];
-    return route.fulfill({ json: ok({ items, preview: items, total: items.length, has_more: false, counts: {} }) });
-  });
-  await begin(page);
-  if (phone) await page.getByRole("button", { name: "関係図", exact: true }).click();
-  const graph = page.locator(".react-flow");
-  const node = (n: number) => graph.locator('.react-flow__node[data-id="' + hash(n) + '"]');
-  const select = async (n: number) => { await node(n).focus(); await node(n).press("Enter"); };
-  const panel = detail(page, phone);
-  const camera = () => graph.locator(".react-flow__viewport").evaluate(el => (el as HTMLElement).style.transform);
-  await select(2);
-  await panel.getByRole("button", { name: "関連を展開" }).click();
-  await select(3);
-  await panel.getByRole("button", { name: "関連を展開" }).click();
-  await select(2);
-  await panel.getByRole("button", { name: "関連を折りたたむ" }).click();
-  await expect(node(4)).toHaveCount(1);
-  await expect(node(5)).toHaveCount(0);
-  await page.getByRole("button", { name: "折りたたみを元に戻す" }).click();
-  await expect(node(5)).toHaveCount(1);
-  await graph.getByRole("button", { name: "全体表示" }).click();
-  const previous = await camera();
-  await graph.getByRole("button", { name: "選択を中心に表示" }).click();
-  await expect.poll(camera).not.toBe(previous);
-  await graph.getByRole("button", { name: "前の表示に戻る" }).click();
-  await expect.poll(camera).toBe(previous);
-  const bundle = graph.locator(".graph-edge-count").filter({ hasText: "3 件" });
-  await expect.poll(() => bundle.evaluate(edge => {
-    const path = edge.querySelector<SVGPathElement>(".react-flow__edge-path")!;
-    const midpoint = path.getPointAtLength(path.getTotalLength() / 2).matrixTransform(path.getScreenCTM()!);
-    const label = edge.querySelector(".react-flow__edge-text")!.getBoundingClientRect();
-    return Math.hypot(label.x + label.width / 2 - midpoint.x, label.y + label.height / 2 - midpoint.y);
-  })).toBeLessThan(4);
-  await bundle.focus();
-  await bundle.press("Enter");
-  await expect(panel.getByRole("heading", { name: "関係 3 件" })).toBeVisible();
-  await expect(panel.getByRole("listitem")).toHaveCount(3);
-  await shot(page, info, "direction");
-});
-
-test("関係図は円と残件を描き、方向別に読み進めて元の表示へ戻る", { tag: "@responsive" }, async ({ page }, info) => {
-  const phone = info.project.name === "mobile";
-  await data(page);
-  const single = ["prerequisite", "continuation", "exception", "expected_result"].map((relation, i) => ({
-    unit: unit(i + 1), relation, direction: i === 2 ? "incoming" : "outgoing", scope: "same_document",
-  }));
-  const rows = [...single, ...Array.from({ length: 250 }, (_, i) => ({
-    unit: unit(i + 6), relation: "reference", direction: "outgoing", scope: "same_document",
-  }))];
-  const groups = [...single.map(({ relation, direction }) => ({ relation, direction, count: 1, neighbor_count: 1 })),
-    { relation: "reference", direction: "outgoing", count: 250, neighbor_count: 250 }];
-  await page.route(/\/wiki-search\/profiles\/[^/]+\/search\?/, r => r.fulfill({ json: ok({ items: [unit(0)], total: 1 }) }));
-  await page.route(/\/units\/[^/]+\/relations\?/, r => {
-    const url = new URL(r.request().url());
-    if (url.pathname.split("/").at(-2) !== hash(1)) return r.fulfill({ json: ok({ items: [], groups: [], counts: {}, preview: [], has_more: false, total: 0 }) });
-    const q = url.searchParams;
-    const subset = rows.filter(x => (!q.has("relation") || x.relation === q.get("relation")) && (!q.has("direction") || x.direction === q.get("direction")));
-    const offset = Number(q.get("offset")), limit = Number(q.get("limit"));
-    return r.fulfill({ json: ok({ items: subset.slice(offset, offset + limit), groups, counts: { prerequisite: 1, continuation: 1, exception: 1, expected_result: 1, reference: 250 },
-      preview: [...single, rows[4]],
-      connections: [
-        ...["reference", "continuation", "expected_result"].map(relation => ({ source_id: hash(2), target_id: hash(3), relation })),
-        { source_id: hash(3), target_id: hash(2), relation: "exception" },
-      ],
-      total: subset.length, has_more: offset + limit < subset.length }) });
-  });
-  await begin(page, false);
-  if (phone) await page.getByRole("button", { name: "関係図", exact: true }).click();
-  const graph = page.locator(".react-flow");
-  const root = graph.locator('.react-flow__node[data-id="' + hash(1) + '"]');
-  const group = graph.getByRole("group", { name: /参照のグループ/ });
-  await expect(group).toContainText("250");
-  await expect(graph.locator(".react-flow__edge.graph-edge-count")).toHaveCount(2);
-  await expect(graph.locator(".react-flow__edge.graph-edge-count").filter({ hasText: "1 件" })).toHaveCount(1);
-  await expect(root.locator(".graph-point-symbol")).toHaveCSS("border-radius", "50%");
-  await expect(graph.getByRole("searchbox", { name: "図の中を検索" })).toBeVisible();
-  await graph.scrollIntoViewIfNeeded();
-  const card = page.getByRole("heading", { name: /検索結果と関係/ }).locator("../..");
-  if (!phone) {
-    const rail = card.getByRole("button", { name: "検索結果", exact: true });
-    await expect(rail).toHaveAttribute("aria-pressed", "false");
-    await rail.click();
-    await expect(card.getByRole("heading", { name: "検索結果", exact: true })).toBeVisible();
-    await rail.click();
-    await expect(card.getByRole("heading", { name: "検索結果", exact: true })).toHaveCount(0);
-    const symbol = root.locator(".graph-point-symbol");
-    const before = await root.evaluate(el => el.style.transform);
-    await symbol.hover();
-    const bounds = (await symbol.boundingBox())!;
-    await page.mouse.down();
-    await page.mouse.move(bounds.x + bounds.width / 2 + 50, bounds.y + bounds.height / 2 + 30, { steps: 8 });
-    await page.mouse.up();
-    await expect.poll(() => root.evaluate(el => el.style.transform)).not.toBe(before);
-    await graph.getByRole("button", { name: "自動配置に戻す" }).click();
-    await expect.poll(() => root.evaluate(el => el.style.transform)).toBe(before);
-  }
-  if (process.env.WIKI_GRAPH_SHOTS) {
-    await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-parity.png" });
-    await shot(page, info, "graph-parity-page");
-  }
-  for (let i = 0; i < 8 && !(await graph.evaluate(el => el.hasAttribute("data-graph-overview"))); i++) {
-    await graph.getByRole("button", { name: "縮小", exact: true }).click();
-  }
-  await expect(group.locator(".graph-overview-label")).toHaveText("参照 · 250");
-  await expect(group.locator(".graph-overview-label")).toBeVisible();
-  await expect.poll(() => card.evaluate(el => {
-    const viewport = el.querySelector(".react-flow__viewport")!;
-    const percent = Math.round(new DOMMatrixReadOnly(getComputedStyle(viewport).transform).a * 100);
-    return el.querySelector("footer .tabular-nums")?.textContent === `表示倍率 ${percent}%`;
-  })).toBe(true);
-  await graph.getByRole("button", { name: "全体表示", exact: true }).click();
-  await group.focus();
-  await group.press("Enter");
-  const panel = detail(page, phone);
-  const expand = panel.getByRole("button", { name: "次の 6 件を展開" });
-  await expand.click();
-  await expect(group).toContainText("244");
-  if (process.env.WIKI_GRAPH_SHOTS) await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-expanded.png" });
-  await page.getByRole("button", { name: "操作を戻す", exact: true }).click();
-  await expect(group).toContainText("250");
-  await page.getByRole("button", { name: "グループ表示", exact: true }).click();
-  await expect(graph.locator(".react-flow__node")).toHaveCount(256);
-  // 256 節点でも全体表示は読める縮尺（0.8）を下限にし、極小にして収めない（#5520・#5908）。
-  await graph.getByRole("button", { name: "全体表示", exact: true }).click();
-  await expect.poll(() => readableZoom(graph)).toBeGreaterThanOrEqual(0.8);
-  await expectNoPageOverflow(page);
-  if (process.env.WIKI_GRAPH_SHOTS) await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-all-256.png" });
-});
-
-test("総覧で近接する検索一致の名称が重ならない", { tag: "@responsive" }, async ({ page }, info) => {
-  await data(page);
-  await begin(page);
-  await result(page, 1).click();
-  const panel = detail(page, info.project.name === "mobile");
-  await panel.getByRole("button", { name: /参照 135/ }).click();
-  await panel.getByRole("button", { name: "関連を展開" }).click();
-  const graph = page.locator(".react-flow");
-  const labels = graph.locator(".graph-overview-label");
-  await expect(labels).toHaveCount(5);
-  const readable = () => labels.evaluateAll(items => {
-    const canvas = items[0].closest(".react-flow")!.getBoundingClientRect();
-    const boxes = items.map(item => item.getBoundingClientRect());
-    return boxes.every((a, i) => a.width > 0 && a.height > 0 &&
-      a.left >= canvas.left - 1 && a.right <= canvas.right + 1 && a.top >= canvas.top - 1 && a.bottom <= canvas.bottom + 1 &&
-      boxes.slice(0, i).every(b => a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1));
-  });
-  const zoomOut = graph.getByRole("button", { name: "縮小", exact: true });
-  for (let i = 0; i < 10; i++) await zoomOut.click();
-  await expect.poll(readable).toBe(true);
-  await graph.getByRole("button", { name: "選択を中心に表示" }).click();
-  await graph.getByRole("button", { name: "拡大", exact: true }).click();
-  await graph.getByRole("button", { name: "全体表示" }).click();
-  for (let i = 0; i < 8 && !(await graph.evaluate(el => el.hasAttribute("data-graph-overview"))); i++) await zoomOut.click();
-  await expect(graph).toHaveAttribute("data-graph-overview", "");
-  await expect.poll(readable).toBe(true);
-});
-
-test("検索から関係まで時計を引き継ぎ、共有する失敗を一か所で再試行できる", { tag: "@responsive" }, async ({ page }, info) => {
-  const phone = info.project.name === "mobile";
-  await data(page);
-  let finishSearch!: () => void;
-  let finishRing!: () => void;
-  const pendingSearch = new Promise<void>(resolve => { finishSearch = resolve; });
-  const pendingRing = new Promise<void>(resolve => { finishRing = resolve; });
-  await page.route(/\/wiki-search\/profiles\/[^/]+\/search\?/, async route => {
-    await pendingSearch;
-    return route.fallback();
-  });
-  let fail = true;
-  await page.route(/\/units\/[^/]+\/relations\?/, async route => {
-    await pendingRing;
-    return fail ? route.fulfill({ status: 503, json: { detail: "一時的な失敗" } }) : route.fallback();
-  });
-  await begin(page, false);
-  const progress = page.getByTestId("wiki-wait-results");
-  await expect(progress.getByRole("timer")).toHaveText(/00:0[1-9]/);
-  await progress.evaluate(el => el.setAttribute("data-same-operation", "true"));
-  if (phone) await page.getByRole("button", { name: "関係図", exact: true }).click();
-  finishSearch();
-  await expect(progress).toContainText("関係を読み込んでいます");
-  await expect(progress).toHaveAttribute("data-same-operation", "true");
-  await expect(page.getByRole("timer")).toHaveCount(1);
-  finishRing();
-  const retry = page.getByRole("button", { name: /再試行|再読み込み/ });
-  await expect(retry).toHaveCount(1);
-  await expect(page.locator(".react-flow__node").first()).toBeVisible();
-  if (phone) {
-    const root = page.locator(".react-flow__node").first();
-    await root.focus();
-    await root.press("Enter");
-  }
-  const panel = detail(page, phone);
-  await panel.getByRole("tab", { name: "関係", exact: true }).click();
-  await expect(panel.getByRole("button", { name: /再試行|再読み込み/ })).toBeVisible();
-  await expect(retry).toHaveCount(1);
-  fail = false;
-  await retry.click();
-  await expect(panel.getByRole("button", { name: /参照/ }).first()).toBeVisible();
-  await expect(retry).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "新しい検索を開始" })).toBeVisible();
+  const heights = await Promise.all(["新しい検索を開始", "検索"].map((name) => page.getByRole("button", { name, exact: true }).evaluate((el) => el.getBoundingClientRect().height)));
+  expect(Math.abs(heights[0] - heights[1])).toBeLessThanOrEqual(1);
 });
