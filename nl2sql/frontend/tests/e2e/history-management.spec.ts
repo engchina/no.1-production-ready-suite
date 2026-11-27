@@ -866,6 +866,8 @@ test("一覧の読み込みに失敗したら一覧の位置に再試行付き�
   await expect(alert.locator("details")).not.toHaveAttribute("open", "");
   // 取得できていない条件の結果を「0 件」と取り違えさせない。
   await expect(page.getByText("条件に一致する実行がありません")).toHaveCount(0);
+  // 行の無い表の見出しも残さない（一覧の位置は失敗の表示だけ。#5963）。
+  await expect(table(page)).toHaveCount(0);
   failing = false;
   await error.getByRole("button", { name: "再試行" }).click();
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
