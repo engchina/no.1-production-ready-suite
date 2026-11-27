@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypedDict
 
 from fastapi import HTTPException
 
@@ -32,6 +32,10 @@ class WikiHandoff:
     async def recheck(self, oracle: OracleClient, filters: Mapping[str, str]) -> None:
         current = await WikiExplorer.for_profile(oracle, self.profile_id)
         await current.selected(self.refs, filters)
+
+
+class WikiHandoffOptions(TypedDict, total=False):
+    wiki_handoff: WikiHandoff
 
 
 @dataclass

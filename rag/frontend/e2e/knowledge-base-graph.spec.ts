@@ -308,3 +308,28 @@ test(
     await expect(page.getByRole("link", { name: "Wiki 検索" })).toHaveCount(0);
   },
 );
+
+test("複数の文書から 40 原文を持ち込んでも入力・送信とプロファイルが見える",{tag:"@responsive"},async({page},info)=>{
+  test.setTimeout(90000);
+  const phone=info.project.name==="mobile";
+  await data(page);await begin(page);
+  const panel=detail(page,phone);
+  for(let p=0;p<8;p++){
+    if(p)await page.getByRole("navigation",{name:"検索結果",exact:true}).getByRole("button",{name:"次へ",exact:true}).click();
+    for(const index of hitIndexes.slice(p*5,(p+1)*5)){
+      await result(page,index+1).click();
+      await panel.getByRole("button",{name:"質問に追加"}).click();
+      if(phone)await panel.getByRole("button",{name:"選択を解除"}).click();
+    }
+  }
+  await page.getByRole("button",{name:"チャットで質問"}).click();
+  const picked=page.getByRole("list",{name:"Wiki で選んだ原文"});
+  await expect(picked.getByRole("listitem")).toHaveCount(40);
+  await expect(page.locator("#chat-search-answer-profile")).toContainText(profiles[0].name);
+  await expect(page.getByRole("button",{name:"送信",exact:true})).toBeInViewport();
+  const size=await picked.evaluate(el=>({height:el.clientHeight,total:el.scrollHeight,row:el.firstElementChild!.getBoundingClientRect().height,gap:parseFloat(getComputedStyle(el).rowGap)}));
+  expect(size.height).toBeLessThanOrEqual(size.row*2+size.gap+1);
+  expect(size.total).toBeGreaterThan(size.height);
+  await expectNoPageOverflow(page);
+  await shot(page,info,"chat-40");
+});

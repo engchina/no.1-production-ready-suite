@@ -1,6 +1,7 @@
 """Wiki の参照範囲・順位融合・原文の引き継ぎを合成の索引で確認する。"""
 
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,7 +17,7 @@ from app.rag.request_context import (
     set_audit_request_context,
 )
 from app.rag.search_answer_profile_config import SearchAnswerProfileConfig
-from app.rag.wiki_explorer import WikiExplorer, WikiHandoff
+from app.rag.wiki_explorer import Method, WikiExplorer, WikiHandoff
 from app.schemas.knowledge_base import KnowledgeBaseRef
 from app.schemas.search import RetrievedChunk
 from app.schemas.wiki_graph import WikiSourceRef
@@ -24,11 +25,11 @@ from app.security.permissions import MENU_WIKI_SEARCH, ROUTE_PERMISSIONS
 from tests.test_wiki_graph_api import PAGES, U
 
 
-def kb(id):
+def kb(id: str) -> KnowledgeBaseRef:
     return KnowledgeBaseRef(id=id, name=id)
 
 
-async def test_profile_access_and_manual_search_ignore_automatic_switches():
+async def test_profile_access_and_manual_search_ignore_automatic_switches() -> None:
     cfg = SearchAnswerProfileConfig(knowledge_base_ids=["a", "b", "c"])
     profile = SimpleNamespace(
         status="ACTIVE",
@@ -38,7 +39,7 @@ async def test_profile_access_and_manual_search_ignore_automatic_switches():
             for id, status in [("a", "ACTIVE"), ("b", "ACTIVE"), ("c", "ARCHIVED")]
         ],
     )
-    oracle = SimpleNamespace(get_search_answer_profile=AsyncMock(return_value=profile))
+    oracle: Any = SimpleNamespace(get_search_answer_profile=AsyncMock(return_value=profile))
     token = set_audit_request_context(
         AuditRequestContext(
             allowed_search_answer_profile_ids=frozenset({"p"}),
@@ -58,7 +59,9 @@ async def test_profile_access_and_manual_search_ignore_automatic_switches():
 
 
 @pytest.mark.parametrize("method", ["hybrid", "vector", "keyword"])
-async def test_search_uses_selected_channels_and_scoped_memberships(monkeypatch, method):
+async def test_search_uses_selected_channels_and_scoped_memberships(
+    monkeypatch: pytest.MonkeyPatch, method: Method
+) -> None:
     pages = [PAGES["a1"], PAGES["b1"]]
     items = [
         {
@@ -85,7 +88,7 @@ async def test_search_uses_selected_channels_and_scoped_memberships(monkeypatch,
         (OciGenAiClient, "embed", embed),
     ]:
         monkeypatch.setattr(obj, name, mock)
-    oracle = SimpleNamespace(
+    oracle: Any = SimpleNamespace(
         knowledge_base_ids_by_retrieved_document=AsyncMock(
             return_value={"doc-a": {"a"}, "doc-b": {"b"}}
         )
@@ -106,7 +109,9 @@ async def test_search_uses_selected_channels_and_scoped_memberships(monkeypatch,
     assert keyword.await_count == int(method != "vector")
 
 
-async def test_handoff_rechecks_hash_bytes_and_access_after_selection(monkeypatch):
+async def test_handoff_rechecks_hash_bytes_and_access_after_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     page = PAGES["a1"]
     ref = WikiSourceRef(unit_id=page.unit.unit_id, source_hash=page.unit.source_hash)
     chunk = RetrievedChunk(
@@ -121,7 +126,7 @@ async def test_handoff_rechecks_hash_bytes_and_access_after_selection(monkeypatc
     originals = AsyncMock(return_value=[chunk])
     monkeypatch.setattr(WikiGraphStore, "pages_by_unit", rows)
     monkeypatch.setattr(WikiStore, "read_sources", originals)
-    scope = WikiExplorer(object(), [kb("a")], Settings())
+    scope = WikiExplorer(cast(Any, object()), [kb("a")], Settings())
     first = await scope.original(ref.unit_id)
     assert first.chunks[0].text == page.unit.text and first.context != page.unit.text
     assert await scope.selected([ref], {"knowledge_base_id": "a,b"}) == [chunk]

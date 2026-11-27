@@ -308,7 +308,8 @@ class WikiGraphStore:
         paths = await self._reference_targets(kb_id, sorted(targets))
         for row, docs in outgoing:
             section = str(row.get("target_section") or "")
-            for target in docs or [None]:
+            matches: list[str | None] = [*docs] or [None]
+            for target in matches:
                 items.append(
                     {
                         "direction": "outgoing",

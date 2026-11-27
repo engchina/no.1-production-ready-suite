@@ -953,10 +953,13 @@ for (const tool of ["rag_chat","rag_search"]) {
     const sheet=page.getByRole("dialog");
     await sheet.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
     await sheet.getByRole("checkbox",{name:"操作ガイド A.pdf"}).check();
+    const selected=sheet.getByRole("list",{name:"選択した資料"});
+    await expect(selected.getByRole("listitem")).toHaveCount(1);
     if(process.env.AGENT_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.AGENT_E2E_SCREENSHOT_DIR+"/"+tool+"-files-"+testInfo.project.name+".png"});
     await sheet.getByRole("button",{name:"選んだ資料を残して、ほかの候補を探す"}).click();
     await expect(sheet.getByRole("checkbox",{name:"確認手順 C.pdf"})).not.toBeChecked();
     await sheet.getByRole("checkbox",{name:"確認手順 C.pdf"}).check();
+    await expect(selected.getByRole("listitem")).toHaveCount(2);
     await sheet.getByRole("button",{name:"選んだ資料だけで再回答"}).click();
     await expect(page.getByText(nextAnswer,{exact:true})).toBeVisible();
     if(process.env.AGENT_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.AGENT_E2E_SCREENSHOT_DIR+"/"+tool+"-answer-"+testInfo.project.name+".png"});

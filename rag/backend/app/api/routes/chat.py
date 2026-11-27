@@ -123,7 +123,7 @@ from app.rag.support_guide_runtime import (
 )
 from app.rag.trace_bodies import capture_trace_bodies, read_saved_trace_body
 from app.rag.trace_store import AnswerTrace, TraceSnapshot, TraceTerminal, trace_snapshot
-from app.rag.wiki_explorer import WikiExplorer, WikiHandoff
+from app.rag.wiki_explorer import WikiExplorer, WikiHandoff, WikiHandoffOptions
 from app.schemas.chat import (
     ChatAnswerCancelResult,
     ChatClarificationRecord,
@@ -1159,6 +1159,9 @@ async def _generate_chat_answer(
         llm = OciEnterpriseAiClient(settings=turn.settings, model_id=model_id or None)
         # llm は会話履歴による質問の書き換えに使う。回答は回答エンジンが自分でモデルを呼ぶので、
         # 列のモデルを別に渡す(#593)。
+        handoff: WikiHandoffOptions = (
+            {"wiki_handoff": turn.wiki_handoff} if turn.wiki_handoff else {}
+        )
         pipeline = RagPipeline(
             settings=turn.settings,
             llm=llm,
@@ -1169,7 +1172,7 @@ async def _generate_chat_answer(
             answer_notice=current_answer_notice,
             # 会話の添付（#2517）の節・行を根拠の候補に足す。
             attachment_conversation_id=turn.conversation_id,
-            **({"wiki_handoff": turn.wiki_handoff} if turn.wiki_handoff else {}),
+            **handoff,
             history_question_prepared=turn.history_question_prepared,
             prepared_history_rewrite=turn.prepared_history_rewrite,
             flow=EXPANDED_FLOW,

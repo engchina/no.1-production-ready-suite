@@ -126,7 +126,7 @@ from app.schemas.search import (
 )
 
 if TYPE_CHECKING:
-    from app.rag.wiki_explorer import WikiHandoff
+    from app.rag.wiki_explorer import WikiHandoff, WikiHandoffOptions
 
 logger = logging.getLogger(__name__)
 
@@ -833,6 +833,9 @@ class RagPipeline:
         effective_scope = scope_with_history_confirmations(
             self._scope, self._selected_history_facts
         )
+        handoff: WikiHandoffOptions = (
+            {"wiki_handoff": self._wiki_handoff} if self._wiki_handoff else {}
+        )
         engine = AnswerEngine(
             self._settings,
             oracle=self._oracle,
@@ -841,7 +844,7 @@ class RagPipeline:
             answer_model_id=self._answer_model_id,
             scope=effective_scope,
             attachment_chunks=attachment_chunks,
-            **({"wiki_handoff": self._wiki_handoff} if self._wiki_handoff else {}),
+            **handoff,
             degraded=degraded,
             materialize_images=self._materialize_images,
             expand=self._flow == EXPANDED_FLOW,

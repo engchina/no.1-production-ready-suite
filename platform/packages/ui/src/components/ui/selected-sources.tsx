@@ -58,8 +58,8 @@ export function SelectedSources({
               className="flex h-[var(--source-row)] min-w-0 max-w-full items-center gap-1 rounded-control border border-border bg-surface pl-2 text-xs"
             >
               <BookOpen size={14} className="shrink-0" aria-hidden="true" />
-              <span className="truncate">{item.name}</span>
-              {item.location && <span className="shrink-0 text-fg-muted">· {item.location}</span>}
+              <span className="min-w-0 truncate" title={item.name}>{item.name}</span>
+              {item.location && <span className="max-w-[45%] shrink-0 truncate text-fg-muted" title={item.location}>· {item.location}</span>}
               <Button
                 iconOnly
                 size="sm"
