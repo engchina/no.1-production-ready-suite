@@ -208,7 +208,10 @@ function Canvas({ scene, root, matches, selected, edge, onNode, onEdge }: Props)
           if (e) onEdge(e);
         }}
       >
-        <GraphCanvasControls key={root} selectedId={selected ?? null} selectedEdgeId={edge}
+        <GraphCanvasControls
+          key={root}
+          selectedId={selected && positions.has(selected) ? selected : null}
+          selectedEdgeId={edges.some((item) => item.id === edge) ? edge : undefined}
           labels={{
             zoomIn: t("wiki.graph.zoomIn"),
             zoomOut: t("wiki.graph.zoomOut"),

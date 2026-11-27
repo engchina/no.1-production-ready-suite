@@ -440,10 +440,12 @@ function OntologyDetailsPanel({
   graph,
   node,
   edge,
+  members,
   onSelectNode,
   onSelectEdge,
 }: {
-  onSelectEdge: (id: string) => void;
+  members?: readonly string[];
+  onSelectEdge: (id: string, members?: readonly string[]) => void;
   graph: OntologyGraph;
   node: OntologyNode | null;
   edge: OntologyEdge | null;
@@ -461,6 +463,7 @@ function OntologyDetailsPanel({
       graph={graph}
       node={node}
       edge={edge}
+      members={members}
       onSelectEdge={onSelectEdge}
       emptyContent={
         <div className="grid gap-3">
@@ -574,6 +577,7 @@ export function OntologyQueryPlayground({
   const [result, setResult] = useState<PlaygroundResult | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [selectedMembers, setSelectedMembers] = useState<readonly string[]>();
   const [graphViewMode, setGraphViewMode] = useState<OntologyGraphViewMode>("all");
   const [mobileGraphOpen, setMobileGraphOpen] = useState(false);
   const [serverSearch, setServerSearch] = useState<ServerSearchState>({ status: "idle" });
@@ -601,7 +605,8 @@ export function OntologyQueryPlayground({
     setSelectedNodeId(nodeId);
     setSelectedEdgeId(null);
   };
-  const selectEdge = (edgeId: string | null) => {
+  const selectEdge = (edgeId: string | null, members?: readonly string[]) => {
+    setSelectedMembers(members);
     setSelectedEdgeId(edgeId);
     setSelectedNodeId(null);
   };
@@ -958,6 +963,7 @@ export function OntologyQueryPlayground({
                       workspaceKey={`playground:${profileId}`}
                       selectedNodeId={selectedNodeId}
                       selectedEdgeId={selectedEdgeId}
+                      selectedMembers={selectedMembers}
                       onSelectNode={selectNode}
                       onSelectEdge={selectEdge}
                       highlightNodeIds={highlightNodeIds}
@@ -978,6 +984,7 @@ export function OntologyQueryPlayground({
                   graph={graph}
                   node={selectedNode}
                   edge={selectedEdge}
+                  members={selectedMembers}
                   onSelectEdge={selectEdge}
                   onSelectNode={selectNode}
                 />

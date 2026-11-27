@@ -149,12 +149,14 @@ function SqlOntologyGroundingPanel({
   const [graphViewMode, setGraphViewMode] = useState<OntologyGraphViewMode>("grounding");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [selectedMembers, setSelectedMembers] = useState<readonly string[]>();
   // ノードと線（関係）は同じ詳細のパネルに出すので、片方を選んだら他方を外す（#1788）。
   const selectNode = (nodeId: string | null) => {
     setSelectedNodeId(nodeId);
     setSelectedEdgeId(null);
   };
-  const selectEdge = (edgeId: string | null) => {
+  const selectEdge = (edgeId: string | null, members?: readonly string[]) => {
+    setSelectedMembers(members);
     setSelectedEdgeId(edgeId);
     setSelectedNodeId(null);
   };
@@ -255,6 +257,7 @@ function SqlOntologyGroundingPanel({
                     graph={ontologyGraph}
                     selectedNodeId={selectedNodeId}
                     selectedEdgeId={selectedEdgeId}
+                    selectedMembers={selectedMembers}
                     onSelectNode={selectNode}
                     onSelectEdge={selectEdge}
                     highlightNodeIds={grounding.highlightNodeIds}
@@ -269,6 +272,8 @@ function SqlOntologyGroundingPanel({
                   graph={ontologyGraph}
                   node={selectedNode}
                   edge={selectedEdge}
+                  members={selectedMembers}
+                  sqlMatches={grounding.highlightEdgeIds}
                   onSelectEdge={selectEdge}
                   testId="nl2sql-sql-grounding-details"
                   emptyContent={

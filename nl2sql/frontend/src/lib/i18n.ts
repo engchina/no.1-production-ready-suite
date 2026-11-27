@@ -1215,6 +1215,8 @@ const nl2sqlJa = {
   "nl2sql.ontology.graphExpand": "次の {count} 件を展開",
   "nl2sql.ontology.graphCollapse": "関連を折りたたむ",
   "nl2sql.ontology.graphUndoCollapse": "折りたたみを元に戻す",
+  "nl2sql.ontology.sqlRelationMatched": "この SQL に一致",
+  "nl2sql.ontology.sqlRelationContext": "周辺の関係",
   "nl2sql.ontology.graphBundle": "関係 {count} 件",
   "nl2sql.ontology.graphResetLayout": "レイアウトをリセット",
   "nl2sql.ontology.graphSelectionAnnouncement": "選択中: {label}",

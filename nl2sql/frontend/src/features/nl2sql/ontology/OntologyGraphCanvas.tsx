@@ -65,8 +65,9 @@ interface OntologyGraphCanvasProps {
   workspaceKey?: string;
   selectedNodeId?: string | null;
   selectedEdgeId?: string | null;
+  selectedMembers?: readonly string[];
   onSelectNode?: (nodeId: string | null) => void;
-  onSelectEdge?: (edgeId: string) => void;
+  onSelectEdge?: (edgeId: string, members?: readonly string[]) => void;
   /** 決定論 NL Playground 等のハイライト。指定時は非対象を減光し、対象の枠を強調する。 */
   highlightNodeIds?: string[];
   highlightEdgeIds?: string[];
@@ -127,6 +128,7 @@ interface OntologyNodeData extends Record<string, unknown> {
 
 /** smoothstep の pathOptions(stepPosition 等)を持てる Edge のローカル拡張。 */
 type OntologyFlowEdge = Edge & {
+  members?: readonly string[];
   pathOptions?: { borderRadius?: number; offset?: number; stepPosition?: number };
 };
 
@@ -357,6 +359,7 @@ function OntologyFlow({
   workspaceKey = "canvas",
   selectedNodeId,
   selectedEdgeId,
+  selectedMembers,
   onSelectNode,
   onSelectEdge,
   highlightNodeIds,
@@ -399,16 +402,25 @@ function OntologyFlow({
     defaultViewMode ?? "all"
   );
   const currentViewMode = viewMode ?? internalViewMode;
-  const cameras = useRef(new Map<OntologyGraphViewMode, { viewport: Viewport; node?: string | null; edge?: string | null; positions: Map<string, GraphPoint> }>());
+  const cameras = useRef(new Map<OntologyGraphViewMode, {
+    viewport: Viewport;
+    node?: string | null;
+    edge?: string | null;
+    members?: readonly string[];
+    positions: Map<string, GraphPoint>;
+  }>());
   const switchingView = useRef(false);
   const overview = useStore((store) => store.transform[2] < 0.5);
   const changeViewMode = (nextMode: OntologyGraphViewMode) => {
     if (nextMode === currentViewMode) return;
-    cameras.current.set(currentViewMode, { viewport: flow.getViewport(), node: selectedNodeId, edge: selectedEdgeId, positions: positionOverrides });
+    cameras.current.set(currentViewMode, {
+      viewport: flow.getViewport(), node: selectedNodeId, edge: selectedEdgeId,
+      members: selectedMembers, positions: positionOverrides,
+    });
     switchingView.current = true;
     const saved = cameras.current.get(nextMode);
     setPositionOverrides(saved?.positions ?? new Map());
-    if (saved?.edge && !saved.node) onSelectEdge?.(saved.edge);
+    if (saved?.edge && !saved.node) onSelectEdge?.(saved.edge, saved.members);
     else onSelectNode?.(saved?.node ?? null);
     setInternalViewMode(nextMode);
     onViewModeChange?.(nextMode);
@@ -829,11 +841,12 @@ function OntologyFlow({
     const pairSeen = new Map<string, number>();
 
     return prepared.map(({ edge, handles }) => {
-      const highlighted =
-        emphasis.highlightEdges.has(edge.id) || emphasis.searchEdges.has(edge.id);
       const selected = edge.id === selectedEdgeId;
       const members = bundles.get(JSON.stringify([edge.source_node_id, edge.target_node_id]))!;
       const bundleCount = overview && members.length > 1 ? members.length : 0;
+      const drawn = bundleCount ? members : [edge];
+      const grounded = drawn.some((item) => emphasis.highlightEdges.has(item.id));
+      const highlighted = grounded || drawn.some((item) => emphasis.searchEdges.has(item.id));
       const reverse = bundles.has(JSON.stringify([edge.target_node_id, edge.source_node_id]));
       const showFullLabel = highlighted || selected || edge.id === hoveredEdgeId;
       // ER 図流: join を持つ関係は hover を待たずカーディナリティを常時表示する
@@ -885,10 +898,11 @@ function OntologyFlow({
         ...(edgeType ? { type: edgeType } : {}),
         ...(pathOptions ? { pathOptions } : {}),
         ...(edgeData ? { data: edgeData } : {}),
+        members: bundleCount ? members.map((item) => item.id) : undefined,
         className: bundleCount ? "graph-edge-count" : undefined,
         label: bundleCount ? t("nl2sql.ontology.graphBundle", { count: bundleCount }) : showFullLabel ? edge.relationship_name_ja : persistentLabel || undefined,
         ariaLabel: `${bundleCount ? t("nl2sql.ontology.graphBundle", { count: bundleCount }) : edge.relationship_name_ja}${
-          emphasis.highlightEdges.has(edge.id) ? t("nl2sql.ontology.edgeGroundedSuffix") : ""
+          grounded ? t("nl2sql.ontology.edgeGroundedSuffix") : ""
         }`,
         markerEnd: GRAPH_EDGE_MARKER,
         // hover/選択中のエッジラベルは他エッジより前面に出す
@@ -1002,7 +1016,7 @@ function OntologyFlow({
         onSelectNode={onSelectNode}
         onNodeMouseEnter={(_event, node) => setHoveredNodeId(node.id)}
         onNodeMouseLeave={() => setHoveredNodeId(null)}
-        onSelectEdge={onSelectEdge}
+        onSelectEdge={(id) => onSelectEdge?.(id, edges.find((item) => item.id === id)?.members)}
         onEdgeMouseEnter={(_event, edge) => setHoveredEdgeId(edge.id)}
         onEdgeMouseLeave={() => setHoveredEdgeId(null)}
         miniMap={visibleGraph.nodes.length > 12 ? {
@@ -1014,7 +1028,17 @@ function OntologyFlow({
         } : false}
       >
         <LaneOverlays lanes={semanticLayout.lanes} />
-        <GraphCanvasControls key={currentViewMode} selectedId={selectedNodeId ?? null} selectedEdgeId={selectedEdgeId} labels={{ zoomIn: t("nl2sql.ontology.graphZoomIn"), zoomOut: t("nl2sql.ontology.graphZoomOut"), fit: t("nl2sql.ontology.graphFit"), reset: t("nl2sql.ontology.graphResetLayout") }} onFit={() => fitAll()} onReset={resetLayout} resetDisabled={positionOverrides.size === 0} resetTestId="ontology-graph-reset-layout" />
+        <GraphCanvasControls
+          key={currentViewMode}
+          selectedId={selectedNodeId && effectivePositions.has(selectedNodeId) ? selectedNodeId : null}
+          selectedEdgeId={edges.some((item) => item.id === selectedEdgeId) ? selectedEdgeId : undefined}
+          labels={{
+            zoomIn: t("nl2sql.ontology.graphZoomIn"), zoomOut: t("nl2sql.ontology.graphZoomOut"),
+            fit: t("nl2sql.ontology.graphFit"), reset: t("nl2sql.ontology.graphResetLayout"),
+          }}
+          onFit={() => fitAll()} onReset={resetLayout}
+          resetDisabled={positionOverrides.size === 0} resetTestId="ontology-graph-reset-layout"
+        />
       </GraphCanvas>}
       <OntologyGraphLegend
         presentGroupIds={presentLegendGroupIds}

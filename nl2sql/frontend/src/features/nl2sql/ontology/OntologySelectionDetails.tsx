@@ -154,6 +154,8 @@ export function OntologySelectionDetailsPanel({
   node,
   edge,
   emptyContent,
+  members,
+  sqlMatches,
   onSelectEdge,
   testId = "ontology-selection-details-panel",
 }: {
@@ -161,12 +163,18 @@ export function OntologySelectionDetailsPanel({
   node: OntologyNode | null;
   edge: OntologyEdge | null;
   emptyContent?: ReactNode;
-  onSelectEdge?: (id: string) => void;
+  members?: readonly string[];
+  sqlMatches?: readonly string[];
+  onSelectEdge?: (id: string, members?: readonly string[]) => void;
   testId?: string;
 }) {
   const titleId = useId();
-  const parallel = useMemo(() => edge && !node ? graph.edges.filter((candidate) =>
-    candidate.source_node_id === edge.source_node_id && candidate.target_node_id === edge.target_node_id) : [], [graph, edge, node]);
+  const parallel = useMemo(() => {
+    if (!edge || node || !members?.includes(edge.id)) return [];
+    const ids = new Set(members);
+    return graph.edges.filter((item) => ids.has(item.id));
+  }, [graph.edges, edge, node, members]);
+  const sqlLabel = (id: string) => t(sqlMatches?.includes(id) ? "nl2sql.ontology.sqlRelationMatched" : "nl2sql.ontology.sqlRelationContext");
   const title = node
     ? t("ontologyPlayground.inspector.nodeDetails")
     : edge
@@ -184,10 +192,11 @@ export function OntologySelectionDetailsPanel({
         <h3 id={titleId} className="text-sm font-semibold text-fg">
           {title}
         </h3>
+        {edge && !node && sqlMatches && <StatusBadge icon={false} variant={sqlMatches.includes(edge.id) ? "info" : "neutral"} label={sqlLabel(edge.id)} />}
       </div>
       {edge && parallel.length > 1 && onSelectEdge && <SelectField id={titleId + "-relations"} label={t("nl2sql.ontology.graphBundle", { count: parallel.length })}
-        value={edge.id} width="full" onValueChange={onSelectEdge} options={parallel.map((item) => ({
-          value: item.id, label: [item.relationship_name_ja, cardinalityShortLabel(item.cardinality)].filter(Boolean).join(" · "),
+        value={edge.id} width="full" onValueChange={(id) => onSelectEdge(id, members)} options={parallel.map((item) => ({
+          value: item.id, label: [item.relationship_name_ja, cardinalityShortLabel(item.cardinality), sqlMatches ? sqlLabel(item.id) : null].filter(Boolean).join(" · "),
         }))} />}
       {node ? (
         <OntologyNodeDetails node={node} />
