@@ -609,6 +609,8 @@ test("関係図は円と残件を描き、方向別に読み進めて元の表�
     await page.mouse.move(bounds.x + bounds.width / 2 + 50, bounds.y + bounds.height / 2 + 30, { steps: 8 });
     await page.mouse.up();
     await expect.poll(() => root.evaluate(el => el.style.transform)).not.toBe(before);
+    await graph.getByRole("button", { name: "自動配置に戻す" }).click();
+    await expect.poll(() => root.evaluate(el => el.style.transform)).toBe(before);
   }
   if (process.env.WIKI_GRAPH_SHOTS) {
     await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-parity.png" });
@@ -674,4 +676,48 @@ test("総覧で近接する検索一致の名称が重ならない", { tag: "@re
   for (let i = 0; i < 8 && !(await graph.evaluate(el => el.hasAttribute("data-graph-overview"))); i++) await zoomOut.click();
   await expect(graph).toHaveAttribute("data-graph-overview", "");
   await expect.poll(readable).toBe(true);
+});
+
+test("検索から関係まで時計を引き継ぎ、共有する失敗を一か所で再試行できる", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  await data(page);
+  let finishSearch!: () => void;
+  let finishRing!: () => void;
+  const pendingSearch = new Promise<void>(resolve => { finishSearch = resolve; });
+  const pendingRing = new Promise<void>(resolve => { finishRing = resolve; });
+  await page.route(/\/wiki-search\/profiles\/[^/]+\/search\?/, async route => {
+    await pendingSearch;
+    return route.fallback();
+  });
+  let fail = true;
+  await page.route(/\/units\/[^/]+\/relations\?/, async route => {
+    await pendingRing;
+    return fail ? route.fulfill({ status: 503, json: { detail: "一時的な失敗" } }) : route.fallback();
+  });
+  await begin(page, false);
+  const progress = page.getByTestId("wiki-wait-results");
+  await expect(progress.getByRole("timer")).toHaveText(/00:0[1-9]/);
+  await progress.evaluate(el => el.setAttribute("data-same-operation", "true"));
+  if (phone) await page.getByRole("button", { name: "関係図", exact: true }).click();
+  finishSearch();
+  await expect(progress).toContainText("関係を読み込んでいます");
+  await expect(progress).toHaveAttribute("data-same-operation", "true");
+  await expect(page.getByRole("timer")).toHaveCount(1);
+  finishRing();
+  const retry = page.getByRole("button", { name: /再試行|再読み込み/ });
+  await expect(retry).toHaveCount(1);
+  await expect(page.locator(".react-flow__node").first()).toBeVisible();
+  if (phone) {
+    const root = page.locator(".react-flow__node").first();
+    await root.focus();
+    await root.press("Enter");
+  }
+  const panel = detail(page, phone);
+  await panel.getByRole("tab", { name: "関係", exact: true }).click();
+  await expect(panel.getByRole("button", { name: /再試行|再読み込み/ })).toBeVisible();
+  await expect(retry).toHaveCount(1);
+  fail = false;
+  await retry.click();
+  await expect(panel.getByRole("button", { name: /参照/ }).first()).toBeVisible();
+  await expect(retry).toHaveCount(0);
 });

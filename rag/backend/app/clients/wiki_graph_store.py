@@ -23,6 +23,7 @@ from app.clients.oracle import (
     _oracle_in_predicate,
     _oracle_retrieval_where,
 )
+from app.clients.oracle_read_stats import read_lobs_as_values
 from app.clients.wiki_graph_index import section_id as section_id
 from app.clients.wiki_reference_index import DocumentNames, ReferenceTargets
 from app.clients.wiki_store import WIKI_PAGE_FROM, WIKI_PUBLISHED_SQL
@@ -480,13 +481,14 @@ class WikiGraphStore:
             return ReferenceTargets([])
         where, binds = graph_scope(kb_id)
         clause, extra = _oracle_in_predicate("p.document_id", "graph_target", documents)
-        rows = await self.oracle._fetch_all(
-            f"""SELECT p.page_id AS unit_id,p.document_id,
-            JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS target_path
-            {WIKI_PAGE_FROM} WHERE {where} AND {clause}
-            ORDER BY p.document_id,c.chunk_index,p.unit_id""",
-            {**binds, **extra},
-        )
+        with read_lobs_as_values():
+            rows = await self.oracle._fetch_all(
+                f"""SELECT p.page_id AS unit_id,p.document_id,
+                JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS target_path
+                {WIKI_PAGE_FROM} WHERE {where} AND {clause}
+                ORDER BY p.document_id,c.chunk_index,p.unit_id""",
+                {**binds, **extra},
+            )
         return ReferenceTargets(rows)
 
     async def _unit_refs(self, page_ids: Sequence[str]) -> dict[str, dict[str, Any]]:

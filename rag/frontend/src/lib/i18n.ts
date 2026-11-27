@@ -2241,6 +2241,7 @@ export const ja = {
   "wiki.search.loadingSource": "原文を読み込んでいます",
   "wiki.search.loadingRelations": "関係を読み込んでいます",
   "wiki.search.start": "質問を入力して原文を検索してください。",
+  "wiki.search.restorePosition": "自動配置に戻す",
   "wiki.search.unitNumber": "原文単位 {number}",
   "wiki.search.lines": "{range} 行",
   "wiki.search.figures": "{nodes} ノード · {edges} 関係",

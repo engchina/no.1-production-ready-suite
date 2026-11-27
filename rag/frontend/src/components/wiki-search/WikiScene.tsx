@@ -16,6 +16,7 @@ import {
   GRAPH_EDGE_MARKER,
 } from "@production-ready/ui/graph";
 import "@xyflow/react/dist/style.css";
+import { Button } from "@production-ready/ui";
 import { t } from "@/lib/i18n";
 import { wikiRelationText } from "@/components/knowledge-bases/wiki-graph-labels";
 import type { WikiDirectedGroup } from "./wiki-api";
@@ -211,7 +212,7 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
     data: { item, matched: query ? foundIds.has(item.id) : matches.has(item.id), color: colors.get(item.id) },
     position: positions.get(item.id)!,
     selected: item.id === selected,
-    style: POINT_SIZE, initialWidth: POINT_SIZE.width, initialHeight: POINT_SIZE.height,
+    style: POINT_SIZE, measured: POINT_SIZE, initialWidth: POINT_SIZE.width, initialHeight: POINT_SIZE.height,
     ariaLabel: "remaining" in item
       ? t("wiki.search.groupNode", { relation: item.label, count: item.remaining })
       : `${t(`wiki.graph.kind.${item.kind}`)} · ${item.label}`,
@@ -319,6 +320,15 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
             <span className="inline-flex items-center gap-1"><span aria-hidden data-surface-tint="accent" className="size-3 rounded-full border-2 border-accent-fg bg-accent-muted"/>{t("wiki.search.selectedPoint")}</span>
             <span className="inline-flex items-center gap-1"><span aria-hidden data-surface-tint="warning" className="size-3 rounded-full border border-warning-fg bg-warning-subtle"/>{t("wiki.search.matchedPoint")}</span>
           </div>
+          {selected && moved.has(selected) && (
+            <Button size="sm" variant="secondary" className="w-fit" onClick={() => setMoved(previous => {
+              const next = new Map(previous);
+              next.delete(selected);
+              return next;
+            })}>
+              {t("wiki.search.restorePosition")}
+            </Button>
+          )}
         </div>
         <GraphCanvasControls
           key={root} placement="bottom" controlsRef={camera}
