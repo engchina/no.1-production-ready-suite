@@ -19,11 +19,7 @@ import { cn } from "../../lib/utils";
 import { isImeComposing } from "../../lib/keyboard";
 import {
   GRAPH_EDGE_LABELS_ALWAYS_MAX,
-  GRAPH_NAME_MIN_PX,
-  GRAPH_NAME_STEPS,
-  GRAPH_NODE_FONT_SIZE,
   firstGraphNode,
-  graphNameStep,
   graphEdgeElasticity,
   nearestGraphNodeInDirection,
   seedGraphPositions,
@@ -202,18 +198,17 @@ function resolveColors(host: HTMLElement, kinds: readonly GraphExplorerNodeKind[
 }
 
 /** 節点の名前と辺の種類の文字の大きさ（図の座標の px）と、画面上でこれを切ったら文字を隠す大きさ（px）。 */
-const NODE_FONT_SIZE = GRAPH_NODE_FONT_SIZE;
+const NODE_FONT_SIZE = 13;
 const EDGE_FONT_SIZE = 11;
 const LABEL_MIN_PX = 7;
-const NAME_STEP_CLASSES = GRAPH_NAME_STEPS.map((_, index) => `name-step-${index}`).join(" ");
 
 /**
  * 画布の見た目（C 案）。中くらいの円、名前は円の下に 2 行まで（座標の 13px。読める縮尺の下限 0.8 で 10px 前後）。
  * 種類 = 塗りと大きさ、選択 = 太い枠、検索の一致 = 外側の輪。関係は矢印つきで、`dashed` の種類は点線、
  * `labelled` の種類だけ線の上に種類の文字を出す。文字は水平で、画布の背景色の下地を持つ（すべてを辺に沿って回すと
- * 密なところで重なって読めない）。全体を収めて縮んだときに画面上で 7px を切る辺の文字（縮尺 0.64 未満）は
- * `unreadable` で隠す（Cytoscape の `min-zoomed-font-size` は 2 の冪の段と画素密度で丸めるので使わない）。節点の
- * 名前は縮尺 0.42 まで画面上で約 9px を保ち（`name-step-*`）、0.42 未満で隠す。隠すときは文字を消さずに透明にする（名前を含む範囲が変わると、全体を収める縮尺が押す
+ * 密なところで重なって読めない）。全体を収めて縮んだときに画面上で 7px を切る文字は `unreadable` で隠す（辺の
+ * 文字は縮尺 0.64 未満、節点の名前は 0.54 未満。Cytoscape の `min-zoomed-font-size` は 2 の冪の段と画素密度で
+ * 丸めるので使わない）。隠すときは文字を消さずに透明にする（名前を含む範囲が変わると、全体を収める縮尺が押す
  * たびに変わる）。
  */
 export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly GraphExplorerNodeKind[], edgeKinds: readonly GraphExplorerEdgeKind[]): StylesheetJson {
@@ -287,10 +282,6 @@ export function graphExplorerStyle(colors: ResolvedColors, nodeKinds: readonly G
     { selector: "edge.quiet", style: { width: 1.5, opacity: 0.5, "text-opacity": 0, "text-background-opacity": 0 } },
     // 同じ組に文字つきの辺が複数あるときは、文字をそれぞれの曲線に沿わせる（水平のままだと、縦に近い辺で重なる。#5959）。
     { selector: "edge.parallel", style: { "text-rotation": "autorotate" as const } },
-    ...GRAPH_NAME_STEPS.map((lower, index) => {
-      const size = GRAPH_NAME_MIN_PX / lower;
-      return { selector: `node.name-step-${index}`, style: { "font-size": size, "text-margin-y": (5 * size) / NODE_FONT_SIZE, "text-max-width": `${(400 * size) / NODE_FONT_SIZE}px` } };
-    }),
     { selector: ".unreadable", style: { "text-opacity": 0, "text-background-opacity": 0 } },
     { selector: ".faded", style: { opacity: 0.2 } },
     { selector: ".hidden", style: { display: "none" } },
@@ -421,8 +412,6 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
   /** 図の全体を画布に収める（初期表示・全体表示・自動配置に戻す。下限は手で縮める下限。#5953）。 */
   const fitAll = useCallback(() => {
     fitTo(undefined, 1, GRAPH_OVERVIEW_MIN_ZOOM);
-    // 名前の大きさが縮尺の段で変わるので、変わった後の範囲でもう一度収める。
-    fitTo(undefined, 1, GRAPH_OVERVIEW_MIN_ZOOM);
     const cy = cyRef.current;
     allFitted.current = cy ? { ...cy.pan(), zoom: cy.zoom() } : null;
   }, [fitTo]);
@@ -436,7 +425,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
   /**
    * 強調と文字の出し方を付け直す。文字つきの辺が多い図は、選んだ・ホバーした節点につながる辺だけ文字を出し、
    * ほかを薄くする。少ない図は今までどおりすべての辺に文字を出し、ホバーした節点の隣接以外だけを薄くする。
-   * 画面上で読めない大きさ（7px 未満）になる辺の文字と、縮尺 0.42 未満の節点の名前は隠す。
+   * 画面上で読めない大きさ（7px 未満）になる文字は隠す。
    */
   const emphasize = useCallback(() => {
     const cy = cyRef.current;
@@ -448,15 +437,13 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     const origin = hover.length ? hover : dense ? cy.elements(":selected") : cy.collection();
     const lit = origin.union(origin.nodes().connectedEdges().not(".hidden"));
     cy.batch(() => {
-      cy.elements().removeClass(`faded quiet unreadable parallel ${NAME_STEP_CLASSES}`);
+      cy.elements().removeClass("faded quiet unreadable parallel");
       const labelled = edges.filter("[?text]");
       labelled.edges().filter((edge) => edge.parallelEdges().intersection(labelled).length > 1).addClass("parallel");
-      const step = graphNameStep(zoom);
-      if (step >= GRAPH_NAME_STEPS.length) cy.nodes().addClass("unreadable");
-      else if (step >= 0) cy.nodes().addClass(`name-step-${step}`);
       if (origin.length) cy.elements().not(lit.union(lit.edges().connectedNodes())).addClass("faded");
       if (dense) edges.not(lit).addClass("quiet");
       if (zoom * EDGE_FONT_SIZE < LABEL_MIN_PX) cy.edges().addClass("unreadable");
+      if (zoom * NODE_FONT_SIZE < LABEL_MIN_PX) cy.nodes().addClass("unreadable");
     });
     if (focusTarget.current) {
       focusTarget.current.dataset.graphEdgeLabels = dense ? "focus" : "all";
@@ -570,7 +557,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     // 文字を出す・隠すの境の縮尺をまたいだときだけ、文字の出し方を付け直す。
     let textScale = "";
     cy.on("zoom", () => {
-      const next = `${cy.zoom() * EDGE_FONT_SIZE < LABEL_MIN_PX}:${graphNameStep(cy.zoom())}`;
+      const next = `${cy.zoom() * EDGE_FONT_SIZE < LABEL_MIN_PX}:${cy.zoom() * NODE_FONT_SIZE < LABEL_MIN_PX}`;
       if (next === textScale) return;
       textScale = next;
       emphasize();
