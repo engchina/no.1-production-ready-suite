@@ -458,6 +458,120 @@ class WikiGraphStore:
             "items": [entry(item) for item in page_items],
         }
 
+    # ---- 図の操作（Neo4j Browser / Bloom 相当の探索。#5916） ----
+
+    async def document_graph(
+        self, kb_id: str, *, offset: int, limit: int, document: str | None = None
+    ) -> dict[str, Any]:
+        """文書の間の参照（別の文書への参照を文書の名前で解いた結果）の多い文書の順の見本。
+
+        ``document`` を渡すと、その文書と参照でつながる文書を参照の多い順に返す。
+        返す文書（と ``document``）の間の参照は、向きと種類ごとの件数にまとめて返す。
+        """
+        names = await self._document_names(kb_id)
+        cte, binds = visible_pages_cte(kb_id)
+        rows = await self.oracle._fetch_all(
+            f"""WITH {cte}
+            SELECT v.document_id,r.target_name,r.relation
+            FROM rag_wiki_references r JOIN visible v ON v.page_id=r.page_id""",
+            binds,
+        )
+        links: Counter[tuple[str, str, str]] = Counter()
+        for row in rows:
+            source = str(row["document_id"])
+            for target in names.resolve(str(row["target_name"]), exclude=source):
+                links[(source, target, str(row["relation"]))] += 1
+        degree: Counter[str] = Counter()
+        neighbors: Counter[str] = Counter()
+        for (source, target, _), count in links.items():
+            degree[source] += count
+            degree[target] += count
+            if document is not None and document in (source, target):
+                neighbors[target if source == document else source] += count
+        files = names.files
+        if document is not None and document not in files:
+            raise KeyError(document)
+        pool = list(neighbors) if document is not None else list(files)
+        weight = neighbors if document is not None else degree
+        ordered = sorted(pool, key=lambda did: (-weight[did], files.get(did, ""), did))
+        page = ordered[offset : offset + limit]
+        shown = set(page) | ({document} if document is not None else set())
+        return {
+            "documents": [
+                {
+                    "id": did,
+                    "document_id": did,
+                    "name": files.get(did, ""),
+                    "reference_count": degree[did],
+                }
+                for did in page
+            ],
+            "links": [
+                {"source_id": source, "target_id": target, "relation": relation, "count": count}
+                for (source, target, relation), count in sorted(links.items())
+                if source in shown and target in shown
+            ],
+            "total": len(ordered),
+            "offset": offset,
+            "has_more": len(ordered) > offset + limit,
+        }
+
+    async def connections(self, kb_id: str, unit_ids: Sequence[str]) -> list[dict[str, Any]]:
+        """選んだ単位の間の関係（同じ文書の依存と、別の文書への参照）。範囲の外の単位は引かない。"""
+        ids = list(dict.fromkeys(unit_ids))
+        if len(ids) < 2:
+            return []
+        cte, binds = visible_pages_cte(kb_id)
+        source_clause, source_binds = _oracle_in_predicate("s.unit_id", "graph_conn_s", ids)
+        target_clause, target_binds = _oracle_in_predicate("t.unit_id", "graph_conn_t", ids)
+        deps = await self.oracle._fetch_all(
+            f"""WITH {cte}
+            SELECT s.unit_id AS source_id,t.unit_id AS target_id,e.relation
+            FROM visible s JOIN rag_wiki_graph_deps e ON e.page_id=s.page_id
+            JOIN visible t ON t.unit_id=e.target_unit_id AND t.document_id=s.document_id
+            WHERE {source_clause} AND {target_clause} AND s.unit_id<>t.unit_id""",
+            {**binds, **source_binds, **target_binds},
+        )
+        found = {
+            (str(row["source_id"]), str(row["target_id"]), str(row["relation"])): "same_document"
+            for row in deps
+        }
+        references = await self.oracle._fetch_all(
+            f"""WITH {cte}
+            SELECT s.unit_id AS source_id,s.document_id,r.target_name,r.target_section,r.relation
+            FROM rag_wiki_references r JOIN visible s ON s.page_id=r.page_id
+            WHERE {source_clause}""",
+            {**binds, **source_binds},
+        )
+        if references:
+            names = await self._document_names(kb_id)
+            resolved = [
+                (row, names.resolve(str(row["target_name"]), exclude=str(row["document_id"])))
+                for row in references
+            ]
+            targets = await self._reference_targets(
+                kb_id, sorted({doc for _, docs in resolved for doc in docs})
+            )
+            pages = [
+                (row, page)
+                for row, docs in resolved
+                for doc in docs
+                if (page := targets.resolve(doc, str(row.get("target_section") or "")))
+            ]
+            units = await self._unit_refs([page for _, page in pages])
+            wanted = set(ids)
+            for row, page in pages:
+                target = units.get(page, {}).get("id")
+                if target in wanted and target != row["source_id"]:
+                    found.setdefault(
+                        (str(row["source_id"]), str(target), str(row["relation"])),
+                        "cross_document",
+                    )
+        return [
+            {"source_id": source, "target_id": target, "relation": relation, "scope": scope}
+            for (source, target, relation), scope in sorted(found.items())
+        ]
+
     async def _document_names(self, kb_id: str) -> DocumentNames:
         """図の範囲の文書の名前の照合（ファイル名と先頭の見出し）。"""
         where, binds = graph_scope(kb_id)

@@ -124,6 +124,18 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
         (r["direction"], r["scope"], r["unit"]["id"] if r["unit"] else None)
         for r in (await graph.relations(kb.id, first_b, 0, 25))["items"]
     }
+    # 参照の多い文書の見本と文書の間の参照、選んだ単位の間の関係（#5916）。
+    sample = await graph.document_graph(kb.id, offset=0, limit=25)
+    assert {doc["document_id"] for doc in sample["documents"]} == {a, b}
+    assert {(link["source_id"], link["target_id"]) for link in sample["links"]} == {(a, b)}
+    around = await graph.document_graph(kb.id, offset=0, limit=25, document=b)
+    assert [doc["document_id"] for doc in around["documents"]] == [a]
+    second_a = pages_a[1].unit.unit_id
+    connections = await graph.connections(kb.id, [first_a, second_a, first_b, first_c])
+    assert {(c["source_id"], c["target_id"], c["scope"]) for c in connections} == {
+        (first_a, second_a, "same_document"),
+        (first_a, first_b, "cross_document"),
+    }
     found = await graph.search(kb.id, "SyntheticGraphBeta", offset=0, limit=25)
     assert found["total"] == len(pages_b) and {i["document_id"] for i in found["items"]} == {b}
     assert (await graph.search(kb.id, "syntheticgraphgamma", offset=0, limit=25))["total"] == 0

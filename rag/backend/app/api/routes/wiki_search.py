@@ -13,18 +13,25 @@ from app.rag.wiki_models import WikiRelation
 from app.schemas.common import ApiResponse
 from app.schemas.knowledge_base import KnowledgeBaseRef
 from app.schemas.wiki_graph import (
+    WikiDocumentGraph,
     WikiGraphDocumentCount,
+    WikiGraphLocation,
     WikiGraphOverview,
     WikiGraphTreePage,
     WikiOriginal,
     WikiRelationGroups,
     WikiSearchHits,
     WikiSearchScope,
+    WikiUnitConnections,
 )
 
 profile_router = APIRouter()
 Offset = Annotated[int, Query(ge=0)]
 PageSize = Annotated[int, Query(ge=1, le=100)]
+# 関係は単位ごとに 1 回で取り切る（画面でページ送り・絞り込みをする。#5916）。
+RelationPageSize = Annotated[int, Query(ge=1, le=500)]
+# 単位・章節の ID（sha256 の 16 進）。
+NodeId = Annotated[str, Query(min_length=64, max_length=64, pattern="^[a-f0-9]+$")]
 ScopeDependency = Callable[..., Awaitable[WikiExplorer]]
 
 
@@ -135,7 +142,7 @@ def explorer_router(scope_dependency: ScopeDependency) -> APIRouter:
         relation: WikiRelation | None = None,
         direction: Literal["outgoing", "incoming"] | None = None,
         offset: Offset = 0,
-        limit: PageSize = 6,
+        limit: RelationPageSize = 6,
     ) -> ApiResponse[WikiRelationGroups]:
         data = await _read(
             lambda: scope.graph.relations(
@@ -149,5 +156,42 @@ def explorer_router(scope_dependency: ScopeDependency) -> APIRouter:
             )
         )
         return ApiResponse(data=WikiRelationGroups(**data))
+
+    @router.get("/document-graph")
+    async def document_graph(
+        scope: WikiExplorer = resolve_scope,
+        document: str | None = None,
+        offset: Offset = 0,
+        limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    ) -> ApiResponse[WikiDocumentGraph]:
+        """参照の多い文書の見本と、その間の参照（``document`` はその文書の参照の相手）。"""
+        data = await _read(
+            lambda: scope.graph.document_graph(
+                scope.ids, offset=offset, limit=limit, document=document
+            )
+        )
+        return ApiResponse(data=WikiDocumentGraph(**data))
+
+    @router.get("/connections")
+    async def connections(
+        ids: Annotated[str, Query(min_length=1, max_length=65 * 200)],
+        scope: WikiExplorer = resolve_scope,
+    ) -> ApiResponse[WikiUnitConnections]:
+        """選んだ単位（カンマ区切り。200 件まで）の間の関係。"""
+        unit_ids = [value for value in ids.split(",") if value]
+        if len(unit_ids) > 200 or any(
+            len(value) != 64 or value.strip("0123456789abcdef") for value in unit_ids
+        ):
+            raise HTTPException(422, "単位の指定が正しくありません。")
+        data = await _read(lambda: scope.graph.connections(scope.ids, unit_ids))
+        return ApiResponse(data=WikiUnitConnections(connections=data))
+
+    @router.get("/documents/{document_id}/locate")
+    async def locate(
+        document_id: str, node: NodeId, scope: WikiExplorer = resolve_scope
+    ) -> ApiResponse[WikiGraphLocation]:
+        """文書の直下から節点までの段と各段の位置（図内検索で当たった単位へ開く）。"""
+        data = await _read(lambda: scope.graph.locate(scope.ids, document_id, node))
+        return ApiResponse(data=WikiGraphLocation(**data))
 
     return router
