@@ -391,5 +391,39 @@ export function layoutOntologyGraphSemanticMatrix(
     });
   }
 
+  // 単一レーンの表や一つのクラスタに資料が集中しても、全体表示で細い一列にしない。
+  // 通常の行列は維持し、長辺が極端な図だけクラスタ順・レーン順を保って折り返す。
+  if (positions.size > 24) {
+    const points = [...positions.values()];
+    const span = (axis: "x" | "y", size: number) => {
+      let min = Infinity, max = -Infinity;
+      for (const point of points) { min = Math.min(min, point[axis]); max = Math.max(max, point[axis]); }
+      return max - min + size;
+    };
+    const ratio = span("x", nodeWidth) / span("y", nodeHeight);
+    if (ratio > 3 || ratio < 0.5) {
+      const columnStep = nodeWidth + clusterGap;
+      const rowStep = nodeHeight + laneGap;
+      const columns = Math.max(2, Math.ceil(Math.sqrt(positions.size * 1.6 * rowStep / columnStep)));
+      let y = top;
+      for (const lane of lanes) {
+        lane.y = y;
+        const items = graph.nodes.filter((n) => laneByNodeId.get(n.id) === lane.id).sort((a, b) => {
+          const first = positions.get(a.id)!, second = positions.get(b.id)!;
+          return first.x - second.x || first.y - second.y;
+        });
+        const sections = lane.id === "physical" && hasSchemaRow
+          ? [items.filter((n) => schemaNodeIds.has(n.id)), items.filter((n) => !schemaNodeIds.has(n.id))] : [items];
+        y += lanePaddingY;
+        for (const section of sections) {
+          section.forEach((node, i) => positions.set(node.id, { x: left + (i % columns) * columnStep, y: y + Math.floor(i / columns) * rowStep }));
+          y += Math.ceil(section.length / columns) * rowStep;
+        }
+        lane.height = y - lane.y + lanePaddingY;
+        y = lane.y + lane.height + laneGap;
+      }
+    }
+  }
+
   return { positions, lanes, laneByNodeId, clusterByNodeId };
 }

@@ -1,11 +1,11 @@
 import { useId, useMemo, type ReactNode } from "react";
 import { Info } from "lucide-react";
-import { StatusBadge } from "@production-ready/ui";
+import { SelectField, StatusBadge } from "@production-ready/ui";
 
 import { t } from "@/lib/i18n";
 import { DbObjectName } from "../components/DbObjectName";
 import { cardinalityShortLabel } from "./graphView";
-import { ontologyNodeDisplay } from "./nodeDisplay";
+import { ontologyRelationshipKindLabel, ontologyNodeDisplay } from "./nodeDisplay";
 import { DefinitionFields, DetailFieldList } from "./ontologyResultPresentation";
 import {
   ontologyRelationshipRows,
@@ -91,12 +91,7 @@ const EDGE_SUMMARY_DEFINITION_KEYS = [
 
 function edgeKindLabel(edge: OntologyEdge, definition: Record<string, unknown> | null): string {
   const kind = definitionString(definition, "kind") || (edge.kind ?? "").trim();
-  if (kind) {
-    const key = `ontologyResults.kind.${kind}` as const;
-    const label = t(key);
-    if (label !== key) return label;
-  }
-  return t("ontologyPlayground.inspector.edgeKindFallback");
+  return ontologyRelationshipKindLabel(kind);
 }
 
 function OntologyEdgeDetails({ graph, edge }: { graph: OntologyGraph; edge: OntologyEdge }) {
@@ -159,15 +154,19 @@ export function OntologySelectionDetailsPanel({
   node,
   edge,
   emptyContent,
+  onSelectEdge,
   testId = "ontology-selection-details-panel",
 }: {
   graph: OntologyGraph;
   node: OntologyNode | null;
   edge: OntologyEdge | null;
   emptyContent?: ReactNode;
+  onSelectEdge?: (id: string) => void;
   testId?: string;
 }) {
   const titleId = useId();
+  const parallel = useMemo(() => edge && !node ? graph.edges.filter((candidate) =>
+    candidate.source_node_id === edge.source_node_id && candidate.target_node_id === edge.target_node_id) : [], [graph, edge, node]);
   const title = node
     ? t("ontologyPlayground.inspector.nodeDetails")
     : edge
@@ -186,6 +185,10 @@ export function OntologySelectionDetailsPanel({
           {title}
         </h3>
       </div>
+      {edge && parallel.length > 1 && onSelectEdge && <SelectField id={titleId + "-relations"} label={t("nl2sql.ontology.graphBundle", { count: parallel.length })}
+        value={edge.id} width="full" onValueChange={onSelectEdge} options={parallel.map((item) => ({
+          value: item.id, label: [item.relationship_name_ja, cardinalityShortLabel(item.cardinality)].filter(Boolean).join(" · "),
+        }))} />}
       {node ? (
         <OntologyNodeDetails node={node} />
       ) : edge ? (

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { reachableGraphBranches } from "@production-ready/ui/graph";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
   BookOpen,
@@ -44,6 +45,8 @@ import {
 } from "./WikiScene";
 import { wikiApi, type WikiKb, type WikiPick, type WikiMethod, type WikiScope } from "./wiki-api";
 
+interface WikiBranch extends Scene { owner: string }
+
 interface Props {
   scope: WikiScope;
   question: string;
@@ -88,7 +91,8 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   const [group, setGroup] = useState<WikiGraphRelation | "">("");
   const [tab, setTab] = useState("source");
   const [relOffset, setRelOffset] = useState(0);
-  const [branches, setBranches] = useState<Record<string, Scene>>({});
+  const [branches, setBranches] = useState<Record<string, WikiBranch>>({});
+  const [removed, setRemoved] = useState<Record<string, WikiBranch>>({});
   const [sheet, setSheet] = useState(false),
     [inspector, setInspector] = useState(true);
   const [full, setFull] = useState(false);
@@ -190,7 +194,11 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     };
     structure = { nodes: [parent], edges: [{ source: parent.id, target: root.id, kind: "contains" }] };
   }
-  const all = joinScenes(ring, structure, ...Object.values(branches));
+  const pinned = search ? [...rows] : [];
+  if (selection) pinned.push(selection);
+  const baseScene = joinScenes(ring, structure, { nodes: pinned, edges: [] });
+  const activeBranches = reachableGraphBranches(baseScene.nodes.map((n) => n.id), Object.values(branches), (b) => b.owner, (b) => b.nodes.map((n) => n.id));
+  const all = joinScenes(baseScene, ...activeBranches);
   const visibleNodes = all.nodes.filter((n) => !kind || n.kind === kind);
   const visibleIds = new Set(visibleNodes.map((n) => n.id));
   const scene = {
@@ -206,6 +214,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     if (asRoot) {
       setAnchor(n);
       setBranches({});
+      setRemoved({});
       onRoot?.(n.id);
     }
     setSelection(n);
@@ -224,6 +233,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     setSelection(null);
     setEdge(null);
     setBranches({});
+    setRemoved({});
     setGroup("");
     setRelOffset(0);
     setTab("source");
@@ -243,10 +253,27 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
           };
     setBranches((prev) => ({
       ...prev,
-      [node.id + ":" + group]: joinScenes(prev[node.id + ":" + group] ?? emptyScene, branch),
+      [JSON.stringify([node.id, group])]: { ...joinScenes(prev[JSON.stringify([node.id, group])] ?? emptyScene, branch), owner: node.id },
     }));
     setView("graph");
     if (small) setSheet(false);
+  }
+  function collapse() {
+    if (!node) return;
+    const entries = Object.entries(branches);
+    setRemoved(Object.fromEntries(entries.filter(([, b]) => b.owner === node.id)));
+    setBranches(Object.fromEntries(entries.filter(([, b]) => b.owner !== node.id)));
+    if (small) setSheet(false);
+  }
+  function undoCollapse() {
+    setBranches((prev) => {
+      const next = { ...prev };
+      for (const [id, branch] of Object.entries(removed)) {
+        next[id] = { owner: branch.owner, ...joinScenes(branch, prev[id] ?? emptyScene) };
+      }
+      return next;
+    });
+    setRemoved({});
   }
   function close() {
     setSheet(false);
@@ -280,7 +307,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   const listLabel = t(search ? "wiki.search.loadingHits" : "wiki.search.loadingDocs");
   const reloadList = mainResult.isFetching && !!mainResult.data;
   const panel = edge ? (
-    <RelationInspector edge={edge} nodes={scene.nodes} onPick={(n) => pick(n)} />
+    <RelationInspector edge={edge} members={scene.edges.filter((e) => e.source === edge.source && e.target === edge.target)} nodes={scene.nodes} onPick={(n) => pick(n)} />
   ) : node ? (
     <WikiInspector
       key={node.id}
@@ -296,6 +323,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
       onPage={setRelOffset}
       select={(n) => pick(n)}
       expand={expand}
+      collapse={activeBranches.some((b) => b.owner === node.id) ? collapse : undefined}
       picks={picks}
       toggle={toggle}
       loading={detailRequest.isPending
@@ -492,6 +520,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
               <div className="flex min-h-0 min-w-0 flex-col border-x border-border">
                 <div className="flex items-center justify-between gap-2 border-b border-border p-2 text-xs text-fg-muted">
                   <strong>{t("wiki.search.graph")}</strong>
+                  {!!Object.keys(removed).length && <Button variant="ghost" size="sm" onClick={undoCollapse}>{t("wiki.search.undoCollapse")}</Button>}
                   {!graphPending && !graphError && t("wiki.search.figures", { nodes: scene.nodes.length, edges: scene.edges.length })}
                 </div>
                 <div className="min-h-0 flex-1">
@@ -499,6 +528,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
                     <Failed error={firstRing.error ?? rootOriginal.error} retry={() => { if (firstRing.isError) void firstRing.refetch(); if (rootOriginal.isError) void rootOriginal.refetch(); }} />
                   ) : <WikiScene
                     root={key(root)}
+                    matches={new Set(search ? rows.map((n) => n.id) : [])}
                     scene={scene}
                     selected={edge ? undefined : node?.id}
                     edge={(edge && edgeId(edge)) || undefined}

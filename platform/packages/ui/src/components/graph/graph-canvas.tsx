@@ -1,5 +1,5 @@
-import { useId, type ComponentProps, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Maximize2, Minus, Plus, RotateCcw, type LucideIcon } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight, Focus, Undo2, Maximize2, Minus, Plus, RotateCcw, type LucideIcon } from "lucide-react";
 import {
   Background,
   BaseEdge,
@@ -10,6 +10,9 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStoreApi,
+  useUpdateNodeInternals,
+  type Viewport,
   type Edge,
   type EdgeProps,
   type MiniMapProps,
@@ -20,7 +23,7 @@ import {
 import { cn } from "../../lib/utils";
 import { isImeComposing } from "../../lib/keyboard";
 import { graphParallelEdgeGeometry } from "../../lib/graph-edges";
-import { GRAPH_CANVAS_JA } from "../../lib/graph-labels";
+import { GRAPH_CANVAS_JA, GRAPH_EXPLORATION_JA } from "../../lib/graph-labels";
 import { Button } from "../ui/button";
 import { SearchField } from "../ui/search-field";
 import { StatusBadge } from "../data/status-badge";
@@ -42,15 +45,50 @@ export function GraphCanvasFrame({
   return <div {...props} className={cn("relative min-h-80 overflow-hidden rounded-md border border-border bg-surface-sunken", compact ? "h-[26rem]" : "h-[56rem] max-sm:h-[65dvh]", className)} />;
 }
 
+/** 縮尺による描画の変更を画布で一度だけ購読する。pan ではノードを再描画しない。 */
+function OverviewScale() {
+  const marker = useRef<HTMLSpanElement>(null);
+  const store = useStoreApi();
+  const updateNodes = useUpdateNodeInternals();
+  useEffect(() => {
+    const canvas = marker.current?.closest<HTMLElement>(".react-flow");
+    if (!canvas) return;
+    let lastZoom = -1;
+    const update = () => {
+      const state = store.getState();
+      const zoom = state.transform[2];
+      if (zoom === lastZoom || zoom <= 0) return;
+      lastZoom = zoom;
+      const overview = zoom < 0.5;
+      if (overview) canvas.style.setProperty("--graph-inverse-zoom", String(1 / zoom));
+      if (canvas.hasAttribute("data-graph-overview") !== overview) {
+        canvas.toggleAttribute("data-graph-overview", overview);
+        updateNodes(Array.from(state.nodeLookup.keys()));
+      }
+    };
+    update();
+    const unsubscribe = store.subscribe(update);
+    return () => {
+      unsubscribe();
+      canvas.removeAttribute("data-graph-overview");
+      canvas.style.removeProperty("--graph-inverse-zoom");
+      updateNodes(Array.from(store.getState().nodeLookup.keys()));
+    };
+  }, [store, updateNodes]);
+  return <span hidden ref={marker} />;
+}
+
 export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge = Edge>({
   children,
   miniMap,
+  overview,
   proOptions,
   ariaLabelConfig,
   onSelectNode,
   onSelectEdge,
   ...props
 }: ReactFlowProps<NodeType, EdgeType> & {
+  overview?: boolean;
   miniMap?: MiniMapProps<NodeType> | false;
   onSelectNode?: (id: string) => void;
   onSelectEdge?: (id: string) => void;
@@ -59,7 +97,7 @@ export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge 
     <ReactFlow<NodeType, EdgeType>
       fitView
       fitViewOptions={{ padding: 0.18 }}
-      minZoom={0.05}
+      minZoom={Number.EPSILON}
       maxZoom={1.8}
       nodeDragThreshold={4}
       nodesConnectable={false}
@@ -81,6 +119,7 @@ export function GraphCanvas<NodeType extends Node = Node, EdgeType extends Edge 
         if (id && select) { event.preventDefault(); event.stopPropagation(); select(id); }
       }}
     >
+      {overview && <OverviewScale />}
       <Background gap={20} size={1} />
       {miniMap ? <MiniMap<NodeType>
         pannable zoomable position="bottom-right"
@@ -110,19 +149,55 @@ export function GraphCanvasControls({
   onReset,
   resetDisabled = false,
   resetTestId,
+  selectedId,
+  selectedEdgeId,
 }: {
   labels: GraphControlsLabels;
   onFit?: () => void;
   onReset?: () => void;
   resetDisabled?: boolean;
   resetTestId?: string;
+  selectedId?: string | null;
+  selectedEdgeId?: string | null;
 }) {
   const flow = useReactFlow();
+  const [history, setHistory] = useState<Viewport[]>([]);
+  function remember() {
+    const current = flow.getViewport();
+    setHistory((old) => {
+      const last = old.at(-1);
+      return last && last.x === current.x && last.y === current.y && last.zoom === current.zoom
+        ? old : [...old.slice(-15), current];
+    });
+  }
+  function focus() {
+    const edge = selectedEdgeId ? flow.getEdge(selectedEdgeId) : undefined;
+    if (edge && edge.source !== edge.target) {
+      remember();
+      void flow.fitView({ nodes: [{ id: edge.source }, { id: edge.target }], padding: 0.2, minZoom: 0, maxZoom: 1.2 });
+      return;
+    }
+    const nodeId = selectedId ?? edge?.source;
+    if (!nodeId || !flow.getNode(nodeId)) return;
+    remember();
+    const bounds = flow.getNodesBounds([nodeId]);
+    void flow.setCenter(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2, { zoom: Math.max(flow.getZoom(), 1) });
+  }
+  function previous() {
+    const viewport = history.at(-1);
+    if (!viewport) return;
+    setHistory(history.slice(0, -1));
+    void flow.setViewport(viewport);
+  }
   return (
     <div className="absolute right-3 top-3 z-10 flex gap-1 rounded-md border border-border bg-surface p-1 shadow-sm">
       <Button type="button" size="sm" variant="ghost" iconOnly icon={Plus} aria-label={labels.zoomIn} tooltip={labels.zoomIn} onClick={() => void flow.zoomIn({ duration: 0 })} />
       <Button type="button" size="sm" variant="ghost" iconOnly icon={Minus} aria-label={labels.zoomOut} tooltip={labels.zoomOut} onClick={() => void flow.zoomOut({ duration: 0 })} />
-      <Button type="button" size="sm" variant="ghost" iconOnly icon={Maximize2} aria-label={labels.fit} tooltip={labels.fit} onClick={onFit ?? (() => void flow.fitView({ padding: 0.18, duration: 0 }))} />
+      <Button type="button" size="sm" variant="ghost" iconOnly icon={Maximize2} aria-label={labels.fit} tooltip={labels.fit} onClick={() => { remember(); if (onFit) onFit(); else void flow.fitView({ padding: 0.18, minZoom: 0, duration: 0 }); }} />
+      {selectedId !== undefined && <>
+        <Button type="button" size="sm" variant="ghost" iconOnly icon={Focus} aria-label={GRAPH_EXPLORATION_JA.focus} tooltip={GRAPH_EXPLORATION_JA.focus} disabled={!selectedId && !selectedEdgeId} onClick={focus} />
+        <Button type="button" size="sm" variant="ghost" iconOnly icon={Undo2} aria-label={GRAPH_EXPLORATION_JA.previous} tooltip={GRAPH_EXPLORATION_JA.previous} disabled={!history.length} onClick={previous} />
+      </>}
       {onReset ? <Button type="button" size="sm" variant="ghost" iconOnly icon={RotateCcw} aria-label={labels.reset} tooltip={labels.reset} onClick={onReset} disabled={resetDisabled} data-testid={resetTestId} /> : null}
     </div>
   );
@@ -231,6 +306,8 @@ export function GraphNodeCard({
   return (
     <GraphNodeFrame
       {...props}
+      data-graph-card=""
+      data-show-overview-label={selected || matched || undefined}
       selected={selected}
       className={cn("grid h-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2", className)}
       style={{
@@ -251,6 +328,9 @@ export function GraphNodeCard({
       }}
     >
       <GraphNodeHandles />
+      <span aria-hidden="true" className="graph-overview-node" style={{ background: fill, borderColor: selected || matched ? "var(--color-accent-fg)" : stroke }}>
+        {(selected || matched) && <span className="graph-overview-label">{primary}</span>}
+      </span>
       {/* グラフの節点の印の箱（名前と種類の 2 行のまとまりの中央。文字の 1 行目にそろえる規則の例外。#2371）。 */}
       <span
         className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md"

@@ -7342,6 +7342,30 @@ test("生成 SQL を読み取り専用 Ontology グラフへ接地して確認�
   await expect(details.getByTestId("ontology-node-details")).toContainText("従業員情報");
   await expect(details.getByTestId("ontology-edge-details")).toHaveCount(0);
 
+  const canvas = panel.getByTestId("ontology-graph-canvas");
+  const camera = () => canvas.locator(".react-flow__viewport").evaluate(el => (el as HTMLElement).style.transform);
+  await canvas.getByRole("button", { name: "グラフ全体を表示", exact: true }).click();
+  const groundingCamera = await camera();
+  if (process.env.GRAPH_ACCEPTANCE_DIR) {
+    await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/sql-grounding-" + testInfo.project.name + ".png" });
+  }
+  await panel.getByTestId("ontology-graph-mode-all").click();
+  await panel.getByTestId("ontology-graph-mode-physical_er").click();
+  const employee = canvas.locator('.react-flow__node[data-id="employee-table"]');
+  await employee.focus();
+  await employee.press("Enter");
+  const er = panel.getByTestId("ontology-er-details-panel");
+  await expect(er.getByTestId("ontology-er-detail-object-name")).toContainText("ADMIN.EMPLOYEE");
+  await expect(er.getByTestId("ontology-er-joins")).toContainText("ADMIN.EMPLOYEE.DEPARTMENT_ID");
+  await canvas.getByRole("button", { name: "選択を中心に表示" }).click();
+  if (process.env.GRAPH_ACCEPTANCE_DIR) {
+    await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/physical-er-" + testInfo.project.name + ".png" });
+  }
+  await panel.getByTestId("ontology-graph-mode-grounding").click();
+  await expect.poll(camera).toBe(groundingCamera);
+  await expect(details.getByTestId("ontology-node-details")).toContainText("従業員情報");
+  await expect(er).toHaveCount(0);
+
   await page.setViewportSize({ width: 375, height: 900 });
   await expect(panel).toBeVisible();
   await expect(panel.getByText("SQL 全要素を接地")).toBeVisible();

@@ -17,16 +17,19 @@ import { edgeName, type Connection, type WikiNode } from "./WikiScene";
 export const NEIGHBOR_PAGE = 6;
 export function RelationInspector({
   edge,
+  members,
   nodes,
   onPick,
 }: {
   edge: Connection;
+  members: Connection[];
   nodes: WikiNode[];
   onPick: (n: WikiNode) => void;
 }) {
   return (
     <div className="grid gap-3 p-3">
-      <h3 className="font-semibold">{edgeName(edge)}</h3>
+      <h3 className="font-semibold">{members.length > 1 ? t("wiki.search.edgeCount", { count: members.length }) : edgeName(edge)}</h3>
+      {members.length > 1 && <ul className="list-inside list-disc text-sm">{members.map((e) => <li key={e.kind}>{edgeName(e)}</li>)}</ul>}
       {[edge.source, edge.target].map((id) => {
         const n = nodes.find((item) => item.id === id);
         return (
@@ -54,6 +57,7 @@ interface Props {
   onPage: (n: number) => void;
   select: (node: WikiNode) => void;
   expand: () => void;
+  collapse?: () => void;
   picks?: WikiPick[];
   toggle?: (pick: WikiPick) => void;
   loading: React.ReactNode;
@@ -72,6 +76,7 @@ export function WikiInspector({
   onPage,
   select,
   expand,
+  collapse,
   picks,
   toggle,
   loading,
@@ -262,6 +267,7 @@ export function WikiInspector({
             {t(chosen ? "wiki.search.remove" : "wiki.search.add")}
           </Button>
         )}
+        {collapse && <Button variant="secondary" size="sm" icon={Minus} onClick={collapse}>{t("wiki.search.collapse")}</Button>}
         <Button variant="secondary" size="sm" icon={GitFork} disabled={!displayed} onClick={expand}>
           {t("wiki.search.expand")}
         </Button>
