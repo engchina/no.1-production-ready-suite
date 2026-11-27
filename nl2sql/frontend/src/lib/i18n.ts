@@ -120,7 +120,6 @@ const nl2sqlJa = {
   "chat.requirement.applied": "SQL の生成前に確認した内容",
   "chat.messages": "会話",
   "chat.latest": "最新のメッセージへ",
-  "chat.retry": "再読み込み",
   "chat.historyPagination.label": "会話の履歴のページ切替",
   "chat.copySql": "SQL をコピー",
   "chat.sqlCopied": "SQL をコピーしました。",

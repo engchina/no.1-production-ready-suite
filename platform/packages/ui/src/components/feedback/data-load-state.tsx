@@ -68,7 +68,8 @@ function failureMessage(
 }
 
 /**
- * データ領域の読み取りの失敗（messaging.md §3.6.1。#4217）。領域だけを占め、再試行へフォーカスを移す。
+ * データ領域の読み取りの失敗（messaging.md §3.6.1。#4217）。領域だけを占め（`ErrorState` の `region` の帯。「詳細」は閉じて
+ * 出し、利用者が開く。#5904）、再試行へフォーカスを移す。
  * 0 件の空の状態と同じ分岐で出さない。原因は `error_code` で分ける（`dataLoadFailureKind`）。
  */
 export function DataLoadFailureState({

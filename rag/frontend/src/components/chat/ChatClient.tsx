@@ -1652,10 +1652,13 @@ export function ChatClient() {
               // ツールバーには欄の形だけを置き、文言と経過時間は会話の領域の先頭に 1 か所だけ出す（#4649）。
               <SearchAnswerProfileSelectSkeleton compact testId="chat-search-answer-profiles-skeleton" />
             ) : searchAnswerProfilesFailed ? (
+              // 対象の一覧の読み取りの失敗は、3 製品で同じ領域の失敗の表示（「詳細」は閉じる。messaging.md §11.7。#5929）。
               <ApiErrorState
                 error={searchAnswerProfilesQuery.error}
                 fallback={t("chat.searchAnswerProfile.error")}
+                testId="chat-search-answer-profiles-error"
                 onRetry={() => void searchAnswerProfilesQuery.refetch()}
+                retrying={searchAnswerProfilesQuery.isFetching}
               />
             ) : noSearchAnswerProfiles ? (
               <EmptyState
