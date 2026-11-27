@@ -590,7 +590,7 @@ def list_candidates(connection: str, *, user_uuid: str | None) -> DataScopeCandi
             raise DataScopeCandidatesError(
                 409,
                 f"MCP 接続「{config.label or label}」の URL が設定されていないため、"
-                "プロファイルを選べません。運用設定の MCP 接続で設定してください。",
+                "プロファイルを選べません。運用設定の外部接続で設定してください。",
                 "data_scope_connection_not_configured",
             ) from None
         raise DataScopeCandidatesError(

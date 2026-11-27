@@ -12,6 +12,8 @@
   Nginx の site（製品の path の prefix と HTTPS）を 1 つだけ書く
 - 3製品で共通のサービス間 token の署名鍵（`random_password`。共通 `.env` の `PLATFORM_SERVICE_TOKEN_SECRET`。#233）
 - 任意で bastion の Compute を 1 台（`bastion_enabled`、既定 off。VNC のデスクトップと Google Chrome 入り。製品は入れない。下の「bastion の Compute」。#2670）
+- 任意で Oracle AI Data Platform Workbench を 1 つ（`deploy_aidp`、既定 off。この stack の ADB と関連付け、External Catalog 用の DB ユーザーを作る。下の「[Oracle AI Data Platform](#oracle-ai-data-platform任意5917)」。#5917）
+- 任意で Oracle Analytics Cloud を 1 つ（`deploy_oac`、既定 off。ADB との接続は stack で作らない。下の「[Oracle Analytics Cloud](#oracle-analytics-cloud任意5933)」。#5933）
 
 ```text
               ┌──────────────────────────────┐
@@ -49,9 +51,11 @@
 3. 主 Compute の構成、ネットワークと SSH、HTTPS
 4. bastion の作成、専用の構成、ネットワークと接続（コンパートメントは 1 の配備先を継承）
 5. アプリケーション管理者、NL2SQL Deep Data Security
+6. Oracle AI Data Platform（配備するか、IAM policy の確認、表示名、既定の workspace、AI 機能、AIDP 用の DB ユーザー）
+7. Oracle Analytics Cloud（配備するか、名前、Identity Domain、管理者のユーザー名、エディション、ライセンス、OCPU の数）
 
 非表示の内部設定と製品の選択は表示しません。主 Compute と bastion の image 候補は大阪・東京・Chicago の順で、既定はどちらも大阪です。
-配備後の output は、アプリケーションの入口、接続、ADB 情報の順に表示します。
+配備後の output は、アプリケーションの入口（Oracle AI Data Platform・Oracle Analytics Cloud の URL を含む）、接続、ADB 情報、Oracle AI Data Platform の接続の情報、Oracle Analytics Cloud の OCID の順に表示します。
 
 ## 配備する製品
 
@@ -64,6 +68,8 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
   NL2SQL で Deep Data Security を有効にする場合は `nl2sql_oracle_deepsec_data_user_password` も必要です。
 - 製品の選択は Compute の cloud-init に入るため、選択を変えて apply すると **Compute は作り直されます**（OCI provider は `user_data` の変更で instance を置き換える）。データの正本は ADB で、
   Compute の中のローカルの保存（アップロードの原本・`platform/.env` を画面で変えた値・HTTPS の CA）は失われます。
+- cloud-init に入らない入力（ADB の OCPU の数など）だけを変えた apply と、入力を変えない apply では、Compute は作り直されません（#5945）。
+  この修正より前に配備した stack は、次の apply で 1 回だけ作り直されます（cloud-init に入れる Wallet の ZIP の作り方が変わったため）。
 - 配備が終わると、`/var/log/suite-init.log` に入口の URL（`suite:`。`/` は Agent Control Plane へ転送。#1561）、製品ごとの URL、CA 証明書の URL を出します。
   その後に配備全体の確認の結果（`check:` の行）を出します（下の「配備が正常かの確認」）。
 
@@ -248,6 +254,206 @@ ADMIN で Deep Data Security を適用していた ADB では、先に ADMIN の
     `ALTER END USER`・`DROP END USER`・`CREATE DATA ROLE`・`DROP DATA ROLE`・`CREATE ANY CONTEXT`・`DROP ANY CONTEXT`・`CREATE PROCEDURE`・
     `GRANT ANY DATA ROLE`・`ADMINISTER ANY DATA GRANT`・`SET USE DATA GRANTS ONLY` と、DeepSec の metadata（`DBA_END_USERS`・`DBA_DATA_ROLES`・`DBA_ROLES`・`DBA_CONTEXT`・
     `DBA_DATA_GRANTS`・`DBA_TAB_PRIVS`・`DBA_POLICIES`。`SELECT_CATALOG_ROLE`）の参照。詳しくは [nl2sql/docs/security-rbac-deepsec.md](../nl2sql/docs/security-rbac-deepsec.md)「DeepSec V001 の前提」。
+
+## Oracle AI Data Platform（任意。#5917）
+
+`deploy_aidp=true`（既定 `false`）で、Oracle AI Data Platform Workbench（以下 AIDP）を 1 つ作り、この stack の ADB と関連付けます。
+データの取り込み・加工（Notebook・Spark・Workflow・カタログ）を AIDP で行い、結果を ADB の表に書いて 3 製品（NL2SQL など）から使う構成です。
+RAG・NL2SQL・Agent の機能は 3 製品のまま使い、AIDP の Knowledge Base・Agent に置き換えません。
+
+| stack が作る・設定するもの | stack が作らないもの（AIDP の画面で作る） |
+|---|---|
+| AIDP の instance と既定の workspace（`oci_ai_data_platform_ai_data_platform`。置き場所は ADB のコンパートメント） | workspace の追加・Spark の cluster・Notebook・Workflow |
+| AI 機能（Knowledge Base・Agent）の vector DB としての ADB の関連付け（`aidp_ai_feature_enabled`、既定 on） | External Catalog（下の「External Catalog の登録」の値を入力して作る） |
+| AIDP 用の DB ユーザー（既定の名前 `ADB_AIDP_USER`。Compute が ADMIN で作る） | AIDP の Agent・AI Compute、AIDP の中のロールと権限 |
+| 共通 `.env` の `PLATFORM_AIDP_OCID` / `PLATFORM_AIDP_REGION` / `PLATFORM_AIDP_URL` / `PLATFORM_AIDP_DB_USER`（3 製品の「システム設定 › データベース」に出る。#5931） | IAM policy・security list・NAT Gateway（下の「配備の前に」） |
+
+- **最初の配備で決めてください。** `deploy_aidp` と AIDP の入力は Compute の cloud-init に入るため、後から切り替えると **Compute は作り直されます**（製品の選択と同じ。Compute の中のローカルの保存が失われる）。
+  `aidp_default_workspace_name` と `aidp_ai_feature_enabled` は、後から変えると AIDP の instance が作り直されます（workspace・Notebook・AIDP が管理する表が失われる）。
+- AIDP の作成は 20〜40 分かかることがあります（Osaka の実測は約 13 分。stack の timeout は 90 分）。Compute は AIDP の OCID を共通 `.env` に書くため、AIDP の後に作られます。
+- **AI 機能を有効にすると、AIDP は ADB の ADMIN の資格情報を持ちます。** AIDP は ADB に自分の schema（`AIDP_<id>_KB_WRITE` など）を作り、
+  ADMIN で接続する External Catalog（`vector_db_<DB 名>`）とプライベートの workspace（`Pvt_vector_db_<DB 名>`）を自動で作ります（実環境で確認）。
+  この catalog を使える AIDP の利用者は、ADMIN の権限で ADB（3 製品のシステムの表を含む）を読み書きできます。**`vector_db_<DB 名>` の catalog の権限を、AIDP の管理者以外に付けないでください**
+  （利用者には下の AIDP 用の DB ユーザーの catalog を使わせる）。ADMIN を AIDP に渡したくないときは `aidp_ai_feature_enabled=false` にします（AIDP の Knowledge Base・Agent は使えません）。
+- 既定の workspace には Spark の「Default Master Catalog Compute」（driver 2 OCPU / 16 GB と worker 1 台）が自動で作られて起動します。
+  Workbench REST API では停止できません（`Stop Operation on Default Cluster is not allowed.`。実環境で確認）。AIDP を配備している間の費用に入れてください。
+- `deploy_aidp=false` の配備は、この機能を入れる前と同じです（cloud-init も変わりません）。
+
+### 配備の前に
+
+stack は IAM policy・ネットワークを作りません。次を済ませてから、フォームの「Oracle AI Data Platform の IAM policy を設定済み」（`aidp_iam_policies_confirmed`）をオンにします。
+オフのままでは plan が失敗します（policy が無いと、作成が長い待ちの後に失敗するため）。
+
+#### IAM policy
+
+出典は公式文書 [IAM Policies for Oracle AI Data Platform](https://docs.oracle.com/en/cloud/paas/ai-data-platform/aidug/iam-policies-oracle-ai-data-platform.html)。
+`<AIDP のコンパートメント>` は ADB のコンパートメント（`adb_compartment_ocid`）の OCID です。サービス側の policy は `allow group` に書き換えられません（`where` の条件を残す）。
+
+利用者側（Resource Manager を実行する利用者の group。AIDP を開くだけの利用者は `use ai-data-platforms`）:
+
+```text
+allow group <domain>/<group> to manage ai-data-platforms in compartment id <AIDP のコンパートメント>
+allow group <domain>/<group> to use autonomous-databases in compartment id <AIDP のコンパートメント>
+```
+
+サービス側（tenancy の範囲。root コンパートメントに置く）:
+
+```text
+allow any-user TO {AUTHENTICATION_INSPECT, DOMAIN_INSPECT, DOMAIN_READ, DYNAMIC_GROUP_INSPECT, GROUP_INSPECT, GROUP_MEMBERSHIP_INSPECT, USER_INSPECT, USER_READ} IN TENANCY where all {request.principal.type='aidataplatform'}
+allow any-user to {TAG_NAMESPACE_USE} in tenancy where all {request.principal.type = 'aidataplatform'}
+allow any-user to use generative-ai-family in tenancy where all { request.principal.type='aidataplatform'}
+```
+
+サービス側（AIDP のコンパートメントの範囲）:
+
+```text
+allow any-user to manage log-groups in compartment id <AIDP のコンパートメント> where ALL { request.principal.type='aidataplatform' }
+allow any-user to read log-content in compartment id <AIDP のコンパートメント> where ALL { request.principal.type='aidataplatform' }
+allow any-user to use metrics in compartment id <AIDP のコンパートメント> where ALL {request.principal.type='aidataplatform', target.metrics.namespace='oracle_aidataplatform'}
+allow any-user to manage buckets in compartment id <AIDP のコンパートメント> where all { request.principal.type='aidataplatform', any {request.permission = 'BUCKET_CREATE', request.permission = 'BUCKET_INSPECT', request.permission = 'BUCKET_READ', request.permission = 'BUCKET_UPDATE'}}
+allow any-user to manage buckets in compartment id <AIDP のコンパートメント> where all { request.principal.id=target.resource.tag.orcl-aidp.governingAidpId, any {request.permission = 'BUCKET_DELETE', request.permission = 'PAR_MANAGE', request.permission = 'RETENTION_RULE_LOCK', request.permission = 'RETENTION_RULE_MANAGE'} }
+allow any-user to read objectstorage-namespaces in compartment id <AIDP のコンパートメント> where all { request.principal.type='aidataplatform', any {request.permission = 'OBJECTSTORAGE_NAMESPACE_READ'}}
+allow any-user to manage objects in compartment id <AIDP のコンパートメント> where all { request.principal.id=target.bucket.system-tag.orcl-aidp.governingAidpId }
+```
+
+プライベート・ネットワーク用（ADB がプライベート・エンドポイント〔stack の既定〕のときは必須。AIDP が ADB の subnet に接続する）:
+
+```text
+allow any-user to manage vnics in compartment id <AIDP のコンパートメント> where all { request.principal.type='aidataplatform'}
+allow any-user to use subnets in compartment id <AIDP のコンパートメント> where all { request.principal.type='aidataplatform'}
+allow any-user to use network-security-groups in compartment id <AIDP のコンパートメント> where all { request.principal.type='aidataplatform'}
+```
+
+VCN・subnet が別のコンパートメントにあるときは、プライベート・ネットワーク用の 3 つをそのコンパートメントに向けます。
+
+#### ネットワーク（ADB がプライベート・エンドポイントのとき）
+
+- ADB のプライベート・エンドポイントの subnet の security list に、**送信元 = VCN の CIDR、すべての port** の ingress の規則を足します
+  （公式文書 [Workspaces](https://docs.oracle.com/en/cloud/paas/ai-data-platform/aidug/workspaces.html) の「VCN の中のすべての送信元からすべての port への ingress」。Compute 用の「TCP `1522`」の規則だけでは足りません）。
+- AIDP のプライベートの workspace と AI Compute は、ADB と同じ subnet に置かれます。そこから OCI Generative AI などへ出るため、その subnet の route table に NAT Gateway（`0.0.0.0/0`）か Service Gateway の経路が要ります。
+- AIDP の Agent を使うときの AI Compute は、ADB と**同じ subnet** のプライベートの workspace に作ります（同じ VCN の別の subnet は使えません）。
+
+### AIDP 用の DB ユーザー
+
+AIDP の External Catalog が ADB に接続するユーザーです。アプリ用の DB ユーザー（`ADB_APP_USER`）とは別にします
+（`ADB_APP_USER` は `PDB_DBA` を持ち、3 製品のシステムの表と同じ schema のため、AIDP に渡さない）。
+External Catalog は登録した 1 組のユーザーで接続し、AIDP を使う全員がそのユーザーの権限で ADB を読み書きします。
+
+- **作り方**: アプリ用の DB ユーザーと同じです。cloud-init が `/u01/aipoc/props/adb_aidp_user.env`（root の 0600。ADMIN のパスワードと、AIDP 用のユーザーの名前・パスワード）を置き、
+  `platform/deploy/suite-init.sh` がアプリ用の DB ユーザーの後・製品の配備の前に、Compute から ADMIN で接続して `platform/deploy/suite-db-user.py apply-aidp` を実行します（冪等。再配備のたびに権限を合わせ直す）。
+  失敗すると `/var/log/suite-init.log` に `[suite-init] check: aidp db user NG` を出し、製品の配備と起動を続けて、最後に失敗（0 以外）を返します。
+- **パスワード**: stack の入力 `aidp_db_user_password` です。props のファイルにだけ置き、`platform/.env`・各製品の `backend/.env`・画面・output には出しません（`platform/.env` に書くのは名前の `PLATFORM_AIDP_DB_USER` だけ）。値は Terraform の state と cloud-init の user_data にも入ります。
+- **ADMIN のパスワード**: `deploy_aidp=true` のときは、既存の ADB でアプリ用の DB ユーザーを使わない構成でも `existing_adb_admin_password` が必須です（AI 機能の関連付けと、このユーザーの作成に使う）。
+- **名前**: `aidp_db_user_name`（既定 `ADB_AIDP_USER`）。3 製品の接続のユーザーと同じ名前にはできません。
+
+付ける権限（`python3 platform/deploy/suite-db-user.py plan-aidp` で表示できます。出典は公式文書 [External Catalogs](https://docs.oracle.com/en/cloud/paas/ai-data-platform/aidug/external-catalogs.html) の最小の権限）:
+
+```sql
+CREATE USER ADB_AIDP_USER IDENTIFIED BY "<password>" DEFAULT TABLESPACE DATA QUOTA UNLIMITED ON DATA PROFILE ORA_APP_PROFILE;
+GRANT CREATE SESSION TO ADB_AIDP_USER;
+GRANT READ, WRITE ON DIRECTORY DATA_PUMP_DIR TO ADB_AIDP_USER;  -- 公式の最小の権限（Spark の書き込みでも使う）
+GRANT DWROLE TO ADB_AIDP_USER;                                 -- 書き込み（INSERT・表の作成）。aidp_db_user_write_enabled=true（既定）のとき
+```
+
+- **使えるのは自分の schema だけです。** AIDP で加工した結果は、このユーザーの schema に表として書きます（AIDP の結果の置き場所）。
+  NL2SQL から使うときは、業務プロファイルの対象にこの schema の表を選びます（アプリ用の DB ユーザーは `PDB_DBA` で読めます）。
+- `aidp_db_user_write_enabled=false` にすると読み取りだけになります（`QUOTA 0 ON DATA`、`DWROLE` を付けない。付いていれば再配備で外す）。
+- ほかの schema を AIDP から読ませるときは、ADMIN で必要な表・view にだけ `GRANT SELECT ON <schema>.<表> TO ADB_AIDP_USER` を実行します（stack は付けません）。
+  3 製品のシステムの表（`PLATFORM_` / `RAG_` / `NL2SQL_` / `AGENT_`）は付けないでください。
+- **NL2SQL の Deep Data Security は AIDP に効きません。** Data Grant は END USER にだけ効き、AIDP は通常の DB ユーザーで接続するためです。
+  AIDP に見せる範囲は、このユーザーに付ける `SELECT`（表・view）と、AIDP の中のロールと権限で絞ります。
+
+### 配備の後
+
+output（Resource Manager の「Outputs」）:
+
+| output | 内容 |
+|---|---|
+| `aidp_url` | AIDP の画面を開く URL（`https://<alias key><リージョンの符号>.datalake.oci.oraclecloud.com/`。符号は Osaka `kix`・Tokyo `nrt`・Chicago `ord`） |
+| `aidp_ocid` / `aidp_alias_key` / `aidp_default_workspace_name` | instance の OCID・alias key・既定の workspace の名前 |
+| `aidp_api_endpoint` | Workbench REST API（workspace・catalog・Agent）の基点（`https://aidp.<region>.oci.oraclecloud.com/20260430/aiDataPlatforms/<OCID>`。OCI のリクエスト署名で呼ぶ。公式文書の例にある `/api/` を挟むと 404 になる） |
+| `aidp_web_socket_endpoint` | WebSocket の endpoint |
+| `aidp_external_catalog_info` | External Catalog の登録に要る値（ADB の OCID・DB 名・サービス名・ユーザー名。パスワードは出さない） |
+
+- **3 製品の画面**: 「システム設定 › データベース」の「Oracle AI Data Platform」の区画に、AIDP の URL（開くリンク）・OCID・リージョンと、External Catalog の登録に要る値
+  （ADB の DB 名・サービス名・AIDP 用の DB ユーザーの名前）、そのユーザーが ADB に在るかが出ます（読み取り専用。パスワードは出ません。`PLATFORM_AIDP_OCID` が空なら区画は出ません。#5931）。
+- **利用者の権限**: AIDP を開く利用者は、OCI IAM の `use ai-data-platforms` に加えて、AIDP の中のロール・workspace・catalog の権限が要ります（AIDP を作った利用者が管理者になり、ほかの利用者に付ける）。
+- **External Catalog の登録**（AIDP の画面）: Master Catalog › Create catalog › External catalog › Oracle Autonomous AI Lakehouse を選び、`aidp_external_catalog_info` の ADB・サービス名と、
+  AIDP 用の DB ユーザーの名前・パスワードを入力します。ADB がプライベート・エンドポイントのときは「Enable private network」をオンにし、ADB の subnet に接続するプライベートの workspace を選びます
+  （既定の workspace はプライベート・ネットワークにできません）。Wallet を使うときは instance wallet を使います（regional wallet は使えません）。
+- ADB の側で表を作った・AIDP から書いた後は、AIDP の catalog のメタデータを更新（refresh）すると新しい表が見えます。
+
+### 実環境で確かめたこと（2026-11-27、Osaka）
+
+新規の ADB（Lakehouse・プライベート・エンドポイント・mTLS 必須）と `deploy_aidp=true` で stack を配備して確かめました。
+
+| 確かめたこと | 結果 |
+|---|---|
+| Terraform での作成 | ADB 約 2 分 → AIDP 約 13 分 → Compute。`ACTIVE` になり、既定の workspace とプライベートの workspace（`Pvt_vector_db_<DB 名>`）ができる |
+| プライベート・エンドポイント・mTLS 必須の ADB の AI 機能の関連付け | できる。External Catalog `vector_db_<DB 名>`（ADMIN で接続）が `ACTIVE`、メタデータの更新も成功。ADB に `AIDP_<id>_KB_WRITE` ができる |
+| AIDP 用の DB ユーザー | `[suite-init] check: aidp db user OK`。role は `DWROLE`、system privilege は `CREATE SESSION` だけ（ANY 権限なし）。自分の schema に表を作って書ける。アプリ用の DB ユーザーの表は見えず（`ORA-00942`）、ほかの schema に表を作れない（`ORA-01031`） |
+| AIDP 用の DB ユーザーでの External Catalog の接続 | Workbench REST API の接続テスト（`actions/testConnection`。source は Oracle Autonomous AI Lakehouse、instance wallet・TNS の別名 `<db>_high`）が成功。誤ったパスワードでは `logon denied` で失敗する（プライベート・エンドポイントの ADB に実際に接続している）。catalog の作成そのものは未実施 |
+| Workbench REST API | `https://aidp.<region>.oci.oraclecloud.com/20260430/…` が API キーの署名で応答する（`/api/20260430/…` は 404） |
+| 画面の URL | host は「alias key ＋ リージョンの符号」（画面の実装で確認）。**ブラウザでのログインは未確認** |
+
+要った前提: 上の IAM policy（tenancy の範囲の 3 つは既にあり、コンパートメントの範囲とプライベート・ネットワーク用を足した）、
+ADB の subnet の security list の「VCN の CIDR → すべての port」、その subnet の route table の NAT Gateway。
+
+### 配備済みの環境で使うとき
+
+`deploy_aidp` を後からオンにすると Compute が作り直されるため、配備済みの環境では AIDP を OCI コンソールで作り、Compute の repo の `platform/.env` に次を書きます（書いた後に `sudo -n ./platform/deploy/suite-restart.sh`）。
+
+```text
+PLATFORM_AIDP_OCID=<Workbench の OCID>
+PLATFORM_AIDP_REGION=<リージョン>
+PLATFORM_AIDP_URL=<Workbench の画面の URL>
+PLATFORM_AIDP_DB_USER=<AIDP 用の DB ユーザーの名前>
+```
+
+AIDP 用の DB ユーザーは、`python3 platform/deploy/suite-db-user.py plan-aidp` の SQL を ADMIN で実行して作ります
+（`PLATFORM_AIDP_DB_USER` にはその名前を書く。パスワードは書かない）。
+
+## Oracle Analytics Cloud（任意。#5933）
+
+`deploy_oac` をオンにすると、Oracle Analytics Cloud（OAC）の instance を ADB のコンパートメントに 1 つ作ります（既定はオフ）。
+ADB のデータ（3 製品の表・Oracle AI Data Platform で加工した結果）の可視化（dataset・workbook）に使います。
+
+- **stack が作るもの**: OAC の instance（公開の endpoint。容量は OCPU の数で指定）。
+- **stack が作らないもの**: IAM policy、ADB との接続、Private Access Channel、dataset・workbook。接続は OAC の画面で作ります（下の「配備の後」）。
+- **認証は Identity Domain**。`oac_identity_domain_ocid`（Identity Domain の OCID）と `oac_admin_user`（その domain の利用者のユーザー名。OCID ではない）を入力します。IDCS の access token は使いません。
+- 3 製品と Compute は OAC を使いません（`platform/.env` と cloud-init には何も書きません）。
+- 後からオンにしても Compute は作り直されません（cloud-init に入らないため。#5945 の修正より前に配備した stack は、次の apply で 1 回だけ作り直されます）。
+- `oac_name`・`oac_identity_domain_ocid`・`oac_feature_set` は、後から変えると OAC が作り直されます（dataset・workbook が失われる）。
+
+### 配備の前に
+
+- stack を apply する利用者に、OAC を作る権限が要ります（stack は IAM policy を作りません）。
+
+  ```text
+  Allow group <group> to manage analytics-instances in compartment <ADB のコンパートメント>
+  ```
+
+- `oac_admin_user` は、`oac_identity_domain_ocid` の Identity Domain に居る利用者にします（別の domain の利用者は指定できません）。
+- 費用は OCPU の数とエディション・ライセンスで決まります。`oac_capacity_ocpus = 1` は試用だけに使えます（本番は 2 以上）。使わない間は OCI コンソールで一時停止できます。
+
+### 配備の後
+
+output の `oac_url` を開き、`oac_admin_user` でサインインします。ADB との接続は次の手順で作ります。
+
+1. ADB の Wallet を用意します（OCI コンソールの ADB の「データベース接続」からダウンロードする。mTLS のとき）。
+2. OAC の「作成 › 接続 › Oracle Autonomous AI Lakehouse」で、Wallet（クライアント資格証明）・ユーザー名・パスワード・サービス名を入力します。
+   - **3 製品の接続のユーザー（アプリ用の DB ユーザー）と ADMIN は入力しないでください。** Oracle AI Data Platform を配備しているときは、AIDP 用の DB ユーザー（既定 `ADB_AIDP_USER`。自分の schema だけを使える）を使うと、AIDP で加工した結果をそのまま可視化できます。ほかの schema の表を見せるときは、ADMIN が `GRANT SELECT` で個別に付けます。
+3. **ADB がプライベート・エンドポイントのとき**は、公開の endpoint の OAC からは届きません。OAC の instance に Private Access Channel を作り（Enterprise Edition だけ。ADB の VCN・subnet と、ADB のプライベート・エンドポイントの DNS zone を指定する）、接続を作ります。Private Access Channel は stack で作りません。
+
+### 実環境で確かめたこと（2026-11-27、Osaka）
+
+| 確かめたこと | 結果 |
+|---|---|
+| Identity Domain の OCID と管理者のユーザー名だけで作れるか（IDCS の access token なし） | 作れる。作成は約 5 分（Enterprise Edition・1 OCPU・公開の endpoint） |
+| `oac_url`（資源の `service_url`） | `https://<名前>-<識別子>.analytics.ocp.oraclecloud.com/ui/`。開くと Identity Domain のサインインへ転送される |
+| 作成の後の plan | OAC に差分なし |
+
+確かめていないこと: 画面でのサインイン、ADB との接続（Private Access Channel を含む）、Professional Edition、`BRING_YOUR_OWN_LICENSE`、Tokyo・Chicago。
 
 ## 製品ごとの入力と instance 上の構成
 

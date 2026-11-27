@@ -530,6 +530,29 @@ done
   grep -qF "[suite-init] check: db user NG" "${out}" || fail "NG の行: $(cat "${out}")"
   [ ! -e "$(cat "${case_dir}/wallet-dir")" ] || fail "失敗しても Wallet の一時の directory を消す"
 
+  # Oracle AI Data Platform 用の DB ユーザー（#5917）: adb_aidp_user.env が無ければ何もしない（uv も呼ばない）。
+  rm -f "${calls}"
+  provision_db_aidp_user > "${out}" 2>&1 || fail "adb_aidp_user.env が無いのに失敗した: $(cat "${out}")"
+  [ ! -e "${calls}" ] || fail "adb_aidp_user.env が無いのに uv を呼んだ"
+  # ある: suite-db-user.py apply-aidp を実行し、0600 にする。platform/.env（画面の値）は渡さない。
+  printf "SUITE_DB_ADMIN_USER=ADMIN\nSUITE_DB_ADMIN_PASSWORD='stub'\nSUITE_DB_AIDP_USER='ADB_AIDP_USER'\nSUITE_DB_AIDP_PASSWORD='stub'\nSUITE_DB_AIDP_WRITE=true\n" \
+    > "${PROPS_DIR}/adb_aidp_user.env"
+  chmod 0644 "${PROPS_DIR}/adb_aidp_user.env"
+  provision_db_aidp_user > "${out}" 2>&1 || fail "AIDP 用の DB ユーザーは成功するはず: $(cat "${out}")"
+  [ "$(stat -c %a "${PROPS_DIR}/adb_aidp_user.env")" = "600" ] || fail "adb_aidp_user.env は 0600"
+  call="$(cat "${calls}")"
+  for expected in "suite-db-user.py apply-aidp" "--aidp-env ${PROPS_DIR}/adb_aidp_user.env" "--app-env ${PROPS_DIR}/platform.env"; do
+    printf '%s\n' "${call}" | grep -qF -- "${expected}" || fail "uv の引数に ${expected} が無い: ${call}"
+  done
+  if printf '%s\n' "${call}" | grep -qF -- "--current-env"; then fail "AIDP 用のユーザーに platform/.env を渡した: ${call}"; fi
+  [ ! -e "$(cat "${case_dir}/wallet-dir")" ] || fail "Wallet の一時の directory を消していない（AIDP）"
+  grep -qxF "[suite-init] check: aidp db user OK" "${out}" || fail "AIDP の OK の行: $(cat "${out}")"
+  status=0
+  UV_STATUS=1 provision_db_aidp_user > "${out}" 2>&1 || status=$?
+  [ "${status}" -eq 1 ] || fail "AIDP 用の DB ユーザーの失敗を返さない（${status}）"
+  grep -qF "[suite-init] check: aidp db user NG" "${out}" || fail "AIDP の NG の行: $(cat "${out}")"
+  rm -f "${PROPS_DIR}/adb_aidp_user.env"
+
   # main: DB ユーザーの準備が失敗しても（ADB に接続できない）、製品の配備・Nginx・確認まで進み、最後に失敗として返す。
   steps="${case_dir}/steps.log"
   for step in load_products validate_ports grow_root_filesystem install_os_packages configure_firewall configure_selinux \

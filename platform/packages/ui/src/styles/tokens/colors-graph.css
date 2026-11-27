@@ -14,4 +14,9 @@
   --color-graph-default: light-dark(#f8fafc, #242b35);
   --color-graph-fg:      light-dark(#0f172a, #eff3f7);
   --color-graph-line:    light-dark(#94a3b8, #667386);
+  /* 種別の塗りと同じ系統の濃い枠（Cytoscape の探索の画布。#5922）。 */
+  --color-graph-entity-line:  light-dark(#3b82f6, #60a5fa);
+  --color-graph-metric-line:  light-dark(#8b5cf6, #a78bfa);
+  --color-graph-term-line:    light-dark(#14b8a6, #2dd4bf);
+  --color-graph-default-line: light-dark(#64748b, #94a3b8);
 }

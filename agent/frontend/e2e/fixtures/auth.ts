@@ -92,7 +92,7 @@ const MENU_LABELS: Record<(typeof MENU_PERMISSION_CODES)[number], [group: string
   "menu.settings_chat_attachments": ["運用設定", "チャットの添付"],
   "menu.settings_answer_notice": ["運用設定", "回答の注意書き"],
   "menu.runtimes": ["運用設定", "実行環境"],
-  "menu.settings_external_mcp": ["運用設定", "MCP 接続"],
+  "menu.settings_external_mcp": ["運用設定", "外部接続"],
   "menu.security_users": ["ユーザーとロール", "ユーザー管理"],
   "menu.security_roles": ["ユーザーとロール", "ロール管理"],
   "menu.security_api_keys": ["ユーザーとロール", "API キー"],

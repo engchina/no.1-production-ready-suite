@@ -120,4 +120,4 @@ NL2SQL の読み取りのツールの例は `nl2sql_list_profiles`、Agent は `
 - 製品の manifest: `/account/api-keys*` はログインだけ（`OPEN_API_OPERATIONS`）、`/security/api-keys*` は RAG / NL2SQL が `menu.security_api_keys`、Agent は Agent 管理（`agent.admin`。画面は RAG / NL2SQL）。
 - Agent: `features/agent/mcp_server.py`（ツールとキーの範囲・Run の数の上限）、`runtime.is_mcp_run`（承認の要るツールを呼ばない）。画面で業務 Agent を絞るのは `AccountPage` の `apiKeys.agentScopeOptions`（Agent の画面が、業務 Agent を読める利用者に渡す。#1873）。
 - Agent → RAG / NL2SQL の連携は今までどおりサービストークン（`backend-standard.md`「製品間の連携」）。
-- 残課題: 連携用の利用者（ログインできない利用者）として動くキー・RAG / NL2SQL のプロファイルでキーを絞る機能・worker をまたいだ回数の上限・OAuth 2.1（MCP の authorization 仕様）・A2A（Agent2Agent）プロトコル。
+- 残課題: 連携用の利用者（ログインできない利用者）として動くキー・RAG / NL2SQL のプロファイルでキーを絞る機能・worker をまたいだ回数の上限・OAuth 2.1（MCP の authorization 仕様）・A2A（Agent2Agent）の server（自分を A2A の Agent として公開すること。Agent は client として外部の A2A の Agent を呼べる。#5932。[agent/docs/agent-control-plane-design.md](../../agent/docs/agent-control-plane-design.md) §4.3）。

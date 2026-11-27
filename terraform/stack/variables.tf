@@ -806,3 +806,144 @@ variable "agent_runtime_repository_backend" {
     error_message = "agent_runtime_repository_backend must be oracle_checkpoint or oracle_normalized."
   }
 }
+
+# ---------------------------------------------------------------- Oracle AI Data Platform（任意。#5917）
+
+variable "deploy_aidp" {
+  description = "Deploy an Oracle AI Data Platform Workbench instance in the Autonomous AI Database compartment and link it to the Autonomous AI Database of this stack. Changing it re-creates the Compute instance (cloud-init changes)."
+  type        = bool
+  default     = false
+}
+
+variable "aidp_iam_policies_confirmed" {
+  description = "Confirm that the IAM policies required by Oracle AI Data Platform are already in place (see terraform/README.md). The stack does not create IAM policies; without them the instance creation fails after a long wait."
+  type        = bool
+  default     = false
+}
+
+variable "aidp_display_name" {
+  description = "Display name of the Oracle AI Data Platform Workbench instance."
+  type        = string
+  default     = "production-ready-suite-aidp"
+}
+
+variable "aidp_default_workspace_name" {
+  description = "Name of the default workspace created with the Oracle AI Data Platform Workbench instance. Changing it re-creates the instance."
+  type        = string
+  default     = "production-ready-suite"
+}
+
+variable "aidp_ai_feature_enabled" {
+  description = "Enable the AI features (Knowledge Base and Agents) of Oracle AI Data Platform and use the Autonomous AI Database of this stack as the vector database. Changing it later re-creates the instance."
+  type        = bool
+  default     = true
+}
+
+variable "aidp_db_user_name" {
+  description = "Database user (schema) that Oracle AI Data Platform uses for its External Catalog. It is not the application database user; it can only use its own schema."
+  type        = string
+  default     = "ADB_AIDP_USER"
+
+  validation {
+    condition = (
+      can(regex("^[A-Za-z][A-Za-z0-9_]{0,29}$", var.aidp_db_user_name))
+      && !contains(["ADMIN", "SYS", "SYSTEM", "PUBLIC", "DEEPSEC_DATA_USER", "GGADMIN", "ADBSNMP"], upper(var.aidp_db_user_name))
+      && !can(regex("^(?i)(ORA_|SYS)", var.aidp_db_user_name))
+    )
+    error_message = "aidp_db_user_name must start with a letter, contain only letters, digits and underscores (up to 30 characters), and must not be an Oracle-maintained name such as ADMIN, SYS, SYSTEM or DEEPSEC_DATA_USER."
+  }
+}
+
+variable "aidp_db_user_password" {
+  description = "Password of the Oracle AI Data Platform database user. 12 to 30 characters with at least one uppercase letter, one lowercase letter and one digit; must not contain double quotes, single quotes or the user name. It is stored only in a root-only file on the Compute instance, not in platform/.env."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition = var.aidp_db_user_password == "" || (
+      length(var.aidp_db_user_password) >= 12
+      && length(var.aidp_db_user_password) <= 30
+      && can(regex("[A-Z]", var.aidp_db_user_password))
+      && can(regex("[a-z]", var.aidp_db_user_password))
+      && can(regex("[0-9]", var.aidp_db_user_password))
+      && !can(regex("[\"'\r\n]", var.aidp_db_user_password))
+    )
+    error_message = "aidp_db_user_password must be 12 to 30 characters, include an uppercase letter, a lowercase letter and a digit, and must not contain double quotes, single quotes or line breaks."
+  }
+}
+
+variable "aidp_db_user_write_enabled" {
+  description = "Allow the Oracle AI Data Platform database user to create tables and insert rows in its own schema (DWROLE and a quota on the DATA tablespace). Disable it to make the user read-only."
+  type        = bool
+  default     = true
+}
+
+# ---------------------------------------------------------------- Oracle Analytics Cloud（任意。#5933）
+
+variable "deploy_oac" {
+  description = "Deploy an Oracle Analytics Cloud instance in the Autonomous AI Database compartment. The connection to the Autonomous AI Database is created in the Oracle Analytics Cloud console, not by this stack."
+  type        = bool
+  default     = false
+}
+
+variable "oac_name" {
+  description = "Name of the Oracle Analytics Cloud instance. It must be unique in the tenancy and cannot be changed later."
+  type        = string
+  default     = "ProductionReadySuiteOAC"
+
+  validation {
+    condition     = can(regex("^[A-Za-z][A-Za-z0-9]{0,29}$", var.oac_name))
+    error_message = "oac_name must start with a letter and contain only letters and digits (up to 30 characters)."
+  }
+}
+
+variable "oac_identity_domain_ocid" {
+  description = "OCID of the identity domain used to sign in to Oracle Analytics Cloud. Changing it re-creates the instance."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.oac_identity_domain_ocid == "" || can(regex("^ocid1\\.domain\\.", trimspace(var.oac_identity_domain_ocid)))
+    error_message = "oac_identity_domain_ocid must be the OCID of an identity domain (ocid1.domain...)."
+  }
+}
+
+variable "oac_admin_user" {
+  description = "User name (not OCID) of a user in the identity domain who becomes the administrator of the Oracle Analytics Cloud instance."
+  type        = string
+  default     = ""
+}
+
+variable "oac_feature_set" {
+  description = "Edition of Oracle Analytics Cloud: ENTERPRISE_ANALYTICS (Enterprise Edition) or SELF_SERVICE_ANALYTICS (Professional Edition). Changing it re-creates the instance."
+  type        = string
+  default     = "ENTERPRISE_ANALYTICS"
+
+  validation {
+    condition     = contains(["ENTERPRISE_ANALYTICS", "SELF_SERVICE_ANALYTICS"], var.oac_feature_set)
+    error_message = "oac_feature_set must be ENTERPRISE_ANALYTICS or SELF_SERVICE_ANALYTICS."
+  }
+}
+
+variable "oac_license_type" {
+  description = "License of Oracle Analytics Cloud: LICENSE_INCLUDED or BRING_YOUR_OWN_LICENSE."
+  type        = string
+  default     = "LICENSE_INCLUDED"
+
+  validation {
+    condition     = contains(["LICENSE_INCLUDED", "BRING_YOUR_OWN_LICENSE"], var.oac_license_type)
+    error_message = "oac_license_type must be LICENSE_INCLUDED or BRING_YOUR_OWN_LICENSE."
+  }
+}
+
+variable "oac_capacity_ocpus" {
+  description = "Number of OCPUs of the Oracle Analytics Cloud instance. 1 is for trials only; use 2 or more for production."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = contains([1, 2, 4, 6, 8, 10, 12, 16, 24, 36, 52], var.oac_capacity_ocpus)
+    error_message = "oac_capacity_ocpus must be one of 1, 2, 4, 6, 8, 10, 12, 16, 24, 36, 52."
+  }
+}

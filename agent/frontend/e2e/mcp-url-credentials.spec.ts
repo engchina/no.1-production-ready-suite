@@ -43,7 +43,7 @@ test.describe("MCP 接続の URL の資格情報", () => {
     // 資格情報ではない query はそのまま保存できる。
     await url.fill("https://crm.example.test/mcp?tenant=t1");
     await page.getByRole("button", { name: "作成" }).click();
-    await expect(page.getByText("MCP 接続を追加しました")).toBeVisible();
+    await expect(page.getByText("外部接続を追加しました")).toBeVisible();
     expect(mockApi.lastRequest("POST", "/api/settings/mcp-connections")?.body).toMatchObject({
       server_id: "crm1056",
       base_url: "https://crm.example.test/mcp?tenant=t1",
@@ -81,7 +81,7 @@ test.describe("MCP 接続の URL の資格情報", () => {
     // URL 以外を変えた保存は URL を送らず、保存済みの URL を使い続ける。
     await page.locator("#mcp-server-timeout").fill("20");
     await page.getByRole("button", { name: "保存" }).click();
-    await expect(page.getByText("MCP 接続を保存しました")).toBeVisible();
+    await expect(page.getByText("外部接続を保存しました")).toBeVisible();
     const body = mockApi.lastRequest("PATCH", "/api/settings/mcp-connections/legacy1056")?.body as Record<string, unknown>;
     expect(body).toMatchObject({ timeout_seconds: 20 });
     expect(body).not.toHaveProperty("base_url");

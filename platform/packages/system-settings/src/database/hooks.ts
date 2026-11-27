@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   ADB_INFO_QUERY_KEY,
+  AIDP_INTEGRATION_QUERY_KEY,
   DATABASE_SETTINGS_QUERY_KEY,
   type AdbSettingsUpdate,
   type DatabaseSettingsApi,
@@ -105,6 +106,15 @@ export function useAdbInfo(api: DatabaseSettingsApi) {
         ? ACTIVE_REFETCH_INTERVAL_MS
         : false;
     },
+  });
+}
+
+/** Oracle AI Data Platform の連携の情報（読み取り専用。#5931）。接続設定を保存すると読み直す（key の前方一致）。 */
+export function useAidpIntegration(api: DatabaseSettingsApi) {
+  return useQuery({
+    queryKey: AIDP_INTEGRATION_QUERY_KEY,
+    queryFn: ({ signal }) => api.getAidpIntegration({ signal }),
+    retry: false,
   });
 }
 

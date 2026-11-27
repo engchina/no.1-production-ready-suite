@@ -15,7 +15,14 @@ from pydantic import BaseModel, Field
 
 from app.settings import get_settings
 
-McpAuthMode = Literal["none", "api_key", "oauth_client_credentials", "service_token"]
+# 認証方式。`oci_signature` は「システム設定 › OCI 認証」の API キーでリクエストに署名する（#5932。
+# 接続ごとの secret を持たない）。A2A の接続は `service_token`（3 製品の間の token）を使えない。
+McpAuthMode = Literal[
+    "none", "api_key", "oauth_client_credentials", "service_token", "oci_signature"
+]
+# 接続のプロトコル（#5932）。`mcp` は MCP のサーバー（ツールは `tools/list`）、`a2a` は外部の Agent
+# （A2A。Agent card を読み、1 つの Agent を 1 つのツールにする。`features/agent/a2a.py`）。
+McpConnectionProtocol = Literal["mcp", "a2a"]
 
 # RAG / NL2SQL の MCP 接続（#757）。各製品の `POST /api/mcp` を、Run の利用者を `sub` にした
 # サービストークン（aud は製品名）で呼ぶ（#233）。URL は terraform・init_script が書く
@@ -31,13 +38,44 @@ PRODUCT_MCP_CONNECTION_LABELS: dict[str, str] = {
 # 標準の接続の呼び先の製品名（失敗の案内の「〜のサービスが起動しているか」に使う）。
 PRODUCT_MCP_SERVICE_NAMES: dict[str, str] = {"rag": "RAG", "nl2sql": "NL2SQL"}
 
+# Oracle AI Data Platform（AIDP）の Agent の組み込みの接続（#5932）。AIDP を配備した構成
+# （`PLATFORM_AIDP_OCID` がある）にだけ出す。プロトコル（A2A）と認証（OCI 署名）は固定で、管理者が
+# Agent の endpoint の URL を 1 回入れる。接続 ID は組み込みのスキルの宣言とツール名の接頭辞
+# （`aidp__`）が使うため、AIDP を配備していない構成でも画面・API・宣言の接続には使わせない。
+AIDP_CONNECTION_ID = "aidp"
+AIDP_CONNECTION_LABEL = "AI Data Platform の Agent"
+# AIDP の Agent は応答までに LLM とデータの処理を挟むため、既定の待ち時間は MCP の既定より長くする
+# （画面で変えられる）。
+AIDP_DEFAULT_TIMEOUT_SECONDS = 120.0
+
+
+def aidp_deployed() -> bool:
+    """AIDP を配備した構成か（共通の設定 `PLATFORM_AIDP_OCID` がある。#5917）。"""
+    return bool(get_settings().aidp_ocid.strip())
+
+
+def aidp_gateway_host() -> str | None:
+    """AIDP の Agent の gateway の host（`PLATFORM_AIDP_REGION` から決まる）。
+
+    AIDP を配備していない・リージョンが未設定なら None。
+    """
+    region = get_settings().aidp_region.strip()
+    if not aidp_deployed() or not region:
+        return None
+    return f"gateway.aidp.{region}.oci.oraclecloud.com"
+
 
 class McpConnectionConfig(BaseModel):
     """MCP 接続（#757。旧「外部 MCP」のサーバー・外部 RAG・外部 NL2SQL をまとめたもの）。"""
 
     server_id: str
     label: str | None = None
+    # プロトコル（#5932）。保存した値の無い接続は MCP。
+    protocol: McpConnectionProtocol = "mcp"
+    # MCP の endpoint の URL。A2A の接続では Agent の endpoint の URL（`message/send` の送り先）。
     base_url: str | None = None
+    # A2A の Agent card の URL。空なら endpoint から決める（`a2a.agent_card_url`）。
+    agent_card_url: str | None = None
     # 認証方式。未指定なら設定された資格情報から推定する（OAuth > API キー > なし）。
     auth_mode: McpAuthMode | None = None
     api_key: str | None = None
@@ -62,8 +100,18 @@ class McpConnectionConfig(BaseModel):
     trust_tool_annotations: bool = False
 
     def annotations_trusted(self) -> bool:
-        """ツールの注釈（readOnlyHint）を既定の判定に使うか（標準の接続は常に使う。#1832）。"""
+        """ツールの注釈（readOnlyHint）を既定の判定に使うか（標準の接続は常に使う。#1832）。
+
+        A2A の接続（#5932）では「この接続の Agent を承認なしに呼ぶか」（組み込みの `aidp` は常に
+        呼ぶ。外部の接続は管理者が信頼にしたときだけ）。A2A のツールは注釈を持たないので、信頼しても
+        送信後の失敗では再送しない（`tools.mcp_tool_definition`）。
+        """
         return self.source == "builtin" or self.trust_tool_annotations
+
+    def display_name(self) -> str:
+        """利用者に見せる失敗の文の中の接続の呼び方（MCP 接続「…」/ 外部の Agent「…」）。"""
+        kind = "外部の Agent" if self.protocol == "a2a" else "MCP 接続"
+        return f"{kind}「{self.label or self.server_id}」"
 
     def effective_auth_mode(self) -> McpAuthMode:
         if self.auth_mode is not None:
@@ -117,6 +165,25 @@ def _product_connections() -> list[McpConnectionConfig]:
     return connections
 
 
+def _aidp_connections() -> list[McpConnectionConfig]:
+    """AIDP の Agent の組み込みの接続（AIDP を配備した構成だけ。#5932）。
+
+    URL は配備では決まらない（Agent は AIDP の画面で作る）ので、管理者が画面で入れる。
+    """
+    if not aidp_deployed():
+        return []
+    return [
+        McpConnectionConfig(
+            server_id=AIDP_CONNECTION_ID,
+            label=AIDP_CONNECTION_LABEL,
+            protocol="a2a",
+            auth_mode="oci_signature",
+            timeout_seconds=AIDP_DEFAULT_TIMEOUT_SECONDS,
+            source="builtin",
+        )
+    ]
+
+
 class AgentRuntimeConfigStore:
     def __init__(self) -> None:
         self._lock = Lock()
@@ -141,7 +208,9 @@ class AgentRuntimeConfigStore:
         server_id: str,
         *,
         label: str | None = None,
+        protocol: McpConnectionProtocol | None = None,
         base_url: str | None = None,
+        agent_card_url: str | None = None,
         auth_mode: McpAuthMode | None = None,
         api_key: str | None = None,
         timeout_seconds: float | None = None,
@@ -153,7 +222,10 @@ class AgentRuntimeConfigStore:
         service_audience: str | None = None,
         trust_tool_annotations: bool | None = None,
     ) -> McpConnectionConfig:
-        """接続を追加・更新する。None は「変えない」、空文字は「消す」。"""
+        """接続を追加・更新する。None は「変えない」、空文字は「消す」。
+
+        組み込みの接続のプロトコルは変えない（何を変えてよいかの検証は API の層）。
+        """
         sid = server_id.strip()
         if not sid:
             raise ValueError("server_id is required")
@@ -164,8 +236,12 @@ class AgentRuntimeConfigStore:
                 self._mcp_servers[sid] = config
             if label is not None:
                 config.label = label or None
+            if protocol is not None and config.source != "builtin":
+                config.protocol = protocol
             if base_url is not None:
                 config.base_url = base_url or None
+            if agent_card_url is not None:
+                config.agent_card_url = agent_card_url or None
             if auth_mode is not None:
                 config.auth_mode = auth_mode
             if api_key is not None:
@@ -268,13 +344,14 @@ def _declared_state() -> tuple[dict[str, McpConnectionConfig], ToolPolicyRuntime
     """設定から決まる接続とツール権限（保存先の定義を重ねる前の状態）。
 
     RAG / NL2SQL は常駐し（削除できない）、AGENT_EXTERNAL_MCP_SERVERS_JSON の宣言を重ねる。
+    AIDP を配備した構成では、AIDP の Agent の接続 `aidp` も常駐する（#5932）。
     """
     settings = get_settings()
     servers: dict[str, McpConnectionConfig] = {
-        config.server_id: config for config in _product_connections()
+        config.server_id: config for config in (*_product_connections(), *_aidp_connections())
     }
     for declared in _mcp_servers_from_json(settings.agent_external_mcp_servers_json):
-        if declared.server_id in PRODUCT_MCP_CONNECTION_IDS:
+        if declared.server_id in (*PRODUCT_MCP_CONNECTION_IDS, AIDP_CONNECTION_ID):
             continue
         servers[declared.server_id] = declared
     return servers, ToolPolicyRuntimeConfig(default_mode=settings.agent_permission_default_mode)
@@ -286,6 +363,10 @@ def _overlay_mcp_server(
     """保存した接続を重ねる（呼び出し側が lock を持つ。規則は `restore_mcp_server`）。"""
     current = servers.get(stored.server_id)
     if current is None:
+        if stored.server_id == AIDP_CONNECTION_ID:
+            # AIDP を配備しなくなった構成では、保存した組み込みの接続 `aidp` を出さない（#5932。
+            # 保存先の値は消さないので、配備し直せば URL が戻る）。
+            return
         servers[stored.server_id] = stored.model_copy(
             deep=True, update={"source": "runtime", "base_url_locked": False}
         )
@@ -306,6 +387,8 @@ def _overlay_mcp_server(
         if current.base_url_locked:
             del fields["base_url"]
     else:
+        fields["protocol"] = stored.protocol
+        fields["agent_card_url"] = stored.agent_card_url
         fields["auth_mode"] = stored.auth_mode
         fields["service_audience"] = stored.service_audience
         fields["trust_tool_annotations"] = stored.trust_tool_annotations
@@ -345,7 +428,9 @@ def _mcp_servers_from_json(raw: str | None) -> list[McpConnectionConfig]:
                 McpConnectionConfig(
                     server_id=server_id,
                     label=item.get("label"),
+                    protocol=item.get("protocol") or "mcp",
                     base_url=item.get("base_url"),
+                    agent_card_url=item.get("agent_card_url"),
                     auth_mode=item.get("auth_mode"),
                     api_key=item.get("api_key"),
                     session_id=item.get("session_id"),
