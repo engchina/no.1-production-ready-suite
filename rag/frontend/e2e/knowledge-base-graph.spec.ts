@@ -533,7 +533,7 @@ test("二つの展開元を持つ原文を保持し、向き別の関係と折�
   await expect.poll(camera).not.toBe(previous);
   await graph.getByRole("button", { name: "前の表示に戻る" }).click();
   await expect.poll(camera).toBe(previous);
-  const bundle = graph.locator(".graph-edge-count");
+  const bundle = graph.locator(".graph-edge-count").filter({ hasText: "3 件" });
   await expect.poll(() => bundle.evaluate(edge => {
     const path = edge.querySelector<SVGPathElement>(".react-flow__edge-path")!;
     const midpoint = path.getPointAtLength(path.getTotalLength() / 2).matrixTransform(path.getScreenCTM()!);
@@ -579,15 +579,35 @@ test("関係図は円と残件を描き、方向別に読み進めて元の表�
   const root = graph.locator('.react-flow__node[data-id="' + hash(1) + '"]');
   const group = graph.getByRole("group", { name: /参照のグループ/ });
   await expect(group).toContainText("250");
-  await expect(graph.locator(".react-flow__edge.graph-edge-count")).toHaveCount(1);
+  await expect(graph.locator(".react-flow__edge.graph-edge-count")).toHaveCount(2);
+  await expect(graph.locator(".react-flow__edge.graph-edge-count").filter({ hasText: "1 件" })).toHaveCount(1);
   await expect(root.locator(".graph-point-symbol")).toHaveCSS("border-radius", "50%");
   await expect(graph.getByRole("searchbox", { name: "図の中を検索" })).toBeVisible();
   await graph.scrollIntoViewIfNeeded();
   const card = page.getByRole("heading", { name: /検索結果と関係/ }).locator("../..");
+  if (!phone) {
+    const rail = card.getByRole("button", { name: "検索結果", exact: true });
+    await expect(rail).toHaveAttribute("aria-pressed", "false");
+    await rail.click();
+    await expect(card.getByRole("heading", { name: "検索結果", exact: true })).toBeVisible();
+    await rail.click();
+    await expect(card.getByRole("heading", { name: "検索結果", exact: true })).toHaveCount(0);
+  }
   if (process.env.WIKI_GRAPH_SHOTS) {
     await card.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-graph-parity.png" });
     await shot(page, info, "graph-parity-page");
   }
+  for (let i = 0; i < 8 && !(await graph.evaluate(el => el.hasAttribute("data-graph-overview"))); i++) {
+    await graph.getByRole("button", { name: "縮小", exact: true }).click();
+  }
+  await expect(group.locator(".graph-overview-label")).toHaveText("参照 · 250");
+  await expect(group.locator(".graph-overview-label")).toBeVisible();
+  await expect.poll(() => card.evaluate(el => {
+    const viewport = el.querySelector(".react-flow__viewport")!;
+    const percent = Math.round(new DOMMatrixReadOnly(getComputedStyle(viewport).transform).a * 100);
+    return el.querySelector("footer .tabular-nums")?.textContent === `表示倍率 ${percent}%`;
+  })).toBe(true);
+  await graph.getByRole("button", { name: "全体表示", exact: true }).click();
   await group.focus();
   await group.press("Enter");
   const panel = detail(page, phone);

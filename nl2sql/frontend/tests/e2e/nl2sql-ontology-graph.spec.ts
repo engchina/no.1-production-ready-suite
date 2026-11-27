@@ -1864,7 +1864,7 @@ test("256 節点をグループで探索し、全体・選択・直前の視点�
   await expect(canvas.locator(".react-flow__node")).toHaveCount(256);
   await expect(canvas.locator(".react-flow")).toHaveAttribute("data-graph-overview", "");
   await expect(canvas.locator("[data-ontology-lane-label]").first()).toBeHidden();
-  await expect(canvas.locator(".react-flow__edge.graph-edge-count")).toHaveCount(1);
+  await expect(canvas.locator(".react-flow__edge.graph-edge-count")).toHaveCount(2);
   const withinCanvas = () => canvas.evaluate(el => {
     const bounds = el.getBoundingClientRect();
     return [...el.querySelectorAll(".react-flow__node")].filter(n => {
@@ -1879,7 +1879,7 @@ test("256 節点をグループで探索し、全体・選択・直前の視点�
   await expect.poll(camera).not.toBe(allCamera);
   await canvas.getByRole("button", { name: "前の表示に戻る" }).click();
   await expect.poll(camera).toBe(allCamera);
-  const bundle = canvas.locator(".react-flow__edge.graph-edge-count");
+  const bundle = canvas.locator(".react-flow__edge.graph-edge-count").filter({ hasText: "関係 3 件" });
   await bundle.focus();
   await bundle.press("Enter");
   const members = area.getByTestId("ontology-selection-details-panel").getByRole("combobox", { name: "関係 3 件" });

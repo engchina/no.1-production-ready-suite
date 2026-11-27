@@ -188,6 +188,10 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
   const showStats =
     (node.kind === "table" || node.kind === "view") &&
     Boolean(stats && (stats.columnCount > 0 || stats.joinCount > 0));
+  const statLabels = showStats ? [
+    t("nl2sql.ontology.nodeStats.columns", { count: stats?.columnCount ?? 0 }),
+    ...(stats?.joinCount ? [t("nl2sql.ontology.nodeStats.joins", { count: stats.joinCount })] : []),
+  ] : [];
   const hoverTitle = [
     display.primaryLabel,
     display.secondaryLabel,
@@ -198,7 +202,8 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
   if (data.point) {
     const label = data.group?.label ?? display.primaryLabel;
     return (
-      <GraphPointNode label={label} count={data.group?.remaining} selected={selected} matched={searchMatched}
+      <GraphPointNode label={label} caption={data.group ? undefined : statLabels.join(" · ")}
+        count={data.group?.remaining} selected={selected} matched={searchMatched}
         fill={data.group ? "var(--color-graph-metric)" : nodeFill(node)}
         stroke={highlighted ? cssVar("--color-accent-fg") : nodeStroke(node, false)}
         style={{ width: NODE_WIDTH, height: NODE_HEIGHT, opacity: dimmed ? 0.35 : 1 }}
@@ -216,10 +221,7 @@ const OntologyNodeCard = memo(function OntologyNodeCard({
       kindLabel={display.kindLabel}
       primary={display.primaryLabel}
       secondary={display.secondaryLabel}
-      stats={showStats ? [
-        t("nl2sql.ontology.nodeStats.columns", { count: stats?.columnCount ?? 0 }),
-        ...(stats?.joinCount ? [t("nl2sql.ontology.nodeStats.joins", { count: stats.joinCount })] : []),
-      ] : []}
+      stats={statLabels}
       fill={nodeFill(node)}
       stroke={highlighted ? cssVar("--color-accent-fg") : nodeStroke(node, false)}
       emphasized={emphasizedBorder}
@@ -891,11 +893,11 @@ function OntologyFlow({
     return prepared.map(({ edge, handles }) => {
       const selected = edge.id === selectedEdgeId;
       const members = bundles.get(JSON.stringify([edge.source_node_id, edge.target_node_id]))!;
-      const bundleCount = overview && members.length > 1 ? members.length : 0;
+      const reverse = edge.source_node_id !== edge.target_node_id && bundles.has(JSON.stringify([edge.target_node_id, edge.source_node_id]));
+      const bundleCount = overview && (members.length > 1 || reverse) ? members.length : 0;
       const drawn = bundleCount ? members : [edge];
       const grounded = drawn.some((item) => emphasis.highlightEdges.has(item.id));
       const highlighted = grounded || drawn.some((item) => emphasis.searchEdges.has(item.id));
-      const reverse = bundles.has(JSON.stringify([edge.target_node_id, edge.source_node_id]));
       const showFullLabel = highlighted || selected || edge.id === hoveredEdgeId;
       // ER 図流: join を持つ関係は hover を待たずカーディナリティを常時表示する
       const persistentLabel = isOntologyJoinEdge(edge)

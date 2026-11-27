@@ -102,6 +102,13 @@
   text-shadow: 0 1px 2px var(--color-surface), 0 -1px 2px var(--color-surface);
 }
 .graph-point-node .react-flow__handle-left { left: calc(50% - var(--point-size) / 2); }
+.graph-point-name small {
+  display: block;
+  margin-top: .15rem;
+  color: var(--color-fg-muted);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
 .graph-point-node .react-flow__handle-right { right: calc(50% - var(--point-size) / 2); }
 .graph-point-node .react-flow__handle-top { top: calc(50% - var(--point-size) / 2); }
 .graph-point-node .react-flow__handle-bottom { bottom: calc(50% - var(--point-size) / 2); }
@@ -158,6 +165,7 @@
   font-size: var(--font-size-xs);
   border-radius: var(--radius-sm);
 }
+.react-flow__edge.graph-edge-label-on-focus:not(.selected, :focus, :hover) .react-flow__edge-textwrapper,
 [data-graph-overview] .react-flow__edge:not(.graph-edge-count, .selected):not(:hover) .react-flow__edge-textwrapper {
   visibility: hidden;
 }

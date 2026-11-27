@@ -55,6 +55,7 @@ function OverviewScale() {
     const canvas = marker.current?.closest<HTMLElement>(".react-flow");
     if (!canvas) return;
     let pending = 0;
+    let measure = 0;
     function scheduleLabels() {
       if (pending || !canvas?.hasAttribute("data-graph-overview")) return;
       pending = requestAnimationFrame(() => {
@@ -70,7 +71,9 @@ function OverviewScale() {
       if (overview) canvas.style.setProperty("--graph-inverse-zoom", String(1 / zoom));
       if (canvas.hasAttribute("data-graph-overview") !== overview) {
         canvas.toggleAttribute("data-graph-overview", overview);
-        updateNodes(Array.from(state.nodeLookup.keys()));
+        // ズームの通知中に store を再更新すると、同じ倍率を購読する欄へ旧値が届く。
+        cancelAnimationFrame(measure);
+        measure = requestAnimationFrame(() => updateNodes(Array.from(store.getState().nodeLookup.keys())));
       }
       scheduleLabels();
     };
@@ -88,6 +91,7 @@ function OverviewScale() {
       content.disconnect();
       size.disconnect();
       cancelAnimationFrame(pending);
+      cancelAnimationFrame(measure);
       canvas.removeAttribute("data-graph-overview");
       canvas.style.removeProperty("--graph-inverse-zoom");
       updateNodes(Array.from(store.getState().nodeLookup.keys()));
@@ -298,9 +302,9 @@ const HIDDEN_HANDLE_STYLE = { visibility: "hidden" } as const;
 
 /** 概念と関係グループの点。接続点・選択ラベルを同じ座標でズームする。 */
 export function GraphPointNode({
-  label, count, fill, stroke = "var(--color-graph-line)", selected, matched, children, style, ...props
+  label, caption, count, fill, stroke = "var(--color-graph-line)", selected, matched, children, style, ...props
 }: ComponentProps<"div"> & {
-  label: string; count?: number; fill: string; stroke?: string; selected?: boolean; matched?: boolean;
+  label: string; caption?: string; count?: number; fill: string; stroke?: string; selected?: boolean; matched?: boolean;
 }) {
   const colors = { "--point-fill": fill, "--point-stroke": stroke, ...style } as CSSProperties;
   return (
@@ -309,11 +313,11 @@ export function GraphPointNode({
       style={colors} title={props.title ?? label}>
       <GraphNodeHandles />
       <span className="graph-point-symbol" aria-hidden>{count}</span>
-      <span className="graph-point-name">{label}</span>
+      <span className="graph-point-name">{label}{caption && <small>{caption}</small>}</span>
       {children}
       <span className="graph-overview-node" aria-hidden data-selected={selected || undefined}
         style={{ background: fill, borderColor: selected || matched ? "var(--color-accent-fg)" : stroke }}>
-        {(selected || matched) && <span className="graph-overview-label">{label}</span>}
+        {(selected || matched || count != null) && <span className="graph-overview-label">{label}{count != null && ` · ${count}`}</span>}
       </span>
     </div>
   );

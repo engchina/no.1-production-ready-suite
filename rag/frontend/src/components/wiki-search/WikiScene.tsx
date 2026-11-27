@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { useReactFlow, type Edge, type Node, type NodeProps } from "@xyflow/react";
+import { useReactFlow, useStore, type Edge, type Node, type NodeProps } from "@xyflow/react";
 import {
   directedGraphBundles,
   GraphCanvas,
@@ -139,6 +139,10 @@ interface Props {
 }
 function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom, camera, onNode, onEdge }: Props) {
   const flow = useReactFlow();
+  const canvasWidth = useStore(s => s.width);
+  const canvasHeight = useStore(s => s.height);
+  const percent = useStore(s => Math.round(s.transform[2] * 100));
+  useEffect(() => { onZoom(percent); }, [onZoom, percent]);
   const lastRoot = useRef("");
 
   const points = useMemo(() => [...scene.nodes, ...groups], [scene.nodes, groups]);
@@ -150,11 +154,17 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
   const [cursor, setCursor] = useState(-1);
   const query = normalizeGraphSearch(term);
   const found = points.filter((p) => query && normalizeGraphSearch(p.label).includes(query));
-  const [slots, setSlots] = useState(() => new Map(points.map((n, i) => [n.id, i])));
+  // 最初の輪は関連元、まとまり、入る関係を続けて並べる。追加入力は外側へ置き、元の輪を動かさない。
+  const [firstRingSize] = useState(() => Math.max(0, Math.min(6, points.length - 1)));
+  const [slots, setSlots] = useState(() => {
+    const incoming = new Set(links.filter(e => e.target === root).map(e => e.source));
+    const priority = (point: Point) => point.id === root ? 0 : "owner" in point ? 2 : incoming.has(point.id) ? 3 : 1;
+    return new Map([...points].sort((a, b) => priority(a) - priority(b)).map((n, i) => [n.id, i]));
+  });
   const added = points.filter((n) => !slots.has(n.id));
   if (added.length) {
     const next = new Map(slots);
-    for (const n of added) next.set(n.id, next.size);
+    for (const n of added) next.set(n.id, next.size + 6 - firstRingSize);
     setSlots(next);
   }
   const positions = useMemo(() => {
@@ -172,15 +182,14 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
         indexInRing -= 6 * ring;
         ring++;
       }
-      const theta =
-        ((indexInRing % 2 === 0 ? Math.floor(indexInRing / 2) : 3 * ring + Math.floor(indexInRing / 2)) *
-          Math.PI) /
-          (3 * ring) -
-        Math.PI / 6;
-      map.set(node.id, { x: Math.cos(theta) * ring * width * 1.5, y: Math.sin(theta) * ring * height * 2 });
+      const capacity = ring === 1 ? firstRingSize : 6 * ring;
+      const theta = Math.PI * (1.1 - 2 * indexInRing / capacity);
+      const radiusX = Math.max(ring === 1 ? width * .6 : width * 1.5, Math.min(canvasWidth * .31, width * 2.5));
+      const radiusY = Math.max(height * 1.8, Math.min(canvasHeight * .27, height * 3));
+      map.set(node.id, { x: Math.cos(theta) * ring * radiusX, y: Math.sin(theta) * ring * radiusY });
     });
     return map;
-  }, [points, slots]);
+  }, [canvasHeight, canvasWidth, firstRingSize, points, slots]);
   const colors = new Map<string, Connection["kind"]>();
   for (const e of links) {
     if (e.source !== root && !colors.has(e.source)) colors.set(e.source, e.kind);
@@ -206,7 +215,8 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
       positions.get(e.target)!,
     );
     const reversed = bundles.has(JSON.stringify([e.target, e.source])) && e.source !== e.target;
-    const label = members.length > 1 ? t("wiki.search.edgeCount", { count: members.length }) : edgeName(e);
+    const counted = members.length > 1 || reversed;
+    const label = counted ? t("wiki.search.edgeCount", { count: members.length }) : edgeName(e);
     return {
       id,
       source: e.source,
@@ -214,9 +224,9 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
       sourceHandle,
       targetHandle,
       selected: id === edge,
-      label,
+      label: counted ? t("wiki.documents.count", { count: members.length }) : label,
       ariaLabel: label,
-      className: members.length > 1 ? "graph-edge-count" : undefined,
+      className: counted ? "graph-edge-count" : canvasWidth < 480 && percent < 100 ? "graph-edge-label-on-focus" : undefined,
       markerEnd: GRAPH_EDGE_MARKER,
       type: "straight",
       ...(reversed
@@ -236,16 +246,13 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
     };
   });
   useEffect(() => {
-    if (!root || lastRoot.current === root) return;
-    lastRoot.current = root;
+    if (!root || !canvasWidth || !canvasHeight || lastRoot.current === root) return;
     const frame = requestAnimationFrame(() => {
-      void flow.fitView({ padding: 0.28, minZoom: 0, maxZoom: 1.1, duration: 0 });
+      lastRoot.current = root;
+      void flow.fitView({ padding: 0.16, minZoom: 0, maxZoom: 1.1, duration: 0 });
     });
-    return () => {
-      cancelAnimationFrame(frame);
-      lastRoot.current = "";
-    };
-  }, [flow, root]);
+    return () => cancelAnimationFrame(frame);
+  }, [canvasWidth, canvasHeight, flow, root]);
   function pick(id: string) {
     const item = points.find(p => p.id === id);
     if (item) {
@@ -273,7 +280,6 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
         edgeTypes={edgeTypes}
         nodesDraggable={false}
         miniMap={false}
-        onMoveEnd={(_, v) => onZoom(Math.round(v.zoom * 100))}
         onSelectNode={pick}
         onSelectEdge={(id) => {
           const e = scene.edges.find((x) => edgeId(x) === id);
@@ -290,8 +296,8 @@ function Canvas({ scene, root, matches, selected, edge, groups, onGroup, onZoom,
             count={found.length} cursor={Math.max(0, cursor)} onPrevious={() => moveMatch(-1)} onNext={() => moveMatch(1)} scopeHintHidden
             labels={{ search: t("wiki.graph.search"), clear: t("wiki.search.clearFind"), previous: t("wiki.graph.previousMatch"), next: t("wiki.graph.nextMatch"), noMatch: t("wiki.graph.noMatch"), scope: t("wiki.search.findScope") }} />
           <div className="flex w-fit items-center gap-2 rounded-md border border-border bg-surface px-2 py-1 text-xs text-fg-muted" aria-label={t("wiki.graph.legend")}>
-            <span className="inline-flex items-center gap-1"><span aria-hidden className="size-3 rounded-full border-2 border-accent-fg bg-accent-muted text-accent-fg-strong"/>{t("wiki.search.selectedPoint")}</span>
-            <span className="inline-flex items-center gap-1"><span aria-hidden className="size-3 rounded-full border border-warning-fg bg-warning-subtle text-warning-fg-strong"/>{t("wiki.search.matchedPoint")}</span>
+            <span className="inline-flex items-center gap-1"><span aria-hidden data-surface-tint="accent" className="size-3 rounded-full border-2 border-accent-fg bg-accent-muted"/>{t("wiki.search.selectedPoint")}</span>
+            <span className="inline-flex items-center gap-1"><span aria-hidden data-surface-tint="warning" className="size-3 rounded-full border border-warning-fg bg-warning-subtle"/>{t("wiki.search.matchedPoint")}</span>
           </div>
         </div>
         <GraphCanvasControls
