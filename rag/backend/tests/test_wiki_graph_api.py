@@ -129,12 +129,12 @@ class FakeOracle:
                 if uid in wanted
             ]
         if any(key.startswith("graph_conn_p") for key in binds):
-            pages = {v for k, v in binds.items() if k.startswith("graph_conn_p")}
+            wanted_pages = {v for k, v in binds.items() if k.startswith("graph_conn_p")}
             return [
                 {"page_id": src, "target_id": dep.unit_id, "relation": dep.relation}
                 for src, page in by_id.items()
                 for dep in page.navigation.dependencies
-                if src in pages and dep.unit_id in by_id
+                if src in wanted_pages and dep.unit_id in by_id
             ]
         if "SELECT s.unit_id AS source_id,s.document_id,r.target_name" in statement:
             sources = {v for k, v in binds.items() if k.startswith("graph_conn_s")}

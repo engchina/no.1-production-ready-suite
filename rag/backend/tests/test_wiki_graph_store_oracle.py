@@ -132,10 +132,10 @@ async def test_wiki_graph_reads_published_guidance_in_kb_scope_with_links() -> N
     assert [doc["document_id"] for doc in around["documents"]] == [a]
     second_a = pages_a[1].unit.unit_id
     connections = await graph.connections(kb.id, [first_a, second_a, first_b, first_c])
-    assert {(c["source_id"], c["target_id"], c["scope"]) for c in connections} == {
-        (first_a, second_a, "same_document"),
-        (first_a, first_b, "cross_document"),
-    }
+    linked = {(c["source_id"], c["target_id"], c["scope"]) for c in connections}
+    # 文書 a の単位はどれも文書 b を参照する（取込の参照を文書の全体に付けている）。
+    assert {(first_a, second_a, "same_document"), (first_a, first_b, "cross_document")} <= linked
+    assert all(first_c not in (source, target) for source, target, _ in linked)
     found = await graph.search(kb.id, "SyntheticGraphBeta", offset=0, limit=25)
     assert found["total"] == len(pages_b) and {i["document_id"] for i in found["items"]} == {b}
     assert (await graph.search(kb.id, "syntheticgraphgamma", offset=0, limit=25))["total"] == 0
