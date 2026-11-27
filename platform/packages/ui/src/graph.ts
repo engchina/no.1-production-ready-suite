@@ -7,6 +7,7 @@ export {
   GraphSearchNavigation,
   GraphNodeFrame,
   GraphNodeCard,
+  GraphPointNode,
   GraphNodeHandles,
   GraphParallelEdge,
   GraphLegendSwatch,

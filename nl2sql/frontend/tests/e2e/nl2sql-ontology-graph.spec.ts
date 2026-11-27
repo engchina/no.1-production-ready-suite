@@ -741,7 +741,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expectGraphSearchFieldLayout(page, playground);
   await expectNoHorizontalScroll(page);
 
-  // カードノード: 業務名 + 技術名の 2 段表示
+  // 概念の点は業務名、詳細と読み上げは技術名も示す。
   const customer = playground.locator(".react-flow__node", { hasText: "顧客" }).first();
   await expect(customer).toBeVisible();
   await expect(customer).toContainText("APP.CUSTOMERS");
@@ -750,7 +750,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await customer.focus();
   await customer.press("Enter");
   await playground.getByRole("button", { name: "選択を中心に表示" }).click();
-  await expect(entity).toHaveCSS(
+  await expect(entity.locator(".graph-point-symbol")).toHaveCSS(
     "background-color",
     "rgb(23, 58, 94)"
   );
@@ -758,7 +758,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
     "color",
     "rgb(239, 243, 247)"
   );
-  await expect(playground.getByTestId("ontology-node-card-m1")).toHaveCSS(
+  await expect(playground.getByTestId("ontology-node-card-m1").locator(".graph-point-symbol")).toHaveCSS(
     "background-color",
     "rgb(54, 42, 89)"
   );
@@ -769,7 +769,7 @@ test("グラフはカード表示 + 検索 + 詳細ノードの折畳ができ�
   await expect(playground.locator(".react-flow__node")).toHaveCount(5);
   // 展開すると詳細レーンのラベルが現れる
   await expect(playground.getByTestId("ontology-graph-lane-detail")).toContainText("物理列・列挙値");
-  await expect(playground.getByTestId("ontology-node-card-c1")).toHaveCSS(
+  await expect(playground.getByTestId("ontology-node-card-c1").locator(".graph-point-symbol")).toHaveCSS(
     "background-color",
     "rgb(36, 43, 53)"
   );
@@ -1842,23 +1842,29 @@ test("256 節点をグループで探索し、全体・選択・直前の視点�
   const focus = canvas.getByRole("button", { name: "選択を中心に表示" });
   const camera = () => canvas.locator(".react-flow__viewport").evaluate((el) => (el as HTMLElement).style.transform);
   await expect(groups).toContainText("255");
+  const groupPoint = canvas.getByTestId("ontology-group-point");
+  await expect(groupPoint).toContainText("255");
+  const objects = canvas.locator(".react-flow__node:has([data-ontology-node-kind])");
   const show = groups.getByRole("button", { name: /次の.*件を展開/ });
   await canvas.locator('.react-flow__node[data-id="n0"]').click();
   await fit.click();
   const initial = await camera();
   await show.click();
-  await expect(canvas.locator(".react-flow__node")).toHaveCount(13);
+  await expect(objects).toHaveCount(13);
+  await expect(groupPoint).toContainText("243");
   expect(await camera()).toBe(initial);
   await groups.getByRole("button", { name: "関連を折りたたむ" }).click();
-  await expect(canvas.locator(".react-flow__node")).toHaveCount(1);
+  await expect(objects).toHaveCount(1);
+  await expect(groupPoint).toContainText("255");
   await groups.getByRole("button", { name: "折りたたみを元に戻す" }).click();
-  await expect(canvas.locator(".react-flow__node")).toHaveCount(13);
+  await expect(objects).toHaveCount(13);
+  await expect(groupPoint).toContainText("243");
   for (let i = 12; i < 255; i += 12) await show.click();
   await fit.click();
   await expect(canvas.locator(".react-flow__node")).toHaveCount(256);
   await expect(canvas.locator(".react-flow")).toHaveAttribute("data-graph-overview", "");
   await expect(canvas.locator("[data-ontology-lane-label]").first()).toBeHidden();
-  await expect(canvas.locator(".react-flow__edge.graph-edge-count")).toHaveCount(1);
+  await expect(canvas.locator(".react-flow__edge.graph-edge-count")).toHaveCount(2);
   const withinCanvas = () => canvas.evaluate(el => {
     const bounds = el.getBoundingClientRect();
     return [...el.querySelectorAll(".react-flow__node")].filter(n => {
@@ -1873,7 +1879,7 @@ test("256 節点をグループで探索し、全体・選択・直前の視点�
   await expect.poll(camera).not.toBe(allCamera);
   await canvas.getByRole("button", { name: "前の表示に戻る" }).click();
   await expect.poll(camera).toBe(allCamera);
-  const bundle = canvas.locator(".react-flow__edge.graph-edge-count");
+  const bundle = canvas.locator(".react-flow__edge.graph-edge-count").filter({ hasText: "関係 3 件" });
   await bundle.focus();
   await bundle.press("Enter");
   const members = area.getByTestId("ontology-selection-details-panel").getByRole("combobox", { name: "関係 3 件" });

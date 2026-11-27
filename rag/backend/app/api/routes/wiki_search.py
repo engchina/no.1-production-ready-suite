@@ -1,7 +1,7 @@
 """プロファイルと KB の Wiki から同じ公開済みの索引・原文を読む。"""
 
 from collections.abc import Awaitable, Callable
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -133,12 +133,19 @@ def explorer_router(scope_dependency: ScopeDependency) -> APIRouter:
         unit_id: str,
         scope: WikiExplorer = resolve_scope,
         relation: WikiRelation | None = None,
+        direction: Literal["outgoing", "incoming"] | None = None,
         offset: Offset = 0,
         limit: PageSize = 6,
     ) -> ApiResponse[WikiRelationGroups]:
         data = await _read(
             lambda: scope.graph.relations(
-                scope.ids, unit_id, offset, limit, relation=relation, grouped=True
+                scope.ids,
+                unit_id,
+                offset,
+                limit,
+                relation=relation,
+                direction=direction,
+                grouped=True,
             )
         )
         return ApiResponse(data=WikiRelationGroups(**data))

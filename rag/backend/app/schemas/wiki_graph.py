@@ -132,7 +132,22 @@ class WikiGraphRelations(BaseModel):
     has_more: bool
 
 
+class WikiDirectedGroup(BaseModel):
+    relation: WikiRelation
+    direction: Literal["outgoing", "incoming"]
+    count: int
+    neighbor_count: int
+
+
+class WikiNeighborConnection(BaseModel):
+    source_id: str
+    target_id: str
+    relation: WikiRelation
+
+
 class WikiRelationGroups(WikiGraphRelations):
+    connections: list[WikiNeighborConnection] = Field(default_factory=list)
+    groups: list[WikiDirectedGroup] = Field(default_factory=list)
     preview: list[WikiGraphRelation] = Field(default_factory=list)
     counts: dict[WikiRelation, int] = Field(default_factory=dict)
     total: int = 0
