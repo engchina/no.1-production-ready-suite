@@ -1,59 +1,34 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { reachableGraphBranches } from "@production-ready/ui/graph";
-import { keepPreviousData, useQueries, useQuery } from "@tanstack/react-query";
-import {
-  BookOpen,
-  ChevronLeft,
-  ChevronRight,
-  List,
-  Maximize,
-  Minimize,
-  Network,
-  PanelRight,
-  PanelLeft,
-  Layers,
-  Undo2,
-  X,
-} from "lucide-react";
-import { GraphLegend } from "@production-ready/ui/graph";
-import { WIKI_RELATION_ICONS, wikiRelationText } from "@/components/knowledge-bases/wiki-graph-labels";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { BookOpen, Eraser, List, Maximize, Minimize, Network, PanelRight, Search, X } from "lucide-react";
+import type { GraphExplorerHandle } from "@production-ready/ui/graph-explorer";
 import {
   Button,
   Card,
-  Disclosure,
-  SelectField,
-  OffsetPagination,
+  ListCount,
+  ListScrollRegion,
   ListSkeleton,
+  OffsetPagination,
   ProcessingIndicator,
-  staleContentClass,
+  SearchField,
   SideSheet,
   Skeleton,
+  TabPanel,
+  Tabs,
+  staleContentClass,
   useMediaQuery,
 } from "@production-ready/ui";
+import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
-import type { WikiGraphRelation } from "@/lib/api";
-import { WikiInspector, RelationInspector, NEIGHBOR_PAGE } from "./WikiInspector";
-import {
-  edgeId,
-  emptyScene,
-  joinScenes,
-  neighbors,
-  remainingWikiGroups,
-  wikiGroupKey,
-  type WikiGroupPoint,
-  WikiScene,
-  type Scene,
-  type WikiNode,
-  type Connection,
-} from "./WikiScene";
-import { allWikiNeighbors, wikiApi, type WikiDirection, type WikiDirectedGroup, type WikiKb, type WikiPick, type WikiMethod, type WikiScope } from "./wiki-api";
-
-interface WikiBranch extends Scene {
-  owner: string;
-  groups?: WikiDirectedGroup[];
-  nextOffset?: number;
-}
+import { paginationLabels } from "@/lib/pagination-labels";
+import { WIKI_GRAPH_SETTINGS, WIKI_PAGE_SIZE_OPTIONS } from "./wiki-graph-settings";
+import { edgeKey, moreId, remainingNeighbors, type WikiGraphNode } from "./wiki-graph-model";
+import { documentLinks, documentNode, unitNode } from "./wiki-graph-loaders";
+import { useWikiGraph } from "./use-wiki-graph";
+import { WikiGraphView } from "./WikiGraphView";
+import { RelationInspector, SelectionSummary, WikiInspector } from "./WikiInspector";
+import { wikiApi, type WikiKb, type WikiMethod, type WikiPick, type WikiScope } from "./wiki-api";
 
 interface Props {
   scope: WikiScope;
@@ -62,295 +37,165 @@ interface Props {
   kbs: WikiKb[];
   picks?: WikiPick[];
   toggle?: (p: WikiPick) => void;
-  initialUnit?: string;
   initialSelection?: string;
   onSelectUnit: (id: string) => void;
   initialOffset: number;
   onOffset: (offset: number) => void;
-  onRoot?: (id: string) => void;
+  /** 検索のボタンが同じ読み込みで loading のとき（経過の行の回転を止める。buttons.md §8）。 */
+  searchButtonBusy?: boolean;
 }
-const RESULT_PAGE = 5;
-// 一覧と詳細を左右に並べても図の操作領域を保てる幅。サイドバーを除いた実寸で判定する。
+
+// 詳細を図の右に並べても図の操作領域を保てる幅。サイドバーを除いた実寸で判定する。
 const SPLIT_MIN_WIDTH = 768;
-function Failed({ error, retry }: { error: unknown; retry: () => void }) {
-  return <ApiErrorState error={error} fallback={t("wiki.graph.error")} onRetry={retry} />;
-}
-export function WikiExplorer({ scope, question, method, kbs, picks, toggle, initialUnit, initialSelection, onSelectUnit, onRoot, initialOffset, onOffset }: Props) {
+
+/**
+ * Wiki の関係図と一覧（#5922）。検索した結果（Wiki 検索）と、ナレッジベース詳細の参照の多い文書の見本を、
+ * 共有の Cytoscape の画布に出す。一覧は画布の内容を読み上げで追える代わりの表示。
+ */
+export function WikiExplorer({ scope, question, method, kbs, picks, toggle, initialSelection, onSelectUnit, initialOffset, onOffset, searchButtonBusy = false }: Props) {
   const base = ["wiki-explorer", scope] as const;
-  const [small, setSmall] = useState(true);
-  const wideScreen = useMediaQuery("(min-width: 768px)", false);
-  const [chosenView, setView] = useState<"graph" | "list" | null>(null);
-  const view = chosenView ?? (small ? "list" : "graph");
-  const [offset, setOffset] = useState(initialOffset);
-  const [kind, setKind] = useState("");
-  const [hidden, setHidden] = useState<ReadonlySet<string>>(() => new Set());
-  const [resumeUnit, setResumeUnit] = useState(initialSelection);
-  const [anchor, setAnchor] = useState<WikiNode | null>(null);
-  const [selection, setSelection] = useState<WikiNode | null>(null);
-  const [edge, setEdge] = useState<Connection | null>(null);
-  const [group, setGroup] = useState<WikiGraphRelation | "">("");
-  const [tab, setTab] = useState("source");
-  const [relOffset, setRelOffset] = useState(0);
-  const [branches, setBranches] = useState<Record<string, WikiBranch>>({});
-  const [history, setHistory] = useState<{ branches: Record<string, WikiBranch>; grouped: boolean; collapsed: boolean }[]>([]);
-  const [grouped, setGrouped] = useState(true);
-  const [direction, setDirection] = useState<WikiDirection>();
-  const [groupSelection, setGroupSelection] = useState<string>();
-  const [zoom, setZoom] = useState(100);
-  const camera = useRef<{ focusSelection: () => void; focusNode: (id: string) => void } | null>(null);
-  const [showResults, setShowResults] = useState(false);
-  const [sheet, setSheet] = useState(false),
-    [inspector, setInspector] = useState(true);
-  const [full, setFull] = useState(false);
+  const searchMode = Boolean(question.trim());
+  const knowledgeBase = scope.kind === "kb";
   const box = useRef<HTMLDivElement>(null);
-  const graphPane = useRef<HTMLDivElement>(null);
+  const camera = useRef<GraphExplorerHandle>(null);
+  const [narrow, setNarrow] = useState(false);
+  const wideScreen = useMediaQuery("(min-width: 768px)", false);
+  const [view, setView] = useState("graph");
+  const [offset, setOffset] = useState(initialOffset);
+  const [pageSize, setPageSize] = useState<number>(WIKI_GRAPH_SETTINGS.resultPage);
+  const [selection, setSelection] = useState<string[]>(initialSelection ? [initialSelection] : []);
+  const [inspector, setInspector] = useState(true);
+  const [sheet, setSheet] = useState(false);
+  const [full, setFull] = useState(false);
+  const [fullError, setFullError] = useState(false);
+  const [find, setFind] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const graph = useWikiGraph(scope);
+
   useLayoutEffect(() => {
     const panel = box.current;
     if (!panel) return;
-    const measure = () => setSmall(panel.clientWidth < SPLIT_MIN_WIDTH);
+    const measure = () => setNarrow(panel.clientWidth < SPLIT_MIN_WIDTH);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(panel);
     return () => observer.disconnect();
   }, []);
-  const search = Boolean(question.trim());
-  const hits = useQuery({
-    queryKey: [...base, "search", question, method, offset],
-    queryFn: ({ signal }) => wikiApi.hits(scope, question, method, offset, RESULT_PAGE, signal),
-    placeholderData: keepPreviousData,
-    enabled: search,
-    retry: false,
-  });
-  const docs = useQuery({
-    queryKey: [...base, "docs", offset],
-    queryFn: ({ signal }) => wikiApi.documents(scope, offset, RESULT_PAGE, signal),
-    placeholderData: keepPreviousData,
-    enabled: !search,
-    retry: false,
-  });
-  const count = useQuery({
-    queryKey: [...base, "document-count"],
-    queryFn: ({ signal }) => wikiApi.docCount(scope, signal),
-    enabled: !search && Boolean(docs.data?.has_more),
-    retry: false,
-  });
-  const rows: WikiNode[] = search
-    ? (hits.data?.items ?? []).map((n) => ({ ...n, kind: "unit" }))
-    : (docs.data?.documents ?? []).map((n) => ({
-        kind: "document",
-        id: n.id,
-        label: n.name,
-        document_id: n.document_id,
-        document_name: n.name,
-      }));
-  const total = search ? hits.data?.total : !docs.data ? undefined : docs.data.has_more ? count.data?.total : offset + rows.length;
-  const mainResult = search ? hits : docs;
-  const resume = useQuery({
-    queryKey: [...base, "original", resumeUnit],
-    queryFn: ({ signal }) => wikiApi.original(scope, resumeUnit!, signal),
-    enabled: !!resumeUnit && !rows.some((n) => n.id === resumeUnit),
-    retry: false,
-  });
-  const restored = rows.find((n) => n.id === resumeUnit) ?? (resumeUnit && resume.data ? { ...resume.data, kind: "unit" as const } : undefined);
-  const root = anchor ?? restored ?? rows.find((n) => n.id === initialUnit) ?? rows[0];
-  const node = selection ?? root;
-  const key = (n: WikiNode | undefined) => n?.id ?? "";
-  const firstRing = useQuery({
-    queryKey: [...base, "relations", key(root), "", 0],
-    queryFn: ({ signal }) => wikiApi.relations(scope, root!.id, "", 0, NEIGHBOR_PAGE, signal),
-    enabled: root?.kind === "unit",
-    retry: false,
-  });
-  const rootOriginal = useQuery({
-    queryKey: [...base, "original", key(root)],
-    queryFn: ({ signal }) => wikiApi.original(scope, root!.id, signal),
-    enabled: root?.kind === "unit",
-    retry: false,
-  });
-  const detail = useQuery({
-    queryKey: [...base, "original", key(node)],
-    queryFn: ({ signal }) => wikiApi.original(scope, node!.id, signal),
-    enabled: node?.kind === "unit",
-    retry: false,
-  });
-  const relationQuery = useQuery({
-    queryKey: [...base, "relations", key(node), group, relOffset, ...(direction ? [direction] : [])],
-    queryFn: ({ signal }) => wikiApi.relations(scope, node!.id, group, relOffset, NEIGHBOR_PAGE, signal, direction),
-    enabled: node?.kind === "unit",
-    retry: false,
-  });
-  const childQuery = useQuery({
-    queryKey: [...base, "children", key(node), relOffset],
-    queryFn: ({ signal }) =>
-      wikiApi.tree(
-        scope,
-        node!.document_id,
-        node!.kind === "section" ? node!.id : null,
-        relOffset,
-        NEIGHBOR_PAGE,
-        signal,
-      ),
-    enabled: !!node && node.kind !== "unit" && (inspector || sheet),
-    retry: false,
-  });
-  const pinnedIds = new Set([...rows.map(item => item.id), ...(selection ? [selection.id] : [])]);
-  const bigGroups = new Set((firstRing.data?.groups ?? [])
-    .filter(g => g.neighbor_count > NEIGHBOR_PAGE).map(g => wikiGroupKey(key(root), g.relation, g.direction)));
-  const preview = (firstRing.data?.preview ?? []).filter(row =>
-    !grouped || !bigGroups.has(wikiGroupKey(key(root), row.relation, row.direction)) || (row.unit && pinnedIds.has(row.unit.id)));
-  const ring =
-    root?.kind === "unit"
-      ? neighbors(root, preview)
-      : { nodes: rows, edges: [] };
-  const previewLinks = (firstRing.data?.connections ?? []).map(link => ({
-    source: link.source_id, target: link.target_id, kind: link.relation,
-  }));
-  const detailRoot = rootOriginal.data;
-  let structure: Scene = emptyScene;
-  if (root && detailRoot?.parent_id && detailRoot.path.length) {
-    const parent: WikiNode = {
-      id: detailRoot.parent_id,
-      label: detailRoot.path.at(-1)!,
-      kind: "section",
-      path: detailRoot.path,
-      document_id: detailRoot.document_id,
-      document_name: detailRoot.document_name,
-    };
-    structure = { nodes: [parent], edges: [{ source: parent.id, target: root.id, kind: "contains" }] };
-  }
-  const pinned = search ? [...rows] : [];
-  if (selection) pinned.push(selection);
-  const baseScene = joinScenes(ring, structure, { nodes: pinned, edges: previewLinks });
-  const activeBranches = reachableGraphBranches(baseScene.nodes.map((n) => n.id), Object.values(branches), (b) => b.owner, (b) => b.nodes.map((n) => n.id));
-  const loaded = joinScenes(baseScene, ...activeBranches);
-  const summaries = new Map<string, WikiDirectedGroup[]>();
-  for (const branch of activeBranches) if (branch.groups) summaries.set(branch.owner, branch.groups);
-  if (root && firstRing.data?.groups) summaries.set(root.id, firstRing.data.groups);
-  if (node && relationQuery.data?.groups) summaries.set(node.id, relationQuery.data.groups);
-  const owners = loaded.nodes.filter(n => summaries.get(n.id)?.some(g => g.neighbor_count > NEIGHBOR_PAGE));
-  const whole = useQueries({ queries: owners.map(owner => ({
-    queryKey: [...base, "all-relations", owner.id],
-    queryFn: ({ signal }: { signal: AbortSignal }) => allWikiNeighbors(scope, owner.id, signal),
-    enabled: !grouped && view === "graph", retry: false,
-  })) });
-  const loadingWhole = !grouped && view === "graph" && whole.some(q => q.isFetching);
-  const failedWhole = !grouped && view === "graph" ? whole.find(q => q.isError) : undefined;
-  const all = grouped ? loaded : joinScenes(loaded, ...whole.map((q, i) => neighbors(owners[i], q.data ?? [])));
-  const visibleNodes = all.nodes.filter((n) => !kind || n.kind === kind);
-  const visibleIds = new Set(visibleNodes.map((n) => n.id));
-  const scene = {
-    nodes: visibleNodes,
-    edges: all.edges.filter(
-      (e) => visibleIds.has(e.source) && visibleIds.has(e.target) && !hidden.has(e.kind),
-    ),
-  };
-  const points = grouped ? remainingWikiGroups(scene, summaries, NEIGHBOR_PAGE).filter(p => !hidden.has(p.relation)) : [];
-  const selectedGroup = points.find(p => p.id === groupSelection);
-  function remember(collapsed = false) {
-    setHistory(old => [...old.slice(-19), { branches, grouped, collapsed }]);
-  }
-  function clearGroup() {
-    setGroupSelection(undefined);
-    setDirection(undefined);
-  }
-  function pick(n: WikiNode, asRoot = false) {
-    clearGroup();
-    if (!asRoot && restored) setAnchor(restored);
-    setResumeUnit(undefined);
-    onSelectUnit(n.kind === "unit" ? n.id : "");
-    if (asRoot) {
-      setAnchor(n);
-      setBranches({});
-      setHistory([]);
-      onRoot?.(n.id);
-    }
-    setSelection(n);
-    setEdge(null);
-    setGroup("");
-    setRelOffset(0);
-    setTab(n.kind === "unit" ? "source" : "relations");
-    setInspector(true);
-    if (small) setSheet(true);
-  }
-  function changePage(n: number) {
-    clearGroup();
-    setResumeUnit(undefined);
-    setOffset(n);
-    onOffset(n);
-    setAnchor(null);
-    setSelection(null);
-    setEdge(null);
-    setBranches({});
-    setHistory([]);
-    setGroup("");
-    setRelOffset(0);
-    setTab("source");
-  }
-  function expand() {
-    if (!node) return;
-    const branch: Scene =
-      node.kind === "unit"
-        ? neighbors(node, relationQuery.data?.items ?? [])
-        : {
-            nodes: [node, ...(childQuery.data?.items ?? [])],
-            edges: (childQuery.data?.items ?? []).map((n) => ({
-              source: node.id,
-              target: n.id,
-              kind: "contains",
-            })),
-          };
-    remember();
-    const id = wikiGroupKey(node.id, group, direction);
-    const nextOffset = relOffset + (relationQuery.data?.items.length ?? 0);
-    setBranches(prev => ({ ...prev, [id]: {
-      ...joinScenes(prev[id] ?? emptyScene, branch), owner: node.id, groups: relationQuery.data?.groups,
-      nextOffset: Math.max(prev[id]?.nextOffset ?? 0, nextOffset),
-    } }));
-    if (selectedGroup && relationQuery.data?.has_more) setRelOffset(nextOffset);
-    if (selectedGroup && !relationQuery.data?.has_more) {
-      clearGroup();
-      setGroup("");
-      setRelOffset(0);
-      setTab("source");
-    }
-    setView("graph");
-    if (small) setSheet(false);
-  }
-  function collapse() {
-    if (!node) return;
-    remember(true);
-    setBranches(Object.fromEntries(Object.entries(branches).filter(([, b]) => b.owner !== node.id)));
-    clearGroup();
-    if (small) setSheet(false);
-  }
-  function undo() {
-    const previous = history.at(-1);
-    if (!previous) return;
-    setBranches(previous.branches);
-    setGrouped(previous.grouped);
-    setHistory(history.slice(0, -1));
-    clearGroup();
-    setGroup("");
-    setRelOffset(0);
-  }
-  function pickGroup(point: WikiGroupPoint) {
-    pick(point.owner);
-    setGroupSelection(point.id);
-    setGroup(point.relation);
-    setDirection(point.direction);
-    setRelOffset(branches[point.id]?.nextOffset ?? 0);
-    setTab("relations");
-  }
-  function close() {
-    setSheet(false);
-    setInspector(false);
-  }
   useEffect(() => {
     const sync = () => setFull(document.fullscreenElement === box.current);
     document.addEventListener("fullscreenchange", sync);
     return () => document.removeEventListener("fullscreenchange", sync);
   }, []);
-  const [fullError, setFullError] = useState(false);
+
+  const hits = useQuery({
+    queryKey: [...base, "search", question, method, offset, pageSize],
+    queryFn: ({ signal }) => wikiApi.hits(scope, question, method, offset, pageSize, signal),
+    placeholderData: keepPreviousData,
+    enabled: searchMode,
+    retry: false,
+  });
+  const sample = useQuery({
+    queryKey: [...base, "document-sample", WIKI_GRAPH_SETTINGS.sampleDocuments],
+    queryFn: ({ signal }) => wikiApi.documentGraph(scope, 0, WIKI_GRAPH_SETTINGS.sampleDocuments, undefined, signal),
+    enabled: !searchMode,
+    retry: false,
+  });
+  const docs = useQuery({
+    queryKey: [...base, "docs", offset, pageSize],
+    queryFn: ({ signal }) => wikiApi.documents(scope, offset, pageSize, signal),
+    placeholderData: keepPreviousData,
+    enabled: !searchMode && view === "list",
+    retry: false,
+  });
+  const count = useQuery({
+    queryKey: [...base, "document-count"],
+    queryFn: ({ signal }) => wikiApi.docCount(scope, signal),
+    enabled: !searchMode && view === "list",
+    retry: false,
+  });
+  const found = useQuery({
+    queryKey: [...base, "find", find],
+    queryFn: ({ signal }) => wikiApi.hits(scope, find, "keyword", 0, WIKI_GRAPH_SETTINGS.resultPage, signal),
+    enabled: knowledgeBase && !searchMode && Boolean(find.trim()),
+    retry: false,
+  });
+
+  // 検索の結果（ページ）ごとに図を置き換え、結果の間の関係をつなぐ（Wiki 検索は新しい検索で置き換える）。
+  const placed = useRef("");
+  const { replace, add, run, reveal } = graph;
+  useEffect(() => {
+    if (!searchMode || !hits.data || hits.isPlaceholderData) return;
+    const key = JSON.stringify([question, method, offset, pageSize]);
+    if (placed.current === key) return;
+    placed.current = key;
+    const nodes = hits.data.items.map((hit) => unitNode(hit));
+    const ids = nodes.map((node) => node.id);
+    // 置き換えると図のすべてが結果なので、一致の輪は付けない（足すときだけ、今の図の中の結果を強調する）。
+    if (WIKI_GRAPH_SETTINGS.wikiSearch === "replace") replace(nodes, []);
+    else add(nodes, [], ids);
+    if (ids.length > 1) {
+      void run(async () => {
+        const links = await wikiApi.connections(scope, ids);
+        add([], links.connections.map((link) => ({
+          id: edgeKey(link.source_id, link.relation, link.target_id), source: link.source_id, target: link.target_id, kind: link.relation, scope: link.scope,
+        })));
+      });
+    }
+  }, [add, hits.data, hits.isPlaceholderData, method, offset, pageSize, question, replace, run, scope, searchMode]);
+  // ナレッジベース詳細は、参照の多い文書の見本とその間の参照で開く。
+  useEffect(() => {
+    if (searchMode || !sample.data || placed.current === "sample") return;
+    placed.current = "sample";
+    replace(sample.data.documents.map(documentNode), documentLinks(sample.data));
+  }, [replace, sample.data, searchMode]);
+  // 図内検索の当たりを今の図に足し、強調する（ナレッジベース詳細。#5881 で消えた検索）。
+  const added = useRef("");
+  useEffect(() => {
+    if (!found.data || added.current === find) return;
+    added.current = find;
+    const nodes = found.data.items.map((hit) => unitNode(hit));
+    if (WIKI_GRAPH_SETTINGS.knowledgeBaseSearch === "replace") replace(nodes, [], nodes.map((node) => node.id));
+    else add(nodes, [], nodes.map((node) => node.id));
+    setCursor(0);
+    if (nodes[0]) void run(async () => { await reveal(nodes[0]); camera.current?.focusNode(nodes[0].id); setSelection([nodes[0].id]); });
+  }, [add, find, found.data, replace, reveal, run]);
+
+  function moveMatch(step: number) {
+    const items = found.data?.items ?? [];
+    if (!items.length) return;
+    const next = (cursor + step + items.length) % items.length;
+    setCursor(next);
+    const node = unitNode(items[next]);
+    void run(async () => { await reveal(node); camera.current?.focusNode(node.id); setSelection([node.id]); });
+  }
+
+  const nodes = graph.state.nodes;
+  const selectedNodes = selection.map((id) => nodes.get(id) ?? (id.startsWith("more:") ? moreNode(id) : undefined)).filter((node): node is WikiGraphNode => Boolean(node));
+  const selectedEdge = selection.length === 1 ? graph.state.edges.get(selection[0]) : undefined;
+  const node = selectedNodes.length === 1 ? selectedNodes[0] : undefined;
+  function moreNode(id: string): WikiGraphNode | undefined {
+    const owner = nodes.get(id.slice("more:".length));
+    return owner ? { id, kind: "more", label: "", owner: owner.id, remaining: remainingNeighbors(graph.state, owner.id), document_id: owner.document_id, document_name: owner.document_name } : undefined;
+  }
+
+  function choose(ids: string[]) {
+    setSelection(ids);
+    const unit = ids.length === 1 ? nodes.get(ids[0]) : undefined;
+    onSelectUnit(unit?.kind === "unit" ? unit.id : "");
+  }
+  /** 一覧・詳細から選ぶ。図に無ければ足してから選ぶ。 */
+  function pick(item: WikiGraphNode) {
+    if (!nodes.has(item.id)) add([item], []);
+    choose([item.id]);
+    setInspector(true);
+    if (narrow) setSheet(true);
+    requestAnimationFrame(() => camera.current?.focusNode(item.id));
+  }
+  function changePage(next: number) {
+    setOffset(next);
+    onOffset(next);
+    setSelection([]);
+  }
   async function toggleFull() {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
@@ -359,325 +204,198 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
       setFullError(true);
     }
   }
-  const chooseGroup = (g: WikiGraphRelation | "", way?: WikiDirection) => {
-    setGroupSelection(undefined);
-    setDirection(way);
-    setGroup(g);
-    setRelOffset(0);
-  };
-  const section = node?.kind === "unit" ? relationQuery : childQuery;
-  const showSheet = small && sheet;
-  const needsGraph = view === "graph" && root?.kind === "unit";
-  const graphPending = needsGraph && (
-    (rootOriginal.isPending && !rootOriginal.isFetched) || (firstRing.isPending && !firstRing.isFetched)
-  );
-  const detailRequest = node?.kind === "unit" && tab !== "relations" ? detail : section;
-  const detailLabel = t(node?.kind === "unit" && tab !== "relations" ? "wiki.search.loadingSource" : "wiki.search.loadingRelations");
-  const listLabel = t(search ? "wiki.search.loadingHits" : "wiki.search.loadingDocs");
-  const reloadList = mainResult.isFetching && !!mainResult.data;
-  const detailVisible = !edge && !!node && (small ? sheet : inspector);
-  const panelError = detailVisible ? detailRequest.error : null;
-  const graphFailure = [firstRing, rootOriginal].find(q => needsGraph && q.isError && q.error !== panelError);
-  const workingLabel = mainResult.isFetching ? listLabel
-    : loadingWhole || (needsGraph && (firstRing.isFetching || rootOriginal.isFetching)) ? t("wiki.search.loadingRelations")
-    : detailVisible && detailRequest.isFetching ? detailLabel : undefined;
-  const progress = workingLabel && (
-    <ProcessingIndicator active label={workingLabel} testId="wiki-wait-results"
-      reserveSlowLine={false} />
-  );
-  let columns = "grid-cols-1";
-  if (!small && view === "graph") {
-    columns = search && !showResults
-      ? (inspector ? "grid-cols-[minmax(0,2fr)_minmax(17rem,1fr)]" : "grid-cols-1")
-      : inspector
-      ? "grid-cols-[minmax(11rem,0.65fr)_minmax(0,1.65fr)_minmax(17rem,0.85fr)]"
-      : "grid-cols-[minmax(11rem,0.65fr)_minmax(0,2.5fr)]";
-  } else if (!small && inspector) {
-    columns = "grid-cols-[minmax(0,1fr)_minmax(17rem,0.55fr)]";
-  }
-  const listVisible = view === "list" || (!small && (showResults || !search));
-  const panel = edge ? (
-    <RelationInspector edge={edge} members={scene.edges.filter((e) => e.source === edge.source && e.target === edge.target)} nodes={scene.nodes} onPick={(n) => pick(n)} />
+
+  const listRows: WikiGraphNode[] = searchMode
+    ? (hits.data?.items ?? []).map((hit) => unitNode(hit))
+    : (docs.data?.documents ?? []).map((doc) => documentNode(doc));
+  const listTotal = searchMode ? hits.data?.total : docs.data ? (docs.data.has_more ? count.data?.total : offset + listRows.length) : undefined;
+  const mainQuery = searchMode ? hits : sample;
+  const listQuery = searchMode ? hits : docs;
+  const workingLabel = mainQuery.isFetching ? t(searchMode ? "wiki.search.loadingHits" : "wiki.graph.loadingSample")
+    : found.isFetching ? t("wiki.graph.searching")
+    : graph.pending ? t("wiki.graph.expanding")
+    : view === "list" && listQuery.isFetching ? t("wiki.search.loadingDocs") : undefined;
+  const title = searchMode ? t("wiki.search.results") : t("wiki.graph.browseTitle");
+  const showInspector = !narrow && inspector && view === "graph" || !narrow && inspector && view === "list";
+
+  const detail = selectedEdge ? (
+    <RelationInspector edge={selectedEdge} nodes={nodes} onPick={pick} />
   ) : node ? (
     <WikiInspector
       key={node.id}
+      scope={scope}
       node={node}
-      direction={direction}
-      selectedGroup={selectedGroup}
-      focus={view === "graph" ? () => { camera.current?.focusSelection(); if (small) setSheet(false); } : undefined}
-      original={detail.data}
-      relations={relationQuery.data}
-      children={childQuery.data}
-      tab={tab}
-      setTab={setTab}
-      group={group}
-      chooseGroup={chooseGroup}
-      offset={relOffset}
-      onPage={setRelOffset}
-      select={(n) => pick(n)}
-      expand={expand}
-      collapse={activeBranches.some((b) => b.owner === node.id) ? collapse : undefined}
+      remaining={remainingNeighbors(graph.state, node.kind === "more" ? node.owner! : node.id)}
+      expanded={[...graph.state.owners.values()].includes(node.id)}
+      focus={view === "graph" && nodes.has(node.id) ? () => { camera.current?.focusNode(node.id); if (narrow) setSheet(false); } : undefined}
+      select={pick}
+      expand={() => { if (!nodes.has(node.id) && node.kind !== "more") add([node], []); graph.expand(node.kind === "more" ? moreId(node.owner!) : node.id); setView("graph"); if (narrow) setSheet(false); }}
+      collapse={() => graph.collapse(node.id)}
       picks={picks}
       toggle={toggle}
-      loading={detailRequest.isPending && <Skeleton className="h-20 w-full" />}
-      error={detailRequest.isError && (
-        <Failed error={detailRequest.error} retry={() => void detailRequest.refetch()} />
-      )}
     />
+  ) : selectedNodes.length > 1 ? (
+    <SelectionSummary nodes={selectedNodes} onPick={pick} />
+  ) : (
+    <p className="p-3 text-sm text-fg-muted">{t("wiki.search.selectHint")}</p>
+  );
+
+  const toolbar = knowledgeBase && !searchMode ? (
+    <>
+      <div className="w-full min-w-0 sm:w-auto" data-testid="wiki-graph-find">
+        <SearchField id="wiki-graph-find" label={t("wiki.graph.search")} labelHidden width="lg" value={find}
+          onSearch={(value) => { setFind(value.trim()); added.current = ""; }} debounceMs={400}
+          placeholder={t("wiki.graph.search")} clearLabel={t("wiki.search.clearFind")} aria-describedby="wiki-graph-find-scope" />
+      </div>
+      {find && found.data && (
+        <div className="flex items-center gap-1" data-testid="wiki-graph-find-nav">
+          <span className="px-1 text-xs tabular-nums text-fg-muted" aria-live="polite">
+            {found.data.items.length ? `${cursor + 1} / ${found.data.items.length}` : t("wiki.graph.noMatch")}
+          </span>
+          <Button size="md" variant="secondary" disabled={!found.data.items.length} onClick={() => moveMatch(-1)}>{t("wiki.graph.previousMatch")}</Button>
+          <Button size="md" variant="secondary" disabled={!found.data.items.length} onClick={() => moveMatch(1)}>{t("wiki.graph.nextMatch")}</Button>
+        </div>
+      )}
+      <Button size="md" variant="secondary" icon={Eraser} disabled={!nodes.size} onClick={() => { graph.clear(); setSelection([]); }}>{t("wiki.graph.clearCanvas")}</Button>
+      <p id="wiki-graph-find-scope" className="w-full text-xs text-fg-muted">{t("wiki.graph.searchScope")}</p>
+    </>
   ) : null;
-  const left = (
-    <div className="flex min-h-0 min-w-0 flex-col">
-      <h3 className="flex min-h-[var(--control-height-lg)] shrink-0 items-center border-b border-border px-3 py-1 text-sm font-semibold">
-        {t(search ? "wiki.search.hits" : "wiki.search.documents")}
-      </h3>
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {rows.map((n, i) => {
-          const match = hits.data?.items[i];
-          return (
-            <button
-              type="button"
-              key={n.id}
-              disabled={mainResult.isPlaceholderData}
-              aria-pressed={node?.id === n.id && !edge}
-              data-surface-tint={node?.id === n.id && !edge ? "accent" : undefined}
-              onClick={() => pick(n, true)}
-              className="grid w-full grid-cols-1 gap-1 border-b border-border border-l-2 border-l-transparent p-3 text-left hover:bg-surface-hover focus-visible:outline-focus-ring aria-pressed:border-l-accent-fg aria-pressed:bg-accent-muted"
-            >
-              <span className="flex min-w-0 gap-2">
-                <span className="text-xs tabular-nums text-fg-muted">{offset + i + 1}</span>
-                <strong className="min-w-0 text-sm [overflow-wrap:anywhere]">{n.label}</strong>
-              </span>
-              {search && (
-                <span className="flex min-w-0 items-center gap-1 text-xs text-fg-muted">
-                  <BookOpen size={13} className="shrink-0" aria-hidden />
-                  <span className="min-w-0 truncate">{n.document_name}</span>
-                </span>
-              )}
-              {match?.knowledge_base_ids.map((id) => (
-                <span key={id} className="min-w-0 truncate text-xs text-fg-muted">
-                  {kbs.find((k) => k.id === id)?.name ?? id}
-                </span>
-              ))}
-            </button>
-          );
-        })}
-      </div>
-      <div className="shrink-0 border-t border-border px-3 py-2 empty:hidden">
-        {total !== undefined ? (
-          <OffsetPagination
-            offset={offset}
-            limit={RESULT_PAGE}
-            count={rows.length}
-            total={total}
-            onPageChange={(_, n) => changePage(n)}
-            ariaLabel={t("wiki.search.hits")}
+
+  const graphPanel = mainQuery.isPending ? (
+    // 読み込み中は画布の形の Skeleton（凡例の行と画布）。
+    <div className="grid gap-2" aria-hidden data-testid="wiki-graph-skeleton">
+      <Skeleton className="h-9 w-2/3 max-w-[32rem]" />
+      <Skeleton className="h-[40rem] w-full max-sm:h-[65dvh]" />
+    </div>
+  ) : mainQuery.isError && !mainQuery.data ? (
+    <ApiErrorState error={mainQuery.error} fallback={t("wiki.graph.error")} onRetry={() => void mainQuery.refetch()} />
+  ) : (
+    <div className="grid gap-2">
+      {!searchMode && sample.data && sample.data.total > 0 && (
+        <p className="text-xs text-fg-muted">{t("wiki.graph.sampleHint", { count: sample.data.documents.length, total: sample.data.total })}</p>
+      )}
+      {graph.failure && <DataLoadFailure error={graph.failure.error} fallback={t("wiki.graph.expandError")} onRetry={graph.failure.retry} />}
+      {found.isError && <DataLoadFailure error={found.error} fallback={t("wiki.graph.searchError")} onRetry={() => void found.refetch()} />}
+      {!nodes.size && !searchMode && sample.data?.total === 0 ? (
+        <EmptyState title={t("wiki.graph.empty")} />
+      ) : !nodes.size && searchMode && hits.data?.total === 0 ? (
+        <EmptyState title={t("search.noResults")} />
+      ) : (
+        <>
+          {!nodes.size && !searchMode && <p className="text-sm text-fg-muted">{t("wiki.graph.cleared")}</p>}
+          <WikiGraphView
+            ref={camera}
+            scope={scope}
+            state={graph.state}
+            selected={selection}
+            onSelect={choose}
+            onExpand={graph.expand}
+            onCollapse={graph.collapse}
+            onRemove={(ids) => { graph.remove(ids); setSelection((old) => old.filter((id) => !ids.includes(id))); }}
+            onKeepOnly={graph.keep}
+            onConnect={graph.connect}
+            onOpen={(id) => { choose([id]); setInspector(true); if (narrow) setSheet(true); }}
+            toolbar={toolbar}
           />
-        ) : (
-          !search &&
-          docs.data?.has_more && (
-            <div className="flex justify-end gap-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                iconOnly
-                icon={ChevronLeft}
-                aria-label={t("pager.prev")}
-                disabled={!offset}
-                onClick={() => changePage(offset - RESULT_PAGE)}
-              />
-              <Button
-                size="sm"
-                variant="ghost"
-                iconOnly
-                icon={ChevronRight}
-                aria-label={t("pager.next")}
-                onClick={() => changePage(offset + RESULT_PAGE)}
-              />
-            </div>
-          )
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
+
+  const listPanel = listQuery.isPending ? (
+    <ListSkeleton rows={{ base: 6, md: 8 }} />
+  ) : listQuery.isError && !listQuery.data ? (
+    <ApiErrorState error={listQuery.error} fallback={t("wiki.graph.error")} onRetry={() => void listQuery.refetch()} />
+  ) : !listRows.length ? (
+    <EmptyState title={t(searchMode ? "search.noResults" : "wiki.graph.empty")} />
+  ) : (
+    <div className={`grid gap-2 ${staleContentClass(listQuery.isPlaceholderData)}`} aria-busy={listQuery.isFetching || undefined}>
+      {listTotal !== undefined && <ListCount total={listTotal} />}
+      <ListScrollRegion label={t(searchMode ? "wiki.search.resultsList" : "wiki.search.documentsList")} testId="wiki-result-list">
+        <ul className="divide-y divide-border">
+          {listRows.map((row, index) => {
+            const hit = searchMode ? hits.data?.items[index] : undefined;
+            const active = selection.includes(row.id);
+            return (
+              <li key={row.id}>
+                <button type="button" aria-pressed={active} data-surface-tint={active ? "accent" : undefined}
+                  className="grid w-full gap-0.5 px-3 py-2 text-left hover:bg-surface-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring border-l-2 border-l-transparent aria-pressed:border-l-accent-fg aria-pressed:bg-accent-muted" onClick={() => pick(row)}>
+                  <span className="grid min-w-0 gap-0.5">
+                    <span className="flex min-w-0 gap-2">
+                      <span className="text-xs tabular-nums text-fg-muted">{offset + index + 1}</span>
+                      <strong className="min-w-0 text-sm [overflow-wrap:anywhere]">{row.label}</strong>
+                    </span>
+                    {searchMode && (
+                      <span className="flex min-w-0 items-center gap-1 text-xs font-normal text-fg-muted">
+                        <BookOpen size={14} className="shrink-0" aria-hidden />
+                        <span className="min-w-0 truncate">{row.document_name}</span>
+                      </span>
+                    )}
+                    {hit?.knowledge_base_ids.map((id) => (
+                      <span key={id} className="min-w-0 truncate text-xs font-normal text-fg-muted">{kbs.find((k) => k.id === id)?.name ?? id}</span>
+                    ))}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </ListScrollRegion>
+      {listTotal !== undefined && (
+        <OffsetPagination offset={offset} limit={pageSize} total={listTotal} count={listRows.length}
+          onPageChange={(_, next) => changePage(next)} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }}
+          pageSizeOptions={[...WIKI_PAGE_SIZE_OPTIONS]} labels={paginationLabels()} ariaLabel={t(searchMode ? "wiki.search.resultsList" : "wiki.search.documentsList")} />
+      )}
+    </div>
+  );
+
   return (
     <Card>
-      <div ref={box} className="flex min-w-0 flex-col bg-surface">
-        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border p-3">
-          <h2 className="font-semibold">
-            {t("wiki.search.results")}
-            {total !== undefined && (
-              <span className="ml-2 text-xs text-fg-muted">
-                {t("wiki.documents.count", { count: total })}
-              </span>
-            )}
-          </h2>
+      <div ref={box} className={`flex min-w-0 flex-col bg-surface ${full ? "h-full overflow-auto" : ""}`}>
+        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 pt-2">
+          <h2 className="font-semibold">{title}</h2>
           <div className="flex min-w-0 flex-wrap items-center gap-1">
-            {view === "graph" && search && !small && <Button size="sm" variant="ghost" icon={PanelLeft} pressed={showResults}
-              onClick={() => setShowResults(!showResults)}>{t("wiki.search.hits")}</Button>}
-            {view === "graph" && <Button size="sm" variant="secondary" icon={Layers} pressed={grouped}
-              onClick={() => { remember(); clearGroup(); setGrouped(!grouped); }}>{t("wiki.search.grouped")}</Button>}
-            {view === "graph" && <Button size="sm" variant="secondary" icon={Undo2} disabled={!history.length}
-              aria-label={t(history.at(-1)?.collapsed ? "wiki.search.undoCollapse" : "wiki.search.undo")} onClick={undo}>{t("wiki.search.undo")}</Button>}
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={Network}
-              pressed={view === "graph"}
-              onClick={() => {
-                setView("graph");
-                if (small) requestAnimationFrame(() => graphPane.current?.scrollIntoView({ block: "nearest" }));
-              }}
-            >
-              {t("wiki.search.graph")}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={List}
-              pressed={view === "list"}
-              onClick={() => setView("list")}
-            >
-              {t("wiki.search.list")}
-            </Button>
-            {!small && !inspector && (
-              <Button
-                variant="ghost"
-                iconOnly
-                icon={PanelRight}
-                size="sm"
-                aria-label={t("wiki.search.openDetail")}
-                onClick={() => setInspector(true)}
-              />
+            <Tabs idPrefix="wiki-view" ariaLabel={title} value={view} onChange={setView}
+              items={[{ id: "graph", label: t("wiki.search.graph"), icon: Network }, { id: "list", label: t("wiki.search.list"), icon: List }]} />
+            {!narrow && !inspector && (
+              <Button variant="ghost" size="sm" iconOnly icon={PanelRight} aria-label={t("wiki.search.openDetail")} onClick={() => setInspector(true)} />
             )}
             {(wideScreen || full) && !fullError && (
-              <Button
-                variant="ghost"
-                iconOnly
-                size="sm"
-                icon={full ? Minimize : Maximize}
-                aria-label={t(full ? "wiki.search.shrink" : "wiki.search.full")}
-                onClick={() => void toggleFull()}
-              />
+              <Button variant="ghost" size="sm" iconOnly icon={full ? Minimize : Maximize} aria-label={t(full ? "wiki.search.shrink" : "wiki.search.full")} onClick={() => void toggleFull()} />
             )}
           </div>
         </header>
-        {view === "graph" && rows.length > 0 && (
-          <Disclosure summary={t("wiki.search.graphFilters")} surface="sunken">
-            <div className="flex flex-wrap items-end gap-2">
-              <SelectField
-                id="wiki-node-kind"
-                label={t("wiki.graph.kind")}
-                value={kind}
-                onValueChange={setKind}
-                options={[
-                  { value: "", label: t("wiki.graph.allKinds") },
-                  ...(["document", "section", "unit"] as const).map((value) => ({
-                    value,
-                    label: t(`wiki.graph.kind.${value}`),
-                  })),
-                ]}
-              />
-              <GraphLegend
-                placement="inline"
-                label={t("wiki.graph.legend")}
-                disabledIds={hidden}
-                items={(Object.keys(WIKI_RELATION_ICONS) as WikiGraphRelation[]).map((id) => {
-                  const Icon = WIKI_RELATION_ICONS[id];
-                  return { id, label: wikiRelationText(id), marker: <Icon size={14} aria-hidden /> };
-                })}
-                onToggle={(id) =>
-                  setHidden((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(id)) next.delete(id);
-                    else next.add(id);
-                    return next;
-                  })
-                }
-              />
-            </div>
-          </Disclosure>
-        )}
-        {!showSheet && progress}
-        {mainResult.isError && mainResult.data && <Failed error={mainResult.error} retry={() => void mainResult.refetch()} />}
-        {mainResult.isPending ? (
-          <div className="min-h-80 p-3"><ListSkeleton rows={{ base: 5, md: 5 }} /></div>
-        ) : mainResult.isError && !mainResult.data ? (
-          <Failed error={mainResult.error} retry={() => void mainResult.refetch()} />
-        ) : !rows.length && offset > 0 ? (
-          <div className="min-h-80">{left}</div>
-        ) : !rows.length ? (
-          <EmptyState title={t(search ? "search.noResults" : "wiki.graph.empty")} />
-        ) : (
-          <div
-            aria-busy={reloadList || undefined}
-            className={`grid min-h-80 divide-x divide-border ${columns} ${staleContentClass(mainResult.isPlaceholderData)} ${full ? "flex-1" : "h-[clamp(26rem,65dvh,60rem)]"}`}
-          >
-            {listVisible && left}
-            {view === "graph" && (
-              <div ref={graphPane} className="flex min-h-0 min-w-0 flex-col">
-                {graphFailure && <Failed error={graphFailure.error} retry={() => void graphFailure.refetch()} />}
-                {failedWhole && <Failed error={failedWhole.error} retry={() => void failedWhole.refetch()} />}
-                <div className="min-h-0 flex-1">
-                  {graphPending ? <div className="p-3"><ListSkeleton rows={{ base: 5, md: 5 }} /></div> : <WikiScene
-                    root={key(root)}
-                    matches={new Set(search ? rows.map((n) => n.id) : [])}
-                    scene={scene}
-                    selected={edge ? undefined : selectedGroup?.id ?? node?.id}
-                    groups={points}
-                    camera={camera}
-                    onZoom={setZoom}
-                    onGroup={pickGroup}
-                    edge={(edge && edgeId(edge)) || undefined}
-                    onNode={(n) => pick(n)}
-                    onEdge={(e) => {
-                      clearGroup();
-                      setEdge(e);
-                      setInspector(true);
-                      if (small) setSheet(true);
-                    }}
-                  />}
-                </div>
-              </div>
-            )}
-            {!small && inspector && (
-              <aside
-                aria-label={t("wiki.search.detail")}
-                className="flex min-h-0 min-w-0 flex-col"
-              >
-                <div className="flex min-h-[var(--control-height-lg)] shrink-0 items-center justify-between border-b border-border px-3 py-1">
-                  <strong className="text-sm font-semibold">{t("wiki.search.detail")}</strong>
-                  <Button
-                    iconOnly
-                    icon={X}
-                    size="sm"
-                    variant="ghost"
-                    aria-label={t("wiki.graph.clearSelection")}
-                    onClick={close}
-                  />
-                </div>
-                {panel}
-              </aside>
-            )}
+        {workingLabel && !(narrow && sheet) && (
+          <div className="px-3 pt-3">
+            <ProcessingIndicator active label={workingLabel} testId="wiki-wait-results" reserveSlowLine={false}
+              activityIcon={searchButtonBusy && mainQuery.isFetching ? "none" : "spinner"} />
           </div>
         )}
-        {view === "graph" && !!rows.length && !graphPending && (
-          <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 text-xs text-fg-muted">
-            <span>{t("wiki.search.displayedItems", { count: scene.nodes.length })}{points.length > 0 && ` · ${t("wiki.search.groupLeft", { count: points.reduce((sum, g) => sum + g.remaining, 0) })} · ${t("wiki.search.remainingGroups", { count: points.length })}`}</span>
-            <span className="tabular-nums">{t("wiki.search.zoomPercent", { percent: zoom })}</span>
-          </footer>
+        <div className={`grid min-w-0 gap-3 p-3 ${showInspector ? "lg:grid-cols-[minmax(0,1fr)_minmax(17rem,22rem)]" : ""}`}>
+          <div className="min-w-0">
+            <TabPanel id="graph" value={view} idPrefix="wiki-view">{graphPanel}</TabPanel>
+            <TabPanel id="list" value={view} idPrefix="wiki-view">{listPanel}</TabPanel>
+          </div>
+          {showInspector && (
+            <aside aria-label={t("wiki.search.detail")} className="flex min-h-0 min-w-0 flex-col rounded-md border border-border max-lg:max-h-[40rem] lg:max-h-[46rem]">
+              <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-1">
+                <strong className="text-sm font-semibold">{t("wiki.search.detail")}</strong>
+                <Button iconOnly icon={X} size="sm" variant="ghost" aria-label={t("wiki.graph.clearSelection")} onClick={() => setInspector(false)} />
+              </div>
+              {detail}
+            </aside>
+          )}
+        </div>
+        {narrow && (node || selectedEdge || selectedNodes.length > 1) && !sheet && (
+          <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
+            <span className="min-w-0 truncate text-sm">{node ? node.label : selectedEdge ? t("wiki.graph.selectedEdge") : t("wiki.graph.multiSelected", { count: selectedNodes.length })}</span>
+            <Button size="sm" variant="secondary" icon={Search} onClick={() => setSheet(true)}>{t("wiki.graph.openDetail")}</Button>
+          </div>
         )}
-        {small && (
-          <SideSheet
-            side="bottom"
-            open={sheet}
-            onClose={close}
-            initialFocus="dialog"
-            title={t("wiki.search.detail")}
-            closeLabel={t("wiki.graph.clearSelection")}
-            bodyClassName="p-0"
-          >
-            {sheet && progress}
-            {sheet && panel}
+        {narrow && (
+          <SideSheet side="bottom" open={sheet} onClose={() => setSheet(false)} initialFocus="dialog" title={t("wiki.search.detail")}
+            closeLabel={t("wiki.graph.clearSelection")} bodyClassName="p-0">
+            {sheet && detail}
           </SideSheet>
         )}
       </div>
