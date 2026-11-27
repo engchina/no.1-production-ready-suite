@@ -406,82 +406,86 @@ function HistoryList({
                     />
                   )
                 ) : null}
-                <RunHistoryTable
-                  testId="history-table"
-                  rows={rows}
-                  toItem={toRunItem}
-                  onOpen={onOpen}
-                  showExecutor={othersVisible}
-                  // 実行ごとのモデルの利用量（合計の token。#3543）。見出しは RAG・Agent と同じ「token」。
-                  showModels
-                  showUsage
-                  selectedRunId={selectedRunId}
-                  // 再実行は一覧の行にも置かない（3 製品の実行の詳細・一覧を RAG にそろえる。#2343）。
-                  extraColumns={[
-                    {
-                      key: "rating",
-                      header: t("history.column.rating"),
-                      className: "whitespace-nowrap",
-                      render: (item) =>
-                        // 停止の行（#3348）は評価できない。
-                        isCancelledHistory(item) ? (
-                          <span className="text-fg-muted">—</span>
-                        ) : item.feedback_rating ? (
-                          <StatusBadge
-                            variant={item.feedback_rating === "good" ? "success" : "warning"}
-                            label={feedbackRatingLabel(item.feedback_rating)}
-                          />
-                        ) : (
-                          <span className="text-fg-muted">{feedbackRatingLabel(null)}</span>
-                        ),
-                    },
-                    {
-                      key: "rows",
-                      header: t("history.column.rows"),
-                      align: "right",
-                      className: "whitespace-nowrap tnum text-fg-muted",
-                      render: (item) =>
-                        item.generation_only || !item.safety_is_safe || isCancelledHistory(item)
-                          ? t("history.notExecuted")
-                          : formatNumber(item.result_row_count),
-                    },
-                  ]}
-                  labels={{
-                    table: t("history.list.title"),
-                    columns: { models: t("history.column.model"), usage: t("history.column.usage") },
-                    modelNotRecorded: t("history.modelNotRecorded"),
-                    self: t("history.self"),
-                    openDetail: (title) => t("history.openDetail", { title }),
-                    rowActions: (title) => t("history.rowActions", { title }),
-                  }}
-                  empty={
-                    listUnavailable ? undefined : periodOnlyEmpty && filters.period !== "all" ? (
-                      <RunHistoryPeriodEmptyState
-                        period={filters.period}
-                        onShowAll={() => updateFilters({ period: "all" })}
-                        testId="history-period-empty"
-                      />
-                    ) : evaluationOnly ? (
-                      // 品質評価の実行だけがある: 既定で隠していることと出し方を伝える（Agent と同じ。#1986）。
-                      <EmptyState
-                        title={t("history.empty.title")}
-                        hint={t("history.empty.evaluationHidden", { count: formatNumber(hiddenEvaluationTotal) })}
-                      />
-                    ) : (
-                      <EmptyState
-                        title={t("history.noResults.title")}
-                        hint={t("history.noResults.hint")}
-                        action={
-                          filtered ? (
-                            <Button type="button" variant="secondary" size="sm" onClick={clearFilters}>
-                              {t("history.action.clearFilters")}
-                            </Button>
-                          ) : undefined
-                        }
-                      />
-                    )
-                  }
-                />
+                {/* 今の条件の一覧が無い失敗は、一覧の位置に失敗の表示だけを出す（行の無い表の見出しを残さない。
+                    RAG の実行履歴と同じ。#5963）。 */}
+                {listUnavailable ? null : (
+                  <RunHistoryTable
+                    testId="history-table"
+                    rows={rows}
+                    toItem={toRunItem}
+                    onOpen={onOpen}
+                    showExecutor={othersVisible}
+                    // 実行ごとのモデルの利用量（合計の token。#3543）。見出しは RAG・Agent と同じ「token」。
+                    showModels
+                    showUsage
+                    selectedRunId={selectedRunId}
+                    // 再実行は一覧の行にも置かない（3 製品の実行の詳細・一覧を RAG にそろえる。#2343）。
+                    extraColumns={[
+                      {
+                        key: "rating",
+                        header: t("history.column.rating"),
+                        className: "whitespace-nowrap",
+                        render: (item) =>
+                          // 停止の行（#3348）は評価できない。
+                          isCancelledHistory(item) ? (
+                            <span className="text-fg-muted">—</span>
+                          ) : item.feedback_rating ? (
+                            <StatusBadge
+                              variant={item.feedback_rating === "good" ? "success" : "warning"}
+                              label={feedbackRatingLabel(item.feedback_rating)}
+                            />
+                          ) : (
+                            <span className="text-fg-muted">{feedbackRatingLabel(null)}</span>
+                          ),
+                      },
+                      {
+                        key: "rows",
+                        header: t("history.column.rows"),
+                        align: "right",
+                        className: "whitespace-nowrap tnum text-fg-muted",
+                        render: (item) =>
+                          item.generation_only || !item.safety_is_safe || isCancelledHistory(item)
+                            ? t("history.notExecuted")
+                            : formatNumber(item.result_row_count),
+                      },
+                    ]}
+                    labels={{
+                      table: t("history.list.title"),
+                      columns: { models: t("history.column.model"), usage: t("history.column.usage") },
+                      modelNotRecorded: t("history.modelNotRecorded"),
+                      self: t("history.self"),
+                      openDetail: (title) => t("history.openDetail", { title }),
+                      rowActions: (title) => t("history.rowActions", { title }),
+                    }}
+                    empty={
+                      listUnavailable ? undefined : periodOnlyEmpty && filters.period !== "all" ? (
+                        <RunHistoryPeriodEmptyState
+                          period={filters.period}
+                          onShowAll={() => updateFilters({ period: "all" })}
+                          testId="history-period-empty"
+                        />
+                      ) : evaluationOnly ? (
+                        // 品質評価の実行だけがある: 既定で隠していることと出し方を伝える（Agent と同じ。#1986）。
+                        <EmptyState
+                          title={t("history.empty.title")}
+                          hint={t("history.empty.evaluationHidden", { count: formatNumber(hiddenEvaluationTotal) })}
+                        />
+                      ) : (
+                        <EmptyState
+                          title={t("history.noResults.title")}
+                          hint={t("history.noResults.hint")}
+                          action={
+                            filtered ? (
+                              <Button type="button" variant="secondary" size="sm" onClick={clearFilters}>
+                                {t("history.action.clearFilters")}
+                              </Button>
+                            ) : undefined
+                          }
+                        />
+                      )
+                    }
+                  />
+                )}
                 {/* ページ送りは表の直下の共通の OffsetPagination（1 ページなら出さない。#1764 / #1891）。 */}
                 {listUnavailable ? null : (
                   <OffsetPagination

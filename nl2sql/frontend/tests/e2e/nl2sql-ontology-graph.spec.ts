@@ -330,7 +330,8 @@ const nodePickerOverflowGraph = {
   nodes: Array.from({ length: 14 }, (_, index) => ({
     id: `picker-node-${index + 1}`,
     kind: index % 3 === 0 ? "business_entity" : index % 3 === 1 ? "business_term" : "metric",
-    business_name_ja: `選択候補 ${index + 1}`,
+    // 1 件目は 1 行に収まらない名前（折り返した行が切れないことを確かめる。#5962）。
+    business_name_ja: index === 0 ? "選択候補 1（1 行に収まらずに折り返す、合成の長い名前。全て架空のデータ）" : `選択候補 ${index + 1}`,
     technical_name: `ADMIN.PICKER_NODE_${index + 1}`,
     review_status: "approved",
   })),
@@ -1075,6 +1076,13 @@ test("選択候補一覧は標準の最大表示件数で縦スクロールす�
   expect(metrics.maxHeightPx).toBeCloseTo(expectedVisibleRows * 3.5 * metrics.remPx, 0);
   expect(metrics.clientHeight).toBeLessThanOrEqual(metrics.maxHeightPx + 1);
   expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  // 行は中身の高さになる。領域の上限で行が縮むと、折り返した名前が行の下端で切れる（#5962）。
+  const clippedRows = await scrollRegion.getByRole("button").evaluateAll((rows) =>
+    rows.filter((row) => row.scrollHeight > row.clientHeight + 1).map((row) => row.textContent),
+  );
+  expect(clippedRows).toEqual([]);
+  const rowHeights = await scrollRegion.getByRole("button").evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
+  expect(rowHeights[0]).toBeGreaterThan(rowHeights[1] + 10);
   await scrollRegion.focus();
   await expect(scrollRegion).toBeFocused();
   await scrollRegion.evaluate((el) => {
