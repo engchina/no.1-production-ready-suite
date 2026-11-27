@@ -70,6 +70,8 @@ export interface WikiUnitConnection {
 }
 /** 単位の関係は 1 回で取り切る（#5916）。 */
 export const WIKI_RELATIONS_LIMIT = 500;
+/** `connections` が 1 回で受け付ける単位の数（backend の上限）。 */
+export const WIKI_CONNECTIONS_LIMIT = 200;
 export interface WikiDraft {
   knowledgeBaseId?: string;
   profileId: string;
@@ -115,9 +117,6 @@ export const wikiApi = {
       { q, method, offset: String(offset), limit: String(limit) },
       signal,
     ),
-  documents: (s: WikiScope, offset: number, limit: number, signal?: AbortSignal) =>
-    get<WikiGraphOverview>(s, "documents", { offset: String(offset), limit: String(limit) }, signal),
-  docCount: (s: WikiScope, signal?: AbortSignal) => get<{ total: number }>(s, "document-count", {}, signal),
   tree: (
     s: WikiScope,
     doc: string,

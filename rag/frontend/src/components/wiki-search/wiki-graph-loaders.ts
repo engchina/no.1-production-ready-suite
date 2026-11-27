@@ -2,7 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type { WikiGraphRelation, WikiGraphRelationItem, WikiGraphTreeNode } from "@/lib/api";
 import { WIKI_GRAPH_SETTINGS } from "./wiki-graph-settings";
 import { edgeKey, type WikiExpansion, type WikiGraphEdge, type WikiGraphNode, type WikiNeighbor } from "./wiki-graph-model";
-import { wikiApi, type WikiDocumentGraph, type WikiRelations, type WikiScope } from "./wiki-api";
+import { wikiApi, type WikiDocumentGraph, type WikiRelations, type WikiScope, type WikiUnitConnection } from "./wiki-api";
 
 /** 関係の種類（「構成」と、案内の依存・別の文書への参照の種類）。 */
 export const WIKI_RELATION_KINDS: readonly WikiGraphRelation[] = ["reference", "prerequisite", "exception", "continuation", "expected_result", "warning"];
@@ -45,6 +45,22 @@ export function documentLinks(graph: WikiDocumentGraph): WikiGraphEdge[] {
   }));
 }
 
+/** 単位の間の関係（`connections`）を線にする。 */
+export function connectionEdges(links: readonly WikiUnitConnection[]): WikiGraphEdge[] {
+  return links.map((link) => ({
+    id: edgeKey(link.source_id, link.relation, link.target_id), source: link.source_id, target: link.target_id, kind: link.relation, scope: link.scope,
+  }));
+}
+
+/** 文書の参照の相手（文書の展開と、図内検索で足した文書の線で使い回す）。 */
+export function fetchDocumentNeighbors(client: QueryClient, scope: WikiScope, id: string): Promise<WikiDocumentGraph> {
+  return client.fetchQuery({
+    queryKey: documentNeighborsKey(scope, id),
+    queryFn: ({ signal }) => wikiApi.documentGraph(scope, 0, 100, id, signal),
+    staleTime: 60_000,
+  });
+}
+
 function containsNeighbors(parent: string, items: readonly WikiGraphTreeNode[]): WikiNeighbor[] {
   return items.map((item) => ({ node: treeNode(item), edge: { id: edgeKey(parent, "contains", item.id), source: parent, target: item.id, kind: "contains" } }));
 }
@@ -81,11 +97,7 @@ export async function loadNeighbors(client: QueryClient, scope: WikiScope, node:
   if (node.kind !== "document") return { neighbors, complete: treeComplete, total };
   const relationKinds = kinds?.filter((kind) => kind !== "contains");
   if (kinds && !relationKinds?.length) return { neighbors, complete: treeComplete, total };
-  const graph = await client.fetchQuery({
-    queryKey: documentNeighborsKey(scope, node.id),
-    queryFn: ({ signal }) => wikiApi.documentGraph(scope, 0, 100, node.id, signal),
-    staleTime: 60_000,
-  });
+  const graph = await fetchDocumentNeighbors(client, scope, node.id);
   const docs = new Map(graph.documents.map((doc) => [doc.id, documentNode(doc)]));
   const linked = documentLinks(graph).flatMap((edge) => {
     if (relationKinds && !relationKinds.includes(edge.kind)) return [];

@@ -1836,7 +1836,7 @@ test("線をクリックすると関係の詳細をノードと同じ詳細の�
   await page.screenshot({ path: testInfo.outputPath("node-details.png") });
 });
 
-test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter で 25 件ずつ足し、全体表示は読める縮尺", { tag: "@responsive" }, async ({ page }, info) => {
+test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter で 25 件ずつ足し、開いた直後と全体表示は図の全体を収める", { tag: "@responsive" }, async ({ page }, info) => {
   test.setTimeout(75000);
   const synthetic = Array.from({ length: 256 }, (_, i) => ({
     id: "n" + i, kind: "table", business_name_ja: "合成の対象 " + i, technical_name: "T_" + i,
@@ -1860,6 +1860,9 @@ test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter 
   const count = (key: "graphNodes" | "graphEdges" | "graphZoom") => canvas.evaluate((el, name) => Number((el as HTMLElement).dataset[name] ?? 0), key);
   // n0 と同じ種類の隣接 12 件と「さらに展開」の点（隣接 255 件を 0 件にして消さない。#5908）。
   await expect.poll(() => count("graphNodes")).toBe(14);
+  // 開いた直後に図の全体（名前を含む）が画布に収まる（#5953）。
+  const contained = () => canvas.evaluate((el) => (el as HTMLElement).dataset.graphContained);
+  await expect.poll(contained).toBe("true");
   await expect(area.getByTestId("ontology-concept-graph-node-kinds")).toContainText("物理表・ビュー 13");
   await expect(area.getByTestId("ontology-neighbors")).toHaveCount(0);
   // 図内検索で n0 を選び、Enter で隣接を 25 件足す。
@@ -1875,9 +1878,10 @@ test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter 
   await expect(menu.getByRole("menuitem", { name: /関係の種類を選んで展開/ })).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: "選択したノードだけ残す" })).toBeVisible();
   await page.keyboard.press("Escape");
-  // 全体表示は読める縮尺（0.8）を下限にし、極小の縮尺で収めない（#5520・#5908）。
+  // 全体表示は図の全体を画布に収める（探索の画布は手で縮める下限まで縮めてよい。#5953。表のカードの図は読める縮尺のまま）。
   await area.getByRole("button", { name: "グラフ全体を表示", exact: true }).click();
-  await expect.poll(() => count("graphZoom")).toBeGreaterThanOrEqual(0.8);
+  await expect.poll(contained).toBe("true");
+  expect(await count("graphZoom")).toBeGreaterThanOrEqual(0.1);
   if (process.env.GRAPH_ACCEPTANCE_DIR) await canvas.screenshot({ path: process.env.GRAPH_ACCEPTANCE_DIR + "/" + info.project.name + "-ontology-256.png" });
   // 物理 ER は表のカード（React Flow）で、隣接をまとめて隠さない。
   await area.getByTestId("ontology-graph-mode-physical_er").click();

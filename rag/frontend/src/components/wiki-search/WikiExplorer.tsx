@@ -1,15 +1,20 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { BookOpen, Eraser, List, Maximize, Minimize, Network, PanelRight, Search, X } from "lucide-react";
 import type { GraphExplorerHandle } from "@production-ready/ui/graph-explorer";
 import {
   Button,
   Card,
+  DataTable,
+  INFORMATION_TABLE_ROW_CLASS,
+  INFORMATION_TABLE_VISIBLE_ROWS,
   ListCount,
   ListScrollRegion,
   ListSkeleton,
   OffsetPagination,
+  Pagination,
   ProcessingIndicator,
+  RowTitleButton,
   SearchField,
   SideSheet,
   Skeleton,
@@ -17,13 +22,14 @@ import {
   Tabs,
   staleContentClass,
   useMediaQuery,
+  usePagination,
 } from "@production-ready/ui";
 import { DataLoadFailure } from "@/components/DataLoadStates";
 import { ApiErrorState, EmptyState } from "@/components/StateViews";
 import { t } from "@/lib/i18n";
 import { paginationLabels } from "@/lib/pagination-labels";
 import { WIKI_GRAPH_SETTINGS, WIKI_PAGE_SIZE_OPTIONS } from "./wiki-graph-settings";
-import { edgeKey, moreId, remainingNeighbors, type WikiGraphNode } from "./wiki-graph-model";
+import { moreId, remainingNeighbors, wikiGraphRows, type WikiGraphNode, type WikiGraphRow } from "./wiki-graph-model";
 import { documentLinks, documentNode, unitNode } from "./wiki-graph-loaders";
 import { useWikiGraph } from "./use-wiki-graph";
 import { WikiGraphView } from "./WikiGraphView";
@@ -50,7 +56,9 @@ const SPLIT_MIN_WIDTH = 768;
 
 /**
  * Wiki の関係図と一覧（#5922）。検索した結果（Wiki 検索）と、ナレッジベース詳細の参照の多い文書の見本を、
- * 共有の Cytoscape の画布に出す。一覧は画布の内容を読み上げで追える代わりの表示。
+ * 共有の Cytoscape の画布に出す。「一覧」はいま図にある節点の表で、関係図と同じ集合の別の見方（Neo4j Browser の
+ * Graph / Table。画布の内容を読み上げで追える。#5953）。Wiki 検索の結果はサーバー側でページを分け、順位と
+ * ナレッジベースの名前を持つので、「検索結果」のタブに残す。
  */
 export function WikiExplorer({ scope, question, method, kbs, picks, toggle, initialSelection, onSelectUnit, initialOffset, onOffset, searchButtonBusy = false }: Props) {
   const base = ["wiki-explorer", scope] as const;
@@ -63,6 +71,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   const [view, setView] = useState("graph");
   const [offset, setOffset] = useState(initialOffset);
   const [pageSize, setPageSize] = useState<number>(WIKI_GRAPH_SETTINGS.resultPage);
+  const [listSize, setListSize] = useState<number>(WIKI_GRAPH_SETTINGS.resultPage);
   const [selection, setSelection] = useState<string[]>(initialSelection ? [initialSelection] : []);
   const [inspector, setInspector] = useState(true);
   const [sheet, setSheet] = useState(false);
@@ -100,19 +109,6 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     enabled: !searchMode,
     retry: false,
   });
-  const docs = useQuery({
-    queryKey: [...base, "docs", offset, pageSize],
-    queryFn: ({ signal }) => wikiApi.documents(scope, offset, pageSize, signal),
-    placeholderData: keepPreviousData,
-    enabled: !searchMode && view === "list",
-    retry: false,
-  });
-  const count = useQuery({
-    queryKey: [...base, "document-count"],
-    queryFn: ({ signal }) => wikiApi.docCount(scope, signal),
-    enabled: !searchMode && view === "list",
-    retry: false,
-  });
   const found = useQuery({
     queryKey: [...base, "find", find],
     queryFn: ({ signal }) => wikiApi.hits(scope, find, "keyword", 0, WIKI_GRAPH_SETTINGS.resultPage, signal),
@@ -122,43 +118,39 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
 
   // 検索の結果（ページ）ごとに図を置き換え、結果の間の関係をつなぐ（Wiki 検索は新しい検索で置き換える）。
   const placed = useRef("");
-  const { replace, add, run, reveal } = graph;
+  const { replace, add, place, run, reveal } = graph;
   useEffect(() => {
     if (!searchMode || !hits.data || hits.isPlaceholderData) return;
     const key = JSON.stringify([question, method, offset, pageSize]);
     if (placed.current === key) return;
     placed.current = key;
     const nodes = hits.data.items.map((hit) => unitNode(hit));
-    const ids = nodes.map((node) => node.id);
     // 置き換えると図のすべてが結果なので、一致の輪は付けない（足すときだけ、今の図の中の結果を強調する）。
-    if (WIKI_GRAPH_SETTINGS.wikiSearch === "replace") replace(nodes, []);
-    else add(nodes, [], ids);
-    if (ids.length > 1) {
-      void run(async () => {
-        const links = await wikiApi.connections(scope, ids);
-        add([], links.connections.map((link) => ({
-          id: edgeKey(link.source_id, link.relation, link.target_id), source: link.source_id, target: link.target_id, kind: link.relation, scope: link.scope,
-        })));
-      });
-    }
-  }, [add, hits.data, hits.isPlaceholderData, method, offset, pageSize, question, replace, run, scope, searchMode]);
+    const mode = WIKI_GRAPH_SETTINGS.wikiSearch;
+    void run(() => place(nodes, mode, mode === "add" ? nodes.map((node) => node.id) : []));
+  }, [hits.data, hits.isPlaceholderData, method, offset, pageSize, place, question, run, searchMode]);
   // ナレッジベース詳細は、参照の多い文書の見本とその間の参照で開く。
   useEffect(() => {
     if (searchMode || !sample.data || placed.current === "sample") return;
     placed.current = "sample";
     replace(sample.data.documents.map(documentNode), documentLinks(sample.data));
   }, [replace, sample.data, searchMode]);
-  // 図内検索の当たりを今の図に足し、強調する（ナレッジベース詳細。#5881 で消えた検索）。
+  // 図内検索の当たりを今の図に足し、強調する（ナレッジベース詳細。#5881 で消えた検索）。当たりと図にある原文の
+  // 間の関係も一緒に引く（#5953）。
   const added = useRef("");
   useEffect(() => {
     if (!found.data || added.current === find) return;
     added.current = find;
     const nodes = found.data.items.map((hit) => unitNode(hit));
-    if (WIKI_GRAPH_SETTINGS.knowledgeBaseSearch === "replace") replace(nodes, [], nodes.map((node) => node.id));
-    else add(nodes, [], nodes.map((node) => node.id));
     setCursor(0);
-    if (nodes[0]) void run(async () => { await reveal(nodes[0]); camera.current?.focusNode(nodes[0].id); setSelection([nodes[0].id]); });
-  }, [add, find, found.data, replace, reveal, run]);
+    void run(async () => {
+      await place(nodes, WIKI_GRAPH_SETTINGS.knowledgeBaseSearch, nodes.map((node) => node.id));
+      if (!nodes[0]) return;
+      await reveal(nodes[0]);
+      camera.current?.focusNode(nodes[0].id);
+      setSelection([nodes[0].id]);
+    });
+  }, [find, found.data, place, reveal, run]);
 
   function moveMatch(step: number) {
     const items = found.data?.items ?? [];
@@ -205,18 +197,16 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     }
   }
 
-  const listRows: WikiGraphNode[] = searchMode
-    ? (hits.data?.items ?? []).map((hit) => unitNode(hit))
-    : (docs.data?.documents ?? []).map((doc) => documentNode(doc));
-  const listTotal = searchMode ? hits.data?.total : docs.data ? (docs.data.has_more ? count.data?.total : offset + listRows.length) : undefined;
+  // 「一覧」はいま図にある節点（名前の順）。図を置き換えたときだけ 1 ページ目へ戻す。
+  const rows = useMemo(() => wikiGraphRows(graph.state), [graph.state]);
+  const listPaging = usePagination(rows, listSize, { resetKey: graph.state.generation });
+  const hitRows: WikiGraphNode[] = (hits.data?.items ?? []).map((hit) => unitNode(hit));
   const mainQuery = searchMode ? hits : sample;
-  const listQuery = searchMode ? hits : docs;
   const workingLabel = mainQuery.isFetching ? t(searchMode ? "wiki.search.loadingHits" : "wiki.graph.loadingSample")
     : found.isFetching ? t("wiki.graph.searching")
-    : graph.pending ? t("wiki.graph.expanding")
-    : view === "list" && listQuery.isFetching ? t("wiki.search.loadingDocs") : undefined;
+    : graph.pending ? t("wiki.graph.expanding") : undefined;
   const title = searchMode ? t("wiki.search.results") : t("wiki.graph.browseTitle");
-  const showInspector = !narrow && inspector && view === "graph" || !narrow && inspector && view === "list";
+  const showInspector = !narrow && inspector;
 
   const detail = selectedEdge ? (
     <RelationInspector edge={selectedEdge} nodes={nodes} onPick={pick} />
@@ -302,19 +292,75 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     </div>
   );
 
-  const listPanel = listQuery.isPending ? (
-    <ListSkeleton rows={{ base: 6, md: 8 }} />
-  ) : listQuery.isError && !listQuery.data ? (
-    <ApiErrorState error={listQuery.error} fallback={t("wiki.graph.error")} onRetry={() => void listQuery.refetch()} />
-  ) : !listRows.length ? (
-    <EmptyState title={t(searchMode ? "search.noResults" : "wiki.graph.empty")} />
+  // 「一覧」: いま図にある節点の表。行を選ぶと図と同じ節点が選ばれ、詳細が出る。
+  const kindLabel = (node: WikiGraphNode) => t(`wiki.graph.kind.${node.kind}`);
+  const listPanel = mainQuery.isPending ? (
+    <ListSkeleton rows={{ base: 5, md: 8 }} />
+  ) : mainQuery.isError && !mainQuery.data ? (
+    <ApiErrorState error={mainQuery.error} fallback={t("wiki.graph.error")} onRetry={() => void mainQuery.refetch()} />
+  ) : !rows.length ? (
+    <EmptyState title={t(searchMode ? "search.noResults" : sample.data?.total === 0 ? "wiki.graph.empty" : "wiki.graph.cleared")} />
   ) : (
-    <div className={`grid gap-2 ${staleContentClass(listQuery.isPlaceholderData)}`} aria-busy={listQuery.isFetching || undefined}>
-      {listTotal !== undefined && <ListCount total={listTotal} />}
-      <ListScrollRegion label={t(searchMode ? "wiki.search.resultsList" : "wiki.search.documentsList")} testId="wiki-result-list">
+    <div className="grid gap-2">
+      <ListCount total={rows.length} />
+      <DataTable<WikiGraphRow>
+        ariaLabel={t("wiki.graph.nodesList")}
+        rows={listPaging.pageItems}
+        getRowKey={(row) => row.node.id}
+        onRowClick={(row) => pick(row.node)}
+        selectedRowKey={selection.length === 1 ? selection[0] : null}
+        isRowSelected={(row) => selection.includes(row.node.id)}
+        rowProps={() => ({ className: INFORMATION_TABLE_ROW_CLASS })}
+        stickyHeader
+        visibleRows={INFORMATION_TABLE_VISIBLE_ROWS}
+        scrollAriaLabel={t("wiki.graph.nodesList")}
+        scrollTestId="wiki-node-list"
+        tableClassName="w-full"
+        columns={[
+          {
+            key: "name",
+            header: t("wiki.graph.name"),
+            rowHeader: true,
+            render: (row) => (
+              <RowTitleButton
+                title={row.node.label}
+                // 狭い画面では列を畳み、種類と所属の文書を名前の下に出す。
+                subtitle={<span className="md:hidden">{[kindLabel(row.node), row.node.kind === "document" ? "" : row.node.document_name].filter(Boolean).join(" · ")}</span>}
+                current={selection.includes(row.node.id)}
+                onClick={() => pick(row.node)}
+              />
+            ),
+          },
+          { key: "kind", header: t("wiki.graph.kind"), headerClassName: "hidden md:table-cell", className: "hidden whitespace-nowrap md:table-cell", render: (row) => kindLabel(row.node) },
+          {
+            key: "document",
+            header: t("wiki.graph.memberDocument"),
+            headerClassName: "hidden md:table-cell",
+            className: "hidden md:table-cell [overflow-wrap:anywhere]",
+            render: (row) => (row.node.kind === "document" ? "—" : row.node.document_name),
+          },
+          { key: "relations", header: t("wiki.graph.relationCount"), align: "right", className: "tnum whitespace-nowrap", render: (row) => row.relations },
+        ]}
+      />
+      <Pagination page={listPaging.page} totalPages={listPaging.totalPages} onPageChange={listPaging.setPage} range={listPaging.range}
+        pageSize={listSize} onPageSizeChange={setListSize} pageSizeOptions={[...WIKI_PAGE_SIZE_OPTIONS]} labels={paginationLabels()} ariaLabel={t("wiki.graph.nodesList")} />
+    </div>
+  );
+
+  // 「検索結果」（Wiki 検索だけ）: サーバー側のページングの結果の一覧。ページを移ると、図をそのページの結果で置き換える。
+  const resultsPanel = hits.isPending ? (
+    <ListSkeleton rows={{ base: 6, md: 8 }} />
+  ) : hits.isError && !hits.data ? (
+    <ApiErrorState error={hits.error} fallback={t("wiki.graph.error")} onRetry={() => void hits.refetch()} />
+  ) : !hitRows.length ? (
+    <EmptyState title={t("search.noResults")} />
+  ) : (
+    <div className={`grid gap-2 ${staleContentClass(hits.isPlaceholderData)}`} aria-busy={hits.isFetching || undefined}>
+      <ListCount total={hits.data.total} />
+      <ListScrollRegion label={t("wiki.search.resultsList")} testId="wiki-result-list">
         <ul className="divide-y divide-border">
-          {listRows.map((row, index) => {
-            const hit = searchMode ? hits.data?.items[index] : undefined;
+          {hitRows.map((row, index) => {
+            const hit = hits.data.items[index];
             const active = selection.includes(row.id);
             return (
               <li key={row.id}>
@@ -325,13 +371,11 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
                       <span className="text-xs tabular-nums text-fg-muted">{offset + index + 1}</span>
                       <strong className="min-w-0 text-sm [overflow-wrap:anywhere]">{row.label}</strong>
                     </span>
-                    {searchMode && (
-                      <span className="flex min-w-0 items-center gap-1 text-xs font-normal text-fg-muted">
-                        <BookOpen size={14} className="shrink-0" aria-hidden />
-                        <span className="min-w-0 truncate">{row.document_name}</span>
-                      </span>
-                    )}
-                    {hit?.knowledge_base_ids.map((id) => (
+                    <span className="flex min-w-0 items-center gap-1 text-xs font-normal text-fg-muted">
+                      <BookOpen size={14} className="shrink-0" aria-hidden />
+                      <span className="min-w-0 truncate">{row.document_name}</span>
+                    </span>
+                    {hit.knowledge_base_ids.map((id) => (
                       <span key={id} className="min-w-0 truncate text-xs font-normal text-fg-muted">{kbs.find((k) => k.id === id)?.name ?? id}</span>
                     ))}
                   </span>
@@ -341,11 +385,9 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
           })}
         </ul>
       </ListScrollRegion>
-      {listTotal !== undefined && (
-        <OffsetPagination offset={offset} limit={pageSize} total={listTotal} count={listRows.length}
-          onPageChange={(_, next) => changePage(next)} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }}
-          pageSizeOptions={[...WIKI_PAGE_SIZE_OPTIONS]} labels={paginationLabels()} ariaLabel={t(searchMode ? "wiki.search.resultsList" : "wiki.search.documentsList")} />
-      )}
+      <OffsetPagination offset={offset} limit={pageSize} total={hits.data.total} count={hitRows.length}
+        onPageChange={(_, next) => changePage(next)} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }}
+        pageSizeOptions={[...WIKI_PAGE_SIZE_OPTIONS]} labels={paginationLabels()} ariaLabel={t("wiki.search.resultsList")} />
     </div>
   );
 
@@ -356,7 +398,11 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
           <h2 className="font-semibold">{title}</h2>
           <div className="flex min-w-0 flex-wrap items-center gap-1">
             <Tabs idPrefix="wiki-view" ariaLabel={title} value={view} onChange={setView}
-              items={[{ id: "graph", label: t("wiki.search.graph"), icon: Network }, { id: "list", label: t("wiki.search.list"), icon: List }]} />
+              items={[
+                { id: "graph", label: t("wiki.search.graph"), icon: Network },
+                { id: "list", label: t("wiki.search.list"), icon: List },
+                ...(searchMode ? [{ id: "results", label: t("wiki.search.hits"), icon: Search }] : []),
+              ]} />
             {!narrow && !inspector && (
               <Button variant="ghost" size="sm" iconOnly icon={PanelRight} aria-label={t("wiki.search.openDetail")} onClick={() => setInspector(true)} />
             )}
@@ -375,6 +421,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
           <div className="min-w-0">
             <TabPanel id="graph" value={view} idPrefix="wiki-view">{graphPanel}</TabPanel>
             <TabPanel id="list" value={view} idPrefix="wiki-view">{listPanel}</TabPanel>
+            {searchMode && <TabPanel id="results" value={view} idPrefix="wiki-view">{resultsPanel}</TabPanel>}
           </div>
           {showInspector && (
             <aside aria-label={t("wiki.search.detail")} className="flex min-h-0 min-w-0 flex-col rounded-md border border-border max-lg:max-h-[40rem] lg:max-h-[46rem]">
