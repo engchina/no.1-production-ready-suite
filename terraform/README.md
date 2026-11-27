@@ -271,7 +271,8 @@ RAG・NL2SQL・Agent の機能は 3 製品のまま使い、AIDP の Knowledge B
   ADMIN で接続する External Catalog（`vector_db_<DB 名>`）とプライベートの workspace（`Pvt_vector_db_<DB 名>`）を自動で作ります（実環境で確認）。
   この catalog を使える AIDP の利用者は、ADMIN の権限で ADB（3 製品のシステムの表を含む）を読み書きできます。**`vector_db_<DB 名>` の catalog の権限を、AIDP の管理者以外に付けないでください**
   （利用者には下の AIDP 用の DB ユーザーの catalog を使わせる）。ADMIN を AIDP に渡したくないときは `aidp_ai_feature_enabled=false` にします（AIDP の Knowledge Base・Agent は使えません）。
-- 既定の workspace には Spark の「Default Master Catalog Compute」が自動で作られて起動します（課金されます）。使わないときは AIDP の画面で停止してください。
+- 既定の workspace には Spark の「Default Master Catalog Compute」（driver 2 OCPU / 16 GB と worker 1 台）が自動で作られて起動します。
+  Workbench REST API では停止できません（`Stop Operation on Default Cluster is not allowed.`。実環境で確認）。AIDP を配備している間の費用に入れてください。
 - `deploy_aidp=false` の配備は、この機能を入れる前と同じです（cloud-init も変わりません）。
 
 ### 配備の前に
