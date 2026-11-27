@@ -36,6 +36,7 @@ export function RequireAuth({ routes, requiredPermission, messages, children }: 
   }
   if (auth.status === "error") {
     // ログイン済みかどうかが分からないため、ログイン画面へ移さず、失敗と再試行を出す（#1061）。
+    // AppShell の外で画面にこの失敗しか無いので、領域の帯ではなく画面全体の形（中央寄せ）で出す（#5929）。
     return (
       <main className="flex min-h-screen items-center justify-center bg-canvas p-4">
         <div className="grid w-full max-w-lg gap-3" data-testid="auth-session-error">
@@ -44,6 +45,7 @@ export function RequireAuth({ routes, requiredPermission, messages, children }: 
             error={auth.error}
             fallback={m.sessionCheckErrorFallback}
             onRetry={() => void auth.refresh()}
+            layout="page"
           />
         </div>
       </main>

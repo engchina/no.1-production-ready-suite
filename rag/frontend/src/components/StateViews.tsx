@@ -25,18 +25,23 @@ export function ErrorState({
 
 /**
  * 取得の失敗（API の失敗）のエラー状態。要約と次の操作を本文に、技術的な詳細（HTTP ステータス・request ID・
- * 通信断のときのブラウザの英語の文など）を「詳細」に出す（UX 契約 messaging.md §10.3。#906）。
+ * 通信断のときのブラウザの英語の文など）を閉じた「詳細」に出す（UX 契約 messaging.md §10.3。#906・#5904）。
  */
 export function ApiErrorState({
   error,
   fallback,
   detailsDefaultOpen,
   onRetry,
+  retrying,
+  testId,
 }: {
   error: unknown;
   fallback: string;
   detailsDefaultOpen?: boolean;
   onRetry?: () => void;
+  /** 押した再試行の間だけ true（再試行のボタンが loading になる）。 */
+  retrying?: boolean;
+  testId?: string;
 }) {
   return (
     <UiApiErrorState
@@ -44,6 +49,8 @@ export function ApiErrorState({
       fallback={fallback}
       detailsDefaultOpen={detailsDefaultOpen}
       onRetry={onRetry}
+      retrying={retrying}
+      testId={testId}
       retryLabel={t("common.retry")}
     />
   );

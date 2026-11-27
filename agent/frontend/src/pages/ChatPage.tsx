@@ -48,6 +48,7 @@ import {
   useChatHistoryActions,
   useChatHistoryPanel,
   ApiErrorBanner,
+  ApiErrorState,
   apiErrorMessage,
   chatAttachmentItems,
   type ChatAttachmentItem,
@@ -703,22 +704,14 @@ export function AgentChat({ tryTarget }: { tryTarget?: AgentTryTarget } = {}) {
               <FieldSkeleton searchable fieldLabel={false} size="sm" testId="chat-agents-loading" />
             ) : agents.isError ? (
               // 読めなかったときは会話の欄を出さず（空の状態を出さない）、ここに失敗と再試行を出す（#1153）。
-              <ApiErrorBanner
+              // 対象の一覧の読み取りの失敗は、3 製品で同じ領域の失敗の表示（「詳細」は閉じる。messaging.md §11.7。#5929）。
+              <ApiErrorState
                 error={agents.error}
                 fallback={t("common.error.load")}
                 testId="chat-agents-error"
-                action={
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    icon={RefreshCw}
-                    loading={agents.isFetching}
-                    onClick={() => void agents.refetch()}
-                  >
-                    {t("common.retry")}
-                  </Button>
-                }
+                onRetry={() => void agents.refetch()}
+                retrying={agents.isFetching}
+                retryLabel={t("common.retry")}
               />
             ) : usableAgents.length === 0 ? (
               <EmptyState title={t("chat.agent.empty")} />
