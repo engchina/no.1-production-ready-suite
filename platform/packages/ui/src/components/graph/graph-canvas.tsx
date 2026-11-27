@@ -23,6 +23,7 @@ import {
 import { cn } from "../../lib/utils";
 import { isImeComposing } from "../../lib/keyboard";
 import { graphParallelEdgeGeometry } from "../../lib/graph-edges";
+import { arrangeOverviewLabels } from "../../lib/graph-overview-labels";
 import { GRAPH_CANVAS_JA, GRAPH_EXPLORATION_JA } from "../../lib/graph-labels";
 import { Button } from "../ui/button";
 import { SearchField } from "../ui/search-field";
@@ -53,23 +54,40 @@ function OverviewScale() {
   useEffect(() => {
     const canvas = marker.current?.closest<HTMLElement>(".react-flow");
     if (!canvas) return;
-    let lastZoom = -1;
+    let pending = 0;
+    function scheduleLabels() {
+      if (pending || !canvas?.hasAttribute("data-graph-overview")) return;
+      pending = requestAnimationFrame(() => {
+        pending = 0;
+        if (canvas.hasAttribute("data-graph-overview")) arrangeOverviewLabels(canvas);
+      });
+    }
     const update = () => {
       const state = store.getState();
       const zoom = state.transform[2];
-      if (zoom === lastZoom || zoom <= 0) return;
-      lastZoom = zoom;
+      if (zoom <= 0) return;
       const overview = zoom < 0.5;
       if (overview) canvas.style.setProperty("--graph-inverse-zoom", String(1 / zoom));
       if (canvas.hasAttribute("data-graph-overview") !== overview) {
         canvas.toggleAttribute("data-graph-overview", overview);
         updateNodes(Array.from(state.nodeLookup.keys()));
       }
+      scheduleLabels();
     };
     update();
-    const unsubscribe = store.subscribe(update);
+    const unsubscribe = store.subscribe((state, previous) => {
+      if (state.transform !== previous.transform) update();
+      else if (state.nodes !== previous.nodes) scheduleLabels();
+    });
+    const content = new MutationObserver(scheduleLabels);
+    content.observe(canvas, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-selected"] });
+    const size = new ResizeObserver(scheduleLabels);
+    size.observe(canvas);
     return () => {
       unsubscribe();
+      content.disconnect();
+      size.disconnect();
+      cancelAnimationFrame(pending);
       canvas.removeAttribute("data-graph-overview");
       canvas.style.removeProperty("--graph-inverse-zoom");
       updateNodes(Array.from(store.getState().nodeLookup.keys()));
@@ -328,7 +346,7 @@ export function GraphNodeCard({
       }}
     >
       <GraphNodeHandles />
-      <span aria-hidden="true" className="graph-overview-node" style={{ background: fill, borderColor: selected || matched ? "var(--color-accent-fg)" : stroke }}>
+      <span aria-hidden="true" className="graph-overview-node" data-selected={selected || undefined} style={{ background: fill, borderColor: selected || matched ? "var(--color-accent-fg)" : stroke }}>
         {(selected || matched) && <span className="graph-overview-label">{primary}</span>}
       </span>
       {/* グラフの節点の印の箱（名前と種類の 2 行のまとまりの中央。文字の 1 行目にそろえる規則の例外。#2371）。 */}

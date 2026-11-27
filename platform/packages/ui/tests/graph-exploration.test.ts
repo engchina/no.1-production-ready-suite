@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { directedGraphBundles, expandedGraphNeighborhood, graphNeighborGroups, reachableGraphBranches } from "../src/lib/graph-exploration";
+import { placeOverviewLabels } from "../src/lib/graph-overview-labels";
 
 describe("関係の探索", () => {
   it("逆方向の矢印と同方向の三つの内訳を保持する", () => {
@@ -29,5 +30,19 @@ describe("関係の探索", () => {
     const reachable = (input: typeof branches) => reachableGraphBranches(["A", "B"], input, (b) => b.owner, (b) => b.ids);
     expect(reachable(branches)).toHaveLength(4);
     expect(reachable(branches.slice(1)).map((b) => b.owner)).toEqual(["B", "C"]);
+  });
+
+  it("画布の端に点が集まっても各名称を画布内の別の空き区間に置く", () => {
+    const viewport = { left: 50, right: 425, top: 20, bottom: 400 };
+    const anchors = Array.from({ length: 5 }, (_, i) => ({ x: 60 + i * 3, y: 27 + i, width: 104, height: 18 }));
+    const labels = placeOverviewLabels(anchors, viewport);
+    for (const [index, box] of labels.entries()) {
+      expect(box.left).toBeGreaterThanOrEqual(viewport.left);
+      expect(box.top).toBeGreaterThanOrEqual(viewport.top);
+      expect(box.right).toBeLessThanOrEqual(viewport.right);
+      expect(box.bottom).toBeLessThanOrEqual(viewport.bottom);
+      expect(labels.slice(0, index).every(other => box.right <= other.left || other.right <= box.left ||
+        box.bottom <= other.top || other.bottom <= box.top)).toBe(true);
+    }
   });
 });

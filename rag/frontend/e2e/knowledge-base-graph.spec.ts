@@ -483,3 +483,20 @@ test("二つの展開元を持つ原文を保持し、向き別の関係と折�
   await expect(panel.getByRole("listitem")).toHaveCount(3);
   await shot(page, info, "direction");
 });
+
+test("総覧で近接する検索一致の名称が重ならない", { tag: "@responsive" }, async ({ page }, info) => {
+  await data(page);
+  await begin(page);
+  if (info.project.name === "mobile") await page.getByRole("button", { name: "関係図", exact: true }).click();
+  const graph = page.locator(".react-flow");
+  const labels = graph.locator(".graph-overview-label");
+  await expect(labels).toHaveCount(5);
+  const zoomOut = graph.getByRole("button", { name: "縮小", exact: true });
+  for (let i = 0; i < 10; i++) await zoomOut.click();
+  await expect(graph).toHaveAttribute("data-graph-overview", "");
+  await expect.poll(() => labels.evaluateAll(items => {
+    const boxes = items.map(item => item.getBoundingClientRect());
+    return boxes.every((a, i) => a.width > 0 && a.height > 0 && boxes.slice(0, i).every(b =>
+      a.right <= b.left + 1 || b.right <= a.left + 1 || a.bottom <= b.top + 1 || b.bottom <= a.top + 1));
+  })).toBe(true);
+});

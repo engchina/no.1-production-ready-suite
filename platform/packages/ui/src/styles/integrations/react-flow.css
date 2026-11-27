@@ -87,11 +87,22 @@
   border: 1.5px solid;
   border-radius: 50%;
 }
+.graph-overview-node::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--graph-leader, 0px);
+  border-top: 1px solid var(--color-graph-line);
+  transform: rotate(var(--graph-leader-angle, 0rad)) translateX(3px);
+  transform-origin: left center;
+  pointer-events: none;
+}
 .graph-overview-label {
   position: absolute;
-  bottom: calc(100% + 2px);
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate(calc(-50% + var(--graph-label-x, 0px)), var(--graph-label-y, calc(-100% - 6px)));
   max-width: 13rem;
   overflow: hidden;
   text-overflow: ellipsis;
