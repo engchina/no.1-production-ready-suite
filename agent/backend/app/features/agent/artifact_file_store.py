@@ -9,9 +9,10 @@
   メモリ、Oracle は `AGENT_RUNTIME_ARTIFACT_FILES` の BLOB）。一覧・Run の snapshot・イベント・
   ログ・API の JSON・MCP の結果に中身（バイト列・base64）を載せない。
 - **検査**: 形式は `FILE_ARTIFACT_EXTENSIONS` の 4 つだけ。大きさは設定
-  `AGENT_ARTIFACT_FILE_MAX_BYTES` まで。中身は形式ごとに確かめる（OOXML の 3 つは zip の署名、
-  Markdown は UTF-8 の文字。#5867）。ファイル名は安全な形に直し（`safe_file_name`）、拡張子は
-  MIME から決める。合わないファイルは保存せず `ArtifactFileError`（成功にしない）。
+  `AGENT_ARTIFACT_FILE_MAX_BYTES` まで。OOXML の 3 つは中身の zip の署名を確かめる（Markdown の
+  文字コードは、本文を UTF-8 にする `markdown_create` が確かめる。#5867）。ファイル名は安全な形に
+  直し（`safe_file_name`）、拡張子は MIME から決める。合わないファイルは保存せず
+  `ArtifactFileError`（成功にしない）。
 - **読み出し**: ダウンロードの API だけが読む（Run の詳細と同じ認可）。保存した sha256 と合わない
   中身は返さない。
 - **消え方**: Run の行を消すとき（`runtime_checkpoint_store.write_entities` の削除の印）に、同じ
@@ -110,14 +111,6 @@ def safe_file_name(name: str, mime_type: str) -> str:
     return f"{stem or DEFAULT_FILE_STEM}{extension}"
 
 
-def _is_utf8(data: bytes) -> bool:
-    try:
-        data.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    return True
-
-
 def checked_file(file_name: str, mime_type: str, data: bytes, *, max_bytes: int) -> ArtifactFile:
     """保存してよいファイルにする（形式・大きさ・名前。合わなければ `ArtifactFileError`）。"""
     mime = mime_type.strip().lower()
@@ -135,8 +128,6 @@ def checked_file(file_name: str, mime_type: str, data: bytes, *, max_bytes: int)
         )
     if mime in _OOXML_EXTENSIONS and not data.startswith(_ZIP_SIGNATURE):
         raise ArtifactFileError(FILE_INVALID, "ファイルの中身が形式と合いません。")
-    if mime == MARKDOWN_MIME_TYPE and not _is_utf8(data):
-        raise ArtifactFileError(FILE_INVALID, "ファイルの中身が UTF-8 の文字ではありません。")
     return ArtifactFile(
         file_name=safe_file_name(file_name, mime),
         mime_type=mime,

@@ -99,7 +99,7 @@ def mcp(monkeypatch: MonkeyPatch, tmp_path: Path) -> Iterator[FakeProductMcp]:
             name="資料の業務 Agent",
             description="契約の資料の質問に答えます。",
             skill_ids=[SKILL_ID],
-            # 拒答の設定（#5859。既定は「そのまま出して注意を付ける」）。
+            # 拒答の設定（#5859。既定は「注意を付けて表示する」）。
             ungrounded_answer_policy=tool_grounding.POLICY_REFUSE,
         )
     )

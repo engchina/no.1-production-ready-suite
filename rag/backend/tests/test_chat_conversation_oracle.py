@@ -116,18 +116,10 @@ async def test_list_messages_puts_question_before_answer_at_same_time() -> None:
     profile = await client.ensure_default_search_answer_profile()
     conversation = await client.create_conversation(search_answer_profile_id=profile.id)
     now = datetime.now(UTC)
-    # 回答の ID を問いより小さくし、ID の順では回答が先になるようにする。
+    # 回答の ID を問いより小さくし、ID の順では回答が先になるようにする。回答を先に追加し、
+    # 並べ替えが無ければ追加した順（回答が先）で返るようにする（#5923）。
     user_id, answer_id = "f" + uuid4().hex[1:], "0" + uuid4().hex[1:]
     try:
-        await client.append_message(
-            StoredMessage(
-                id=user_id,
-                conversation_id=conversation.id,
-                role="USER",
-                content="合成の質問",
-                created_at=now,
-            )
-        )
         await client.append_message(
             StoredMessage(
                 id=answer_id,
@@ -139,8 +131,19 @@ async def test_list_messages_puts_question_before_answer_at_same_time() -> None:
                 created_at=now,
             )
         )
+        await client.append_message(
+            StoredMessage(
+                id=user_id,
+                conversation_id=conversation.id,
+                role="USER",
+                content="合成の質問",
+                created_at=now,
+            )
+        )
         messages = await client.list_messages(conversation.id)
+        limited = await client.list_messages(conversation.id, limit=1)
     finally:
         await client.delete_conversation(conversation.id)
 
     assert [message.id for message in messages] == [user_id, answer_id]
+    assert [message.id for message in limited] == [user_id]

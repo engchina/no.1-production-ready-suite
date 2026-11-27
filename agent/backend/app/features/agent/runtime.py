@@ -6797,26 +6797,17 @@ RAG_CHAT_AGENT_ID = "rag-chat"
 RAG_SEARCH_AGENT_ID = "rag-search"
 RAG_SEARCH_DATA_AGENT_ID = "rag-search-data"
 DATA_QUERY_AGENT_ID = "data-query"
-DOC_CREATE_AGENT_ID = "doc-create"
-RAG_SEARCH_DATA_DOC_CREATE_AGENT_ID = "rag-search-data-doc-create"
-RAG_CHAT_DATA_DOC_CREATE_AGENT_ID = "rag-chat-data-doc-create"
-RAG_SEARCH_DOC_CREATE_AGENT_ID = "rag-search-doc-create"
-RAG_CHAT_DOC_CREATE_AGENT_ID = "rag-chat-doc-create"
-# 組み込みの業務 Agent（#1573・#5342・#5837・#5867）。削除できず、保存済みの snapshot に無ければ
+FILE_CREATE_AGENT_ID = "file-create"
+# 組み込みの業務 Agent（#1573・#5342・#5837）。削除できず、保存済みの snapshot に無ければ
 # 読み込みで足す。既定の Agent（default。RAG チャット＋データ）が先頭（一覧は作成日時の順）。
-# ファイルを作る Agent（#5837 の 3 つと #5867 の 2 つ）は後ろに足した（前の分だけを保存した
-# 環境にも、読み込みで足りない分が入る）。
+# 調べるスキルとファイルを作るスキルの組み合わせは組み込みにせず、利用者がスキルを選んで作る。
 BUILTIN_AGENT_IDS: tuple[str, ...] = (
     DEFAULT_AGENT_ID,
     RAG_CHAT_AGENT_ID,
     RAG_SEARCH_AGENT_ID,
     RAG_SEARCH_DATA_AGENT_ID,
     DATA_QUERY_AGENT_ID,
-    DOC_CREATE_AGENT_ID,
-    RAG_SEARCH_DATA_DOC_CREATE_AGENT_ID,
-    RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
-    RAG_SEARCH_DOC_CREATE_AGENT_ID,
-    RAG_CHAT_DOC_CREATE_AGENT_ID,
+    FILE_CREATE_AGENT_ID,
 )
 # ファイルを作るスキル（#5837・#5867。Excel・Word・PowerPoint・Markdown。Control Plane のツール
 # だけを使う）。どの形式で作るかはモデルが選ぶ（コードで振り分けない）。
@@ -6826,20 +6817,6 @@ _FILE_CREATE_SKILL_IDS: tuple[str, ...] = (
     PPTX_CREATE_SKILL_ID,
     MARKDOWN_CREATE_SKILL_ID,
 )
-# ファイルを作る組み込みの業務 Agent（`_FILE_CREATE_SKILL_IDS` をすべて持つ）。
-_FILE_CREATE_AGENT_IDS: frozenset[str] = frozenset(
-    {
-        DOC_CREATE_AGENT_ID,
-        RAG_SEARCH_DATA_DOC_CREATE_AGENT_ID,
-        RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
-        RAG_SEARCH_DOC_CREATE_AGENT_ID,
-        RAG_CHAT_DOC_CREATE_AGENT_ID,
-    }
-)
-# 保存済みのファイルを作る組み込みの業務 Agent に、読み込みで足すスキル（#5867。後から
-# `_FILE_CREATE_SKILL_IDS` に加えたもの）。下書き・どの版にも入ったことの無い業務 Agent にだけ足す
-# （`_add_builtin_skills`。利用者が外したスキルは戻さない）。
-_ADDED_FILE_CREATE_SKILL_IDS: tuple[str, ...] = (MARKDOWN_CREATE_SKILL_ID,)
 # データつきの組み込みの業務 Agent の指示（資料と業務データの使い分け）。
 _SOURCE_CHOICE_STEP = (
     "## Step 1: 必要な情報源を選ぶ\n"
@@ -6847,21 +6824,6 @@ _SOURCE_CHOICE_STEP = (
 )
 
 
-def _file_after_sources_step(sources: str) -> str:
-    """調べてからファイルも作る組み込みの業務 Agent の指示の続き（#5837・#5867）。
-
-    調べるスキルとファイルを作るスキルをつなぐ順だけを書く（ファイルの作り方はスキル、いつ作るかは
-    ツールの説明が持つ）。`sources` は調べる情報源（資料と業務データ・資料）。
-    """
-    return (
-        "\n\n## Step 2: 確かめた内容をファイルにする\n"
-        f"ファイルでの出力を求められたときは、{sources}で内容を確かめてから、"
-        "求められた形式のファイルにする。"
-    )
-
-
-_FILE_AFTER_SOURCES_STEP = _file_after_sources_step("資料と業務データ")
-_FILE_AFTER_DOCUMENTS_STEP = _file_after_sources_step("資料")
 _RAG_CHAT_STEP = "## Step 1: 資料をチャットで調べる\n資料の質問に、RAG のチャットの流れで答える。"
 _RAG_SEARCH_STEP = "## Step 1: 資料を検索する\n資料の質問に、RAG の基本の検索で答える。"
 # 廃止した組み込みの業務 Agent（#5342。資料調査アシスタント）。読み込みで外し、利用者が中身を
@@ -6897,11 +6859,8 @@ def _builtin_agents() -> list[AgentProfile]:
 
     RAG だけの Agent は RAG の回答をそのまま返し（スキルの宣言）、データつきの Agent はモデルが
     RAG の回答と業務データの値を合わせる。回答の書き方は RAG の検索・回答プロファイルが決める。
-    ファイルを作る Agent（#5837・#5867）は、ファイルを作るスキルだけのもの（内容は会話と添付から。
-    MCP 接続を使わない）と、RAG だけ・データつきのスキルに足したもの（調べてからファイルにする。
-    ファイルを作るスキルはツールを使うので、RAG の回答はそのまま返さずにモデルが書く。
-    `builtin_runtime.final_answer_tool_names`）。データの範囲はどれも空（利用者が使えるすべての
-    プロファイルから選ぶ）。
+    ファイル作成アシスタント（#5837・#5867）はファイルを作るスキルだけを持つ（内容は会話と添付から。
+    MCP 接続を使わない）。データの範囲はどれも空（利用者が使えるすべてのプロファイルから選ぶ）。
     """
     return [
         AgentProfile(
@@ -6960,10 +6919,10 @@ def _builtin_agents() -> list[AgentProfile]:
             source="builtin",
         ),
         AgentProfile(
-            id=DOC_CREATE_AGENT_ID,
-            name="文書作成アシスタント",
+            id=FILE_CREATE_AGENT_ID,
+            name="ファイル作成アシスタント",
             description=(
-                "会話と添付の内容から、Excel・Word・PowerPoint・Markdown のファイルを作る"
+                "会話と添付の内容から、Word・Excel・PowerPoint・Markdown のファイルを作る"
                 "業務 Agent。社内の資料の検索と業務データの照会はしない。"
             ),
             instructions=(
@@ -6973,52 +6932,6 @@ def _builtin_agents() -> list[AgentProfile]:
                 "- ファイルにする内容が足りないときは、利用者に確かめる。"
             ),
             skill_ids=list(_FILE_CREATE_SKILL_IDS),
-            source="builtin",
-        ),
-        AgentProfile(
-            id=RAG_SEARCH_DATA_DOC_CREATE_AGENT_ID,
-            name="RAG 検索＋データ＋文書作成アシスタント",
-            description=(
-                "社内の資料（基本の検索）と業務データ（NL2SQL）を、問いに合わせて使い分けて調べ、"
-                "確かめた内容を、求められたら Excel・Word・PowerPoint・Markdown のファイルにする"
-                "業務 Agent。"
-            ),
-            instructions=_SOURCE_CHOICE_STEP + _FILE_AFTER_SOURCES_STEP,
-            skill_ids=[RAG_SEARCH_AND_DATA_SKILL_ID, *_FILE_CREATE_SKILL_IDS],
-            source="builtin",
-        ),
-        AgentProfile(
-            id=RAG_CHAT_DATA_DOC_CREATE_AGENT_ID,
-            name="RAG チャット＋データ＋文書作成アシスタント",
-            description=(
-                "社内の資料（RAG のチャットと同じ流れ）と業務データ（NL2SQL）を、問いに合わせて"
-                "使い分けて調べ、確かめた内容を、求められたら Excel・Word・PowerPoint・Markdown の"
-                "ファイルにする業務 Agent。"
-            ),
-            instructions=_SOURCE_CHOICE_STEP + _FILE_AFTER_SOURCES_STEP,
-            skill_ids=[RAG_CHAT_AND_DATA_SKILL_ID, *_FILE_CREATE_SKILL_IDS],
-            source="builtin",
-        ),
-        AgentProfile(
-            id=RAG_SEARCH_DOC_CREATE_AGENT_ID,
-            name="RAG 検索＋文書作成アシスタント",
-            description=(
-                "社内の資料を基本の検索で調べ、確かめた内容を、求められたら Excel・Word・"
-                "PowerPoint・Markdown のファイルにする業務 Agent。業務データの照会はしない。"
-            ),
-            instructions=_RAG_SEARCH_STEP + _FILE_AFTER_DOCUMENTS_STEP,
-            skill_ids=[RAG_SEARCH_SKILL_ID, *_FILE_CREATE_SKILL_IDS],
-            source="builtin",
-        ),
-        AgentProfile(
-            id=RAG_CHAT_DOC_CREATE_AGENT_ID,
-            name="RAG チャット＋文書作成アシスタント",
-            description=(
-                "社内の資料を RAG のチャットと同じ流れで調べ、確かめた内容を、求められたら Excel・"
-                "Word・PowerPoint・Markdown のファイルにする業務 Agent。業務データの照会はしない。"
-            ),
-            instructions=_RAG_CHAT_STEP + _FILE_AFTER_DOCUMENTS_STEP,
-            skill_ids=[RAG_CHAT_SKILL_ID, *_FILE_CREATE_SKILL_IDS],
             source="builtin",
         ),
     ]
@@ -7042,7 +6955,6 @@ def _migrate_loaded_agents(
         versioned = _ensure_versioned(item)
         result = _migrate_builtin_agent(versioned)
         if result is not None:
-            result = _add_builtin_skills(result)
             agents[result.id] = result
         if result is None or result != versioned:
             migrated.append(item.id)
@@ -7087,53 +6999,6 @@ def _migrate_builtin_agent(agent: AgentProfile) -> AgentProfile | None:
         update={
             **content,
             "versioned": True,
-            "versions": versions,
-            "published_version": published_version,
-        },
-    )
-
-
-def _add_builtin_skills(agent: AgentProfile) -> AgentProfile:
-    """保存済みのファイルを作る組み込みの業務 Agent に、後から足したスキルを足す（冪等。#5867）。
-
-    `_ADDED_FILE_CREATE_SKILL_IDS` のうち、下書き・残っているどの版にも入ったことの無いスキルだけを
-    足す（利用者が外したスキルは、外す前の版が残っている間は戻さない）。下書きのスキルの末尾に足し、
-    公開中の版があれば、その版の内容にスキルを足した次の版を公開する（前の版は残す。版にスキルを
-    固定していれば、足すスキルも今の中身で固定する）。指示・ほかのスキル・モデル・データの範囲など、
-    スキルの一覧のほかは変えない。
-    """
-    if agent.source != "builtin" or agent.id not in _FILE_CREATE_AGENT_IDS:
-        return agent
-    seen = {*agent.skill_ids, *(skill_id for item in agent.versions for skill_id in item.skill_ids)}
-    added = [skill_id for skill_id in _ADDED_FILE_CREATE_SKILL_IDS if skill_id not in seen]
-    if not added:
-        return agent
-    versions = [item.model_copy(deep=True) for item in agent.versions]
-    published = agent.published()
-    published_version = agent.published_version
-    if published is not None:
-        published_version = max(item.version for item in versions) + 1
-        versions.append(
-            published.model_copy(
-                deep=True,
-                update={
-                    "version": published_version,
-                    "note": f"組み込みの業務 Agent の見直し（スキルの追加: {'、'.join(added)}）",
-                    "skill_ids": [*published.skill_ids, *added],
-                    "skills": (
-                        None
-                        if published.skills is None
-                        else [*deepcopy(published.skills), *pin_skills(added)]
-                    ),
-                    "published_at": _now(),
-                    "published_by": None,
-                },
-            )
-        )
-    return agent.model_copy(
-        deep=True,
-        update={
-            "skill_ids": [*agent.skill_ids, *added],
             "versions": versions,
             "published_version": published_version,
         },

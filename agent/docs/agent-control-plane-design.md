@@ -211,35 +211,21 @@ Agent では、モデルが回答を書く（#5867）。
 | `rag-search` | RAG 検索アシスタント | `rag-search` |
 | `rag-search-data` | RAG 検索＋データアシスタント | `rag-search-and-data` |
 | `data-query` | データ照会アシスタント | `structured-data-query` |
-| `doc-create` | 文書作成アシスタント | `xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
-| `rag-search-data-doc-create` | RAG 検索＋データ＋文書作成アシスタント | `rag-search-and-data`・`xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
-| `rag-chat-data-doc-create` | RAG チャット＋データ＋文書作成アシスタント | `rag-chat-and-data`・`xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
-| `rag-search-doc-create` | RAG 検索＋文書作成アシスタント | `rag-search`・`xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
-| `rag-chat-doc-create` | RAG チャット＋文書作成アシスタント | `rag-chat`・`xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
+| `file-create` | ファイル作成アシスタント | `xlsx-create`・`docx-create`・`pptx-create`・`markdown-create` |
 
-ファイルを作る 5 つ（#5837・#5867）は、既にあるスキルの組み合わせ（新しい RAG・NL2SQL のスキルは持たない）。ファイルを作る
-4 つのスキル（Excel・Word・PowerPoint・Markdown）をすべて持ち、どの形式で作るかはモデルが選ぶ（コードで振り分けない）。
+ファイル作成アシスタント（#5837・#5867）は、ファイルを作る 4 つのスキル（Excel・Word・PowerPoint・Markdown）を
+すべて持ち、どの形式で作るかはモデルが選ぶ（コードで振り分けない）。MCP 接続（RAG・NL2SQL）を使わず、ファイルの
+内容を会話と添付だけから取る。調べるスキル（RAG・データ）とファイルを作るスキルの組み合わせは組み込みにせず、
+利用者がスキルを選んで業務 Agent を作る（RAG だけのスキルと組み合わせると、RAG の回答で Run を終えずにモデルが
+回答を書き、調べた内容をファイルにできる。`builtin_runtime.final_answer_tool_names`。#5867）。
 
-- 文書作成アシスタントは MCP 接続（RAG・NL2SQL）を使わず、ファイルの内容を会話と添付だけから取る。
-- 「＋文書作成」の 2 つは、対応する業務 Agent（`rag-search-data`・`default`）と同じ資料・業務データのツールで内容を
-  確かめてから、求められた形式のファイルにする。指示は、対応する業務 Agent の Step 1 に、この順を書いた Step 2 を
-  足したもの（ファイルの作り方はスキル、いつ作るかはツールの説明が持つ）。
-- RAG だけ＋文書作成の 2 つ（#5867）は、「＋データ＋文書作成」から NL2SQL を除いた構成で、対応する業務 Agent
-  （`rag-search`・`rag-chat`）と同じ資料のツールに、ファイルを作るツールが加わる。`rag-search`・`rag-chat` のスキルは
-  回答のツールを宣言しているが、ファイルを作るスキル（宣言の無いスキル）も選んでいるので、RAG の回答で Run を終えずに
-  モデルが回答を書く（`builtin_runtime.final_answer_tool_names`。データつきの 2 つと同じく、調べた内容をファイルに
-  できる）。指示は、対応する業務 Agent の Step 1 に Step 2 を足したもの。
-- 10 個とも、モデルは既定（`model_id` は空）、データの範囲（`data_scopes`）は空（利用者が使えるすべての
+- 6 個とも、モデルは既定（`model_id` は空）、データの範囲（`data_scopes`）は空（利用者が使えるすべての
   プロファイルから選ぶ）。Agent 管理が変えた内容は残る。
 
-10 個は builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開
+6 個は builtin（`runtime.BUILTIN_AGENT_IDS`）で、削除できず、保存済みの snapshot に無ければ読み込みで足す（v1 を公開
 した状態。前の分だけを保存した環境にも、足りない分が入る。Oracle の保存先では、読み込みで足した業務 Agent の行は
-内容を変えたときに書く）。保存済みのファイルを作る組み込みの業務 Agent には、後から足したスキル（`markdown-create`。
-`runtime._ADDED_FILE_CREATE_SKILL_IDS`）を読み込みで足す（#5867。`runtime._add_builtin_skills`）: 下書き・残っている
-どの版にも入ったことの無い業務 Agent だけに、下書きのスキルの末尾と、公開中の版の内容にスキルを足した次の版（公開。
-版がスキルを固定していれば足すスキルも固定する）に足す。指示・説明・ほかのスキル・モデル・データの範囲は変えない。
-利用者が外したスキルは、外す前の版が残っている間は戻さない（版の上限 `AGENT_MAX_PUBLISHED_VERSIONS` で外す前の版が
-すべて消えた後の読み込みでは、もう一度足す）。保存済みの `default` が前の組み込みの内容（名前が「汎用業務 Agent」のまま、か #5342 より前の「資料・データ横断
+内容を変えたときに書く）。組み込みの業務 Agent に後からスキルを足しても、保存済みの業務 Agent のスキルの一覧は
+読み込みで書き換えない（未リリースのため、その移行は持たない）。保存済みの `default` が前の組み込みの内容（名前が「汎用業務 Agent」のまま、か #5342 より前の「資料・データ横断
 アシスタント」の内容）のままなら、新しい内容を次の版として公開する（前の版は残す。冪等。利用者が変えた内容は残す）。
 廃止した `rag-research`（資料調査アシスタント。#5342）は、下書きとすべての版が前の組み込みの内容のままなら読み込みで
 外して削除の印を付け、変えていたら組織の業務 Agent（由来 `runtime`）として残す（`runtime._migrate_builtin_agent`）。
@@ -485,11 +471,11 @@ NL2SQL の SQL に書き込みの文があれば `nl2sql.non_readonly_sql_return
     ではない）ときは今どおり。
 - **資料・データで確かめていない回答（#5859）**: 根拠・データのツールを渡した Run で、モデルがどれも呼ばずに答えたときの扱いは、
   業務 Agent ごとの設定 `ungrounded_answer_policy`（版の項目。画面は「回答前の確認」の次の区画「資料・データで確かめていない
-  回答」）で決める（利用者の決定、2026-11-26。それまでは常に拒答していた）。`annotate`（既定）= そのまま出して注意を付ける
+  回答」）で決める（利用者の決定、2026-11-26。それまでは常に拒答していた）。`annotate`（既定）= 注意を付けて表示する
   （回答の注意書きの先頭に「この回答は、資料・業務データで確かめていません。」。差し戻さない・本文を置き換えない。回答の対応の
-  basis は `ungrounded_answer`）、`refuse` = 出さずに「お答えできません」と返す（1 回差し戻し、それでも呼ばなければ拒答の文。
-  #1835）。判定はツールを呼んだかだけで、回答の中身は見ない。例外（確認の質問だけの回答・ファイルを作った Run・前の Run が
-  ツールで答えた続きなど）は 2 つの設定で同じ。正本は [agents/runtime.md](./agents/runtime.md) と `tool_grounding.py`。
+  basis は `ungrounded_answer`）、`refuse` = 表示せず「お答えできません」と返す（1 回差し戻し、それでも呼ばなければ拒答の文。
+  #1835）。判定はツールを呼んだかだけで、回答の中身は見ない。例外（確認の質問だけの回答・前の Run が
+  ツールで答えた続きなど）は 2 つの設定で同じ。本文の確認の質問の差し戻し（#1881・#1903）は回答前の確認の方針で決まり、この設定とは別。正本は [agents/runtime.md](./agents/runtime.md) と `tool_grounding.py`。
 - **設定**: `AGENT_EXTERNAL_RAG_MCP_URL` / `AGENT_EXTERNAL_NL2SQL_MCP_URL`（例 `http://rag-host/api/mcp`）、
   `AGENT_EXTERNAL_RAG_TIMEOUT_SECONDS`（既定 1500 秒。RAG の回答のツール〔`rag_chat`・`rag_search`〕は処理の全体を RAG の回答の上限
   （`RAG_ANSWER_TIMEOUT_SECONDS`、既定 1200 秒・画面で選べる最大も 1200 秒。#5280・#5862）の 1 つの期限で終える〔#5339〕ので、その外側の
@@ -749,8 +735,8 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   対象は期間（Run を作った日時）と業務 Agent で絞った、終わった Run（品質評価の Run を除く）。集計は対象の Run の数・
   シグナルのある Run の数・種類ごとの数を前の同じ長さの期間と比べ、一覧は種類で絞って `CREATED_AT DESC, RUN_ID DESC` で
   ページングする。列は migration 012 / 014（`DATA_TOOL_CALLS`。#1834）/ 019（`ANSWER_BASIS`。#5859）で足す（データは消さない）。既存の Run の事実の新しい列は起動時の backfill が
-  Runtime repository の Run から書く（Run の snapshot を整理した古い事実は空のままで、シグナルにならない）。migration 012 の
-  前のテーブルには、シグナルの列を除いた MERGE（`LEGACY_MERGE_SQL`。014 の前は `MERGE_SQL_012`、019 の前は `MERGE_SQL_014`）で利用状況・フィードバックの事実を書き続ける（列が無い間、確かめるべき実行の集計はメモリの Run に戻る）。
+  Runtime repository の Run から書く（Run の snapshot を整理した古い事実は空のままで、シグナルにならない）。列の足りない
+  古いテーブル向けの書き方は持たない（未リリース。システムテーブルを更新するまで事実の保存は失敗し、ログ `agent_run_facts_not_saved` に残る）。
 - 品質評価（#776）の job は、終わった job も自動では消さずに残し（#3235。以前は 365 日・2,000 件、その前は 50 件で消していた）、
   `GET /api/evaluations` を `offset` / `limit` でページングする。前回との比較は残っている全 job から探す。
 - 品質評価の 1 ケースの上限時間（Run の実行。判定は別。#1432）は `AGENT_EVALUATION_CASE_TIMEOUT_SECONDS`（秒。86400 秒まで）。既定の 0 は自動で、接続 `rag` の待ち時間（画面で保存した値。既定 1500 秒）×（Run の RAG の予算 `AGENT_MAX_RAG_CALLS_PER_RUN`+ 1）にする（既定 1500 ×（10 + 1）= 16500 秒。300 秒〜86400 秒に収める）。RAG を使う業務 Agent の Run は RAG を予算の回数まで呼び、1 回は RAG の回答生成を通しで待つため（推論の量 medium の実測で 1 Run 160〜600 秒以上）、#1425 より前の固定の 300 秒では時間切れになった。RAG の予算が無制限（0 以下）なら `AGENT_MAX_TOOL_CALLS_PER_RUN`（既定 100）を回数に使う。上限までに決着しない Run は取り消し、ケースは時間切れ（`timed_out`。メッセージに実際の上限の秒数）にする。評価の job 全体の上限は持たない（ケースごとの上限で止まる）。

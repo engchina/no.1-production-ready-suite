@@ -472,7 +472,7 @@ for (const width of [1280, 1920]) {
 
     // 評価は状態なのでサムズアップ / ダウンのアイコンを持つ（色だけで表さない）。
     const notHelpful = table.locator("[data-status-variant='danger']:visible").first();
-    await expect(notHelpful).toHaveText("未解決");
+    await expect(notHelpful).toHaveText("解決しなかった");
     await expect(notHelpful.locator("svg")).toHaveCount(1);
     await expectNoPageOverflow(page);
   });

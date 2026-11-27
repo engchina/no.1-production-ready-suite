@@ -309,6 +309,7 @@ from app.features.agent.skill_updates import (
 )
 from app.features.agent.skills import (
     AgentSkillDefinition,
+    AgentSkillListItem,
     AgentSkillListOutput,
     SkillMcpRequirement,
     reload_declared_skills,
@@ -1444,12 +1445,26 @@ async def list_tool_definitions() -> ApiResponse[ToolDefinitionsData]:
     return ApiResponse(data=ToolDefinitionsData(tools=tool_registry.definitions()))
 
 
+def _skill_list_output(skills: list[AgentSkillDefinition], **metadata: Any) -> AgentSkillListOutput:
+    """スキルの一覧の応答（各スキルに、業務 Agent の編集が使う判定を足す。#5859・#5867）。"""
+    items = [
+        AgentSkillListItem.model_validate(
+            {
+                **skill.model_dump(),
+                "grounding": builtin_runtime.declares_grounding_tools(skill),
+                "model_writes_answer": builtin_runtime.model_writes_answer(skill),
+            }
+        )
+        for skill in skills
+    ]
+    return AgentSkillListOutput(skills=items, metadata={"count": len(items), **metadata})
+
+
 @router.get("/skills", response_model=ApiResponse[AgentSkillListOutput])
 async def list_agent_skills(
     _: None = Depends(require_viewer),
 ) -> ApiResponse[AgentSkillListOutput]:
-    skills = skill_registry.list()
-    return ApiResponse(data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)}))
+    return ApiResponse(data=_skill_list_output(skill_registry.list()))
 
 
 @router.post("/skills/reload", response_model=ApiResponse[AgentSkillListOutput])
@@ -1458,12 +1473,7 @@ async def reload_agent_skills(
 ) -> ApiResponse[AgentSkillListOutput]:
     """中立ディレクトリ / JSON 宣言を再読込し、project / env 層を更新する。"""
     counts = reload_declared_skills()
-    skills = skill_registry.list()
-    return ApiResponse(
-        data=AgentSkillListOutput(
-            skills=skills, metadata={"count": len(skills), "reloaded": counts}
-        )
-    )
+    return ApiResponse(data=_skill_list_output(skill_registry.list(), reloaded=counts))
 
 
 @router.get("/skills/{skill_id}", response_model=ApiResponse[AgentSkillDefinition])
@@ -1610,8 +1620,7 @@ async def delete_agent_skill(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     _persist(lambda: control_plane_store.delete_skill(skill_id))
-    skills = skill_registry.list()
-    return ApiResponse(data=AgentSkillListOutput(skills=skills, metadata={"count": len(skills)}))
+    return ApiResponse(data=_skill_list_output(skill_registry.list()))
 
 
 def _agents_using_skill(skill_id: str) -> list[str]:
@@ -1671,6 +1680,9 @@ class BuiltinRuntimeStatus(BaseModel):
     error_code: str | None = None
     message: str | None = None
     models: list[BuiltinRuntimeModel] = Field(default_factory=list)
+    # 確かめていない回答に付ける注意（`tool_grounding.UNGROUNDED_NOTICE`。#5859）。業務 Agent の
+    # 編集の案内が、この文を差し込む（文は backend だけが持つ）。
+    ungrounded_notice: str = ""
 
 
 @router.get("/runtime/status", response_model=ApiResponse[BuiltinRuntimeStatus])

@@ -9,6 +9,7 @@ import {
   DATABASE_READ_TIMEOUT_CODE,
   DATABASE_UNAVAILABLE_CODE,
   DataLoadFailureState,
+  ErrorState,
   StaleDataNotice,
   dataLoadFailureKind,
   dataLoadRetryDelay,
@@ -123,6 +124,30 @@ describe("dataLoadView", () => {
       phase: "ready",
       blockCreate: false,
     });
+  });
+});
+
+describe("ErrorState の形と再試行（#5929）", () => {
+  it.each(["region", "page"] as const)("%s でも focusRetry で再試行へフォーカスを移し、導線 → 再試行 → 「詳細」の順に並べる", (layout) => {
+    const onRetry = vi.fn();
+    const host = mount(
+      <ErrorState
+        message="読み込めませんでした。"
+        onRetry={onRetry}
+        focusRetry
+        layout={layout}
+        action={databaseAction}
+        details={<details><summary>詳細</summary></details>}
+      />,
+    );
+    const alert = host.querySelector("[role='alert']");
+    expect(alert?.getAttribute("data-failure-layout")).toBe(layout);
+    const retry = retryButton(host);
+    expect(document.activeElement).toBe(retry);
+    const focusable = [...(alert?.querySelectorAll("a, button, summary") ?? [])].map((item) => item.tagName);
+    expect(focusable).toEqual(["A", "BUTTON", "SUMMARY"]);
+    act(() => retry.click());
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 });
 
