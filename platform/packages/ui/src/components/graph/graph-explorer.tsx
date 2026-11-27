@@ -353,7 +353,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
   const focusTarget = useRef<HTMLDivElement>(null);
   const controls = useRef<HTMLDivElement>(null);
   const hovered = useRef<string | null>(null);
-  /** 全体を収めたときの表示。利用者が動かすまでは、画布の大きさが変わったら収め直す。 */
+  /** 全体を収めたときの表示。利用者が動かすまでは、画布の大きさが変わったとき・ノードを足したときに収め直す。 */
   const allFitted = useRef<GraphViewport | null>(null);
   const cyRef = useRef<Core | null>(null);
   const laidOut = useRef<string | null>(null);
@@ -413,6 +413,12 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     const cy = cyRef.current;
     allFitted.current = cy ? { ...cy.pan(), zoom: cy.zoom() } : null;
   }, [fitTo]);
+  /** 全体を収めたまま（利用者が動かしていない）か。 */
+  const stillFitted = useCallback(() => {
+    const cy = cyRef.current;
+    const last = allFitted.current;
+    return Boolean(cy && last && last.zoom === cy.zoom() && last.x === cy.pan().x && last.y === cy.pan().y);
+  }, []);
 
   /**
    * 強調と文字の出し方を付け直す。文字つきの辺が多い図は、選んだ・ホバーした節点につながる辺だけ文字を出し、
@@ -551,10 +557,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     });
     // 全体を収めたまま（利用者が動かしていない）なら、画布の大きさが変わったときに収め直す（隠れていた画布が
     // 見えたとき・全画面・詳細の開閉）。
-    cy.on("resize", () => {
-      const last = allFitted.current;
-      if (last && last.zoom === cy.zoom() && last.x === cy.pan().x && last.y === cy.pan().y) fitAll();
-    });
+    cy.on("resize", () => { if (stillFitted()) fitAll(); });
     // 要素の増減は、反映の effect の終わりで出す（追加の batch の中で範囲を測ると、名前の大きさが決まる前の
     // 範囲が cache に残り、最初の配置が名前を含まない大きさで計算される）。
     cy.on("viewport layoutstop", report);
@@ -563,7 +566,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
       cy.destroy();
       cyRef.current = null;
     };
-  }, [describe, emphasize, fitAll, report]);
+  }, [describe, emphasize, fitAll, report, stillFitted]);
 
   // テーマ（ライト・ダーク・OS 追従）が変わったら色を解き直す。
   useEffect(() => {
@@ -628,6 +631,11 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     if (!added.length) return;
     const fixed = [...existing].map(([nodeId, position]) => ({ nodeId, position }));
     cy.layout(layoutOptions(cy, fixed)).run();
+    // 全体を収めたまま（利用者が動かしていない）なら、足した後も全体を収める（足したノードを画面の外に出さない）。
+    if (stillFitted()) {
+      fitAll();
+      return;
+    }
     // 足したノードが画面の外なら、足したノードとつながる既存のノードに合わせる（縮尺は読める大きさ以上）。
     // 名前を含む範囲が画布の端（上は右上の操作の分）に掛かるものも外とみなす。
     const outside = added.some((id) => {
@@ -642,7 +650,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
       // 展開では拡大しない（今の縮尺を上限にして、足したノードが入るように動かす。読める縮尺より縮めない）。
       fitTo([...added, ...anchors], cy.zoom(), Math.min(cy.zoom(), GRAPH_READABLE_MIN_ZOOM));
     }
-  }, [nodes, edges, edgeKinds, layoutKey, nodeById, fitAll, fitTo, remember]);
+  }, [nodes, edges, edgeKinds, layoutKey, nodeById, fitAll, fitTo, remember, stillFitted]);
 
   // 関係の種類の絞り込み。
   useEffect(() => {

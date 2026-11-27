@@ -143,6 +143,8 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     added.current = find;
     const nodes = found.data.items.map((hit) => unitNode(hit));
     setCursor(0);
+    // 足した当たりが画面の外に出ないように、全体を収めた表示にしてから足す（画布は、全体を収めたままなら足した後も収め直す）。
+    camera.current?.fit();
     void run(async () => {
       await place(nodes, WIKI_GRAPH_SETTINGS.knowledgeBaseSearch, nodes.map((node) => node.id));
       if (!nodes[0]) return;

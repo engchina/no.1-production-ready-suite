@@ -314,6 +314,9 @@ test("ナレッジベース詳細は参照の多い文書の見本で開き、�
   await expect(area.getByTestId("wiki-graph-selected-count")).toContainText("件を選択");
   // 図内検索はナレッジベース全体をサーバーで検索し、当たった原文を今の図に足して強調する。
   const nodesBefore = await graphCount(canvas, "nodes");
+  // 図を拡大して全体が収まっていない状態から検索する。
+  for (let i = 0; i < 3; i++) await area.getByRole("button", { name: "拡大", exact: true }).click();
+  await expect.poll(() => graphContained(canvas)).toBe("false");
   await page.locator("#wiki-graph-find").fill("合成");
   await expect.poll(() => control.calls.some((u) => u.pathname.endsWith("/search") && u.searchParams.get("method") === "keyword")).toBe(true);
   await expect.poll(() => graphCount(canvas, "nodes")).toBeGreaterThanOrEqual(nodesBefore + 25);
@@ -324,6 +327,8 @@ test("ナレッジベース詳細は参照の多い文書の見本で開き、�
   expect(connectionCalls[0].searchParams.get("ids")!.split(",")).toEqual(expect.arrayContaining([hash(1), hash(2), hash(25)]));
   // 当たった原文までの段（文書 → 章節）を位置合わせで開く。
   await expect.poll(() => control.calls.some((u) => u.pathname.endsWith("/locate"))).toBe(true);
+  // 足した当たり（と開いた段）は画面の外に出ない（図の全体を収め直す。その前に図を動かしていても）。
+  await expect.poll(() => graphContained(canvas)).toBe("true");
   const panel = detail(page, phone);
   if (phone) await page.getByRole("button", { name: "詳細を開く" }).click();
   await expect(panel.getByText("照合済みの合成原文 1。")).toBeVisible();
