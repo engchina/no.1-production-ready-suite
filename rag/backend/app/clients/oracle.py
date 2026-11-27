@@ -412,6 +412,10 @@ class StoredMessage:
     # 資料で答えた本文に引用を対応付けられなかった回答か（ASSISTANT の回答だけ。回答の記録の診断の
     # ``citation_missing``。#5391）。
     answer_citation_missing: bool = False
+    # 資料を選び直して回答し直した最新の版の回答（ASSISTANT の回答だけ。回答の記録の
+    # ``review_state``。#5914）。会話の履歴には ``content``（元の回答）の代わりにこれを使う。
+    # 回答し直していない回答は None。
+    reviewed_answer: str | None = None
 
 
 _SHARED_ORACLE_POOL: OraclePoolProtocol | None = None
@@ -5311,7 +5315,11 @@ class OracleClient:
                 JSON_VALUE(r.diagnostics_json, '$.models.attached_images' RETURNING NUMBER)
                     AS answer_attached_images,
                 JSON_VALUE(r.diagnostics_json, '$.answer_source') AS answer_source,
-                JSON_VALUE(r.diagnostics_json, '$.citation_missing') AS answer_citation_missing
+                JSON_VALUE(r.diagnostics_json, '$.citation_missing') AS answer_citation_missing,
+                -- 資料を選び直した再回答があれば、最新の版の回答（会話の履歴に使う。#5914）。
+                CASE WHEN JSON_EXISTS(r.review_state, '$.versions[1]') THEN
+                    JSON_VALUE(r.review_state, '$.versions[last].answer' RETURNING CLOB)
+                END AS reviewed_answer
             FROM rag_messages m
             JOIN rag_conversations c
               ON c.conversation_id = m.conversation_id
@@ -7112,6 +7120,32 @@ class OracleClient:
         # 持ち主の分からない古い会話は空（誰も評価を足せない。会話に無い trace の None と分ける）。
         owner = row.get("user_id_hash")
         return owner if isinstance(owner, str) and owner else ""
+
+    async def get_chat_answer_message_id(self, conversation_id: str, trace_id: str) -> str | None:
+        """会話の中で trace の回答を持つメッセージの ID。見える会話に無ければ None。
+
+        資料を選び直した再回答の実行を、元の回答のメッセージに結び付けるために使う（#5913）。
+        """
+        row = await self._fetch_one(
+            _render_sql(
+                """
+                SELECT m.message_id
+                FROM rag_messages m
+                JOIN rag_conversations c
+                  ON c.conversation_id = m.conversation_id
+                WHERE m.conversation_id = :conversation_id
+                  AND m.trace_id = :trace_id
+                  AND m.role = 'ASSISTANT'
+                  AND {access_sql}
+                FETCH FIRST 1 ROWS ONLY
+                """,
+                access_sql=_oracle_conversation_access_predicate_sql(alias="c"),
+            ),
+            _with_conversation_access_bind(
+                {"conversation_id": conversation_id, "trace_id": trace_id}
+            ),
+        )
+        return _optional_str(row.get("message_id")) if row is not None else None
 
     async def list_feedback_dashboard_rows(
         self,
@@ -16596,6 +16630,7 @@ def _stored_message_from_row(row: Mapping[str, object]) -> StoredMessage:
         approved_faq_answer=row.get("answer_source") == "approved_faq",
         # JSON の真偽値は JSON_VALUE で文字列の 'true' になる。
         answer_citation_missing=str(row.get("answer_citation_missing") or "").lower() == "true",
+        reviewed_answer=_optional_str(row.get("reviewed_answer")) or None,
     )
 
 

@@ -702,7 +702,10 @@ async def _build_safe_history(
             key = message.reply_to_message_id or message.id
             if key in seen_replies:
                 continue
-            result = await asyncio.to_thread(guardrails.validate_answer, message.content)
+            # 資料を選び直して回答し直した回答は、利用者が見ている最新の版を履歴に使う（#5914）。
+            result = await asyncio.to_thread(
+                guardrails.validate_answer, message.reviewed_answer or message.content
+            )
             if not result.allowed:
                 continue
             seen_replies.add(key)
