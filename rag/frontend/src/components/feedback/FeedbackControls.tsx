@@ -1,5 +1,6 @@
 import { AnswerFileReview, AnswerFooter, type FileReviewState } from "@production-ready/ui";
 import {
+  ApiError,
   request,
   ANSWER_GENERATION_TIMEOUT_MS,
   type FeedbackContentSnapshot,
@@ -11,6 +12,8 @@ import { DataLoadFailure, DataLoadStaleNotice } from "@/components/DataLoadState
 import { useCurrentFeedback, useSubmitFeedback } from "@/lib/queries";
 import { AnswerCitations } from "@/components/search/CitationList";
 import { AnswerText } from "@/components/search/AnswerText";
+import { toast } from "@/lib/toast";
+import { FEEDBACK_ANSWER_REASONS, FEEDBACK_REASON_LABEL_KEYS } from "./FeedbackClient.logic";
 
 interface FeedbackControlsProps {
   traceId: string | null | undefined;
@@ -84,6 +87,56 @@ export function FeedbackControls({
             message_id: id === traceId ? messageId : undefined,
             content_snapshot: id === traceId && sourceSurface === "search" ? contentSnapshot : undefined,
           });
+        }}
+        details={{
+          reasons: FEEDBACK_ANSWER_REASONS.map((reason) => ({
+            value: reason,
+            label: t(FEEDBACK_REASON_LABEL_KEYS[reason]),
+          })),
+          correctedAnswer: true,
+          labels: {
+            reasonLegend: t("feedback.controls.reasonLegend"),
+            commentLabel: t("feedback.controls.commentLabel"),
+            commentPlaceholder: t("feedback.controls.commentPlaceholder"),
+            commentCount: (count) => t("feedback.controls.commentCount", { count }),
+            correctedAnswerLabel: t("feedback.controls.correctedAnswerLabel"),
+            correctedAnswerPlaceholder: t("feedback.controls.correctedAnswerPlaceholder"),
+            correctedAnswerHelp: t("feedback.controls.correctedAnswerHelp"),
+            save: t("feedback.controls.save"),
+            cancel: t("common.cancel"),
+          },
+          value: (id) => {
+            const saved = current.data?.find((item) => item.target_type === "answer" && item.trace_id === id);
+            return saved
+              ? {
+                  rating: saved.rating,
+                  reason: saved.reason ?? null,
+                  comment: saved.comment ?? null,
+                  correctedAnswer: saved.corrected_answer ?? null,
+                }
+              : null;
+          },
+          save: async (id, submission) => {
+            try {
+              await mutation.mutateAsync({
+                trace_id: id,
+                search_answer_profile_id: searchAnswerProfileId ?? null,
+                source_surface: sourceSurface,
+                target_type: "answer",
+                rating: "not_helpful",
+                reason: submission.reason as (typeof FEEDBACK_ANSWER_REASONS)[number] | null,
+                comment: submission.comment,
+                corrected_answer: submission.correctedAnswer,
+                message_id: id === traceId ? messageId : undefined,
+                content_snapshot: id === traceId && sourceSurface === "search" ? contentSnapshot : undefined,
+              });
+            } catch (error) {
+              throw new Error(error instanceof ApiError ? error.message : t("feedback.controls.saveError"), {
+                cause: error,
+              });
+            }
+            toast.success(t("feedback.controls.savedToast"));
+          },
         }}
         renderVersion={(v) => {
           const hits = (v.sources.question?.citations ?? []) as RetrievedChunk[];

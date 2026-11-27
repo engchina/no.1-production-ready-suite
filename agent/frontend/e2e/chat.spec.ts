@@ -949,7 +949,8 @@ for (const tool of ["rag_chat","rag_search"]) {
     });
     await page.goto("/chat");
     await openSeedThread(page);
-    await page.getByRole("button",{name:"未解決",exact:true}).click();
+    await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
+    await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
     const sheet=page.getByRole("dialog");
     await sheet.getByRole("radio",{name:"選んだ資料を残し、ほかも探す"}).check();
     await sheet.getByRole("checkbox",{name:"操作ガイド A.pdf"}).check();
@@ -987,7 +988,8 @@ test("同じ質問を使った二つの RAG タスクを選び分ける", async 
   });
   await page.goto("/chat");
   await openSeedThread(page);
-  await page.getByRole("button", { name: "未解決", exact: true }).click();
+  await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
+  await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
   const sheet = page.getByRole("dialog");
   await expect(sheet.getByRole("button", { name: "検索 1（RAG チャット）· " + reviewQuestion })).toBeVisible();
   await sheet.getByRole("button", { name: "検索 2（RAG 検索）· " + reviewQuestion }).click();
