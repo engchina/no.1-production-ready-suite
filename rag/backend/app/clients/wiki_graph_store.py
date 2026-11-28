@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import unicodedata
-from collections import Counter
+from collections import Counter, OrderedDict
 from collections.abc import Awaitable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.clients.oracle import (
@@ -47,9 +48,84 @@ def visible_pages_cte(kb_id: str) -> tuple[str, dict[str, object]]:
     )
 
 
+# 図の範囲（公開済みの案内・文書の名前）を左右する表。どれかの行が変わると、件数か
+# ORA_ROWSCN の最大が変わる。案内（rag_wiki_pages）・節点・依存・参照は、構築の所有（RUNNING）と
+# 公開（READY）で必ず rag_wiki_documents を同じ transaction で更新するので、ここに並べない。
+# 利用者・tenant・権限・基準日は範囲の SQL と bind に入るので、キャッシュの鍵で分かれる。
+_SCOPE_TABLES = (
+    "rag_documents",
+    "rag_document_knowledge_bases",
+    "rag_knowledge_bases",
+    "rag_chunk_sets",
+    "rag_document_recipes",
+    "rag_wiki_documents",
+)
+_SCOPE_VERSION_SQL = (
+    "SELECT "
+    + ",".join(
+        f"(SELECT COUNT(*)||':'||MAX(ORA_ROWSCN) FROM {table}) AS v{index}"
+        for index, table in enumerate(_SCOPE_TABLES)
+    )
+    + " FROM dual"
+)
+# ponytail: プロセスごとの LRU（範囲 8 つ）。変更の直後に同時に来た要求は、それぞれが読み直す
+# （1 回の読み込みにまとめない）。範囲の数が増えて読み直しが重なるなら、鍵ごとの読み込みを共有する。
+_SCOPE_CACHE_SIZE = 8
+_SCOPES: OrderedDict[tuple[object, ...], GraphScope] = OrderedDict()
+
+
+@dataclass
+class GraphScope:
+    """範囲の中の公開済みの案内（#5966）。DB の変更（``version``）まで要求をまたいで使い回す。
+
+    関係の照会ごとに範囲を照合し直すと（案内・Wiki の文書・chunk・文書を結ぶ照合）、1 要求で
+    数本の照合が重なり、並行の要求で読み取りの上限に近づいた。照合は版ごとに 1 回にし、
+    依存・参照は案内の ID で索引から引いて、相手が範囲にあるかをここで確かめる。
+    """
+
+    version: tuple[object, ...]
+    units: dict[str, tuple[str, str]]  # 単位 → (案内, 文書)
+    pages: dict[str, tuple[str, str]]  # 案内 → (単位, 文書)
+    names: DocumentNames
+    # 参照先の章節の候補。参照先になった文書の分だけ、最初に要るときに読む。
+    targets: ReferenceTargets = field(default_factory=lambda: ReferenceTargets([]))
+
+
 class WikiGraphStore:
     def __init__(self, oracle: OracleClient) -> None:
         self.oracle = oracle
+
+    async def _scope(self, kb_id: str) -> GraphScope:
+        """範囲の案内の集合と文書の名前。DB が前の読み込みから変わっていなければ使い回す。"""
+        where, binds = graph_scope(kb_id)
+        key = (where, *sorted((name, str(value)) for name, value in binds.items()))
+        # 版は範囲より先に読む。間に変更が入っても、新しい範囲に古い版が付くだけで、次の要求で
+        # 読み直す（古い範囲を新しい版で使い回すことはない）。
+        row = await self.oracle._fetch_one(_SCOPE_VERSION_SQL, {})
+        version = tuple(row.values()) if row else ()
+        cached = _SCOPES.get(key)
+        if cached is not None and version and cached.version == version:
+            _SCOPES.move_to_end(key)
+            return cached
+        cte, cte_binds = visible_pages_cte(kb_id)
+        rows, names = await asyncio.gather(
+            self.oracle._fetch_all(
+                f"WITH {cte} SELECT page_id,unit_id,document_id FROM visible", cte_binds
+            ),
+            self._document_names(kb_id),
+        )
+        scope = GraphScope(
+            version,
+            {str(r["unit_id"]): (str(r["page_id"]), str(r["document_id"])) for r in rows},
+            {str(r["page_id"]): (str(r["unit_id"]), str(r["document_id"])) for r in rows},
+            names,
+        )
+        if version:
+            _SCOPES[key] = scope
+            _SCOPES.move_to_end(key)
+            while len(_SCOPES) > _SCOPE_CACHE_SIZE:
+                _SCOPES.popitem(last=False)
+        return scope
 
     # ---- 総覧 ----
 
@@ -272,49 +348,48 @@ class WikiGraphStore:
         別の文書への参照（#5784）は、参照先をこの KB の文書の名前で決める。決まった参照先は開ける
         単位を返し、決まらない参照（KB に無い文書）は原文の表記だけを返す（開けない）。
         """
-        cte, binds = visible_pages_cte(kb_id)
-        selected = await self.oracle._fetch_one(
-            f"WITH {cte} SELECT page_id,document_id FROM visible WHERE unit_id=:graph_unit",
-            {**binds, "graph_unit": unit_id},
-        )
-        if not selected:
+        scope = await self._scope(kb_id)
+        if unit_id not in scope.units:
             return {
                 "has_more": False,
                 "items": [],
                 **({"total": 0, "counts": {}, "groups": [], "preview": []} if grouped else {}),
             }
-        document_id = str(selected["document_id"])
-        page_id = str(selected["page_id"])
+        page_id, document_id = scope.units[unit_id]
+        names = scope.names
         # 互いに依存しない読み取りは並行に読む。1 要求で 8 本を順に読むと、DB の 1 本ごとの待ちが
         # 積み重なり、並行の要求で読み取りの上限を超えた（#5966）。
-        rows, names, references = await asyncio.gather(
+        rows, references = await asyncio.gather(
             self.oracle._fetch_all(
-                f"""WITH {cte}
-                SELECT 'outgoing' AS direction,e.relation,other.page_id
-                FROM rag_wiki_graph_deps e JOIN visible other ON other.unit_id=e.target_unit_id
-                WHERE e.page_id=:graph_page AND other.document_id=:graph_doc
+                """SELECT 'outgoing' AS direction,relation,target_unit_id AS other
+                FROM rag_wiki_graph_deps WHERE page_id=:graph_page
                 UNION ALL
-                SELECT 'incoming',e.relation,other.page_id
-                FROM rag_wiki_graph_deps e JOIN visible other ON other.page_id=e.page_id
-                WHERE e.target_unit_id=:graph_unit AND other.document_id=:graph_doc""",
-                {**binds, "graph_page": page_id, "graph_doc": document_id, "graph_unit": unit_id},
+                SELECT 'incoming',relation,page_id FROM rag_wiki_graph_deps
+                WHERE target_unit_id=:graph_unit""",
+                {"graph_page": page_id, "graph_unit": unit_id},
             ),
-            self._document_names(kb_id),
             self.oracle._fetch_all(
                 """SELECT target_name,target_section,relation FROM rag_wiki_references
                 WHERE page_id=:graph_page ORDER BY ordinal""",
                 {"graph_page": page_id},
             ),
         )
-        items: list[dict[str, Any]] = [
-            {
-                "direction": row["direction"],
-                "scope": "same_document",
-                "relation": row["relation"],
-                "page_id": row["page_id"],
-            }
-            for row in rows
-        ]
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            # 相手は範囲の中の同じ文書の案内だけ（出る向きは単位、入る向きは案内で引いた）。
+            other = str(row["other"])
+            outgoing_dep = row["direction"] == "outgoing"
+            found = scope.units.get(other) if outgoing_dep else scope.pages.get(other)
+            if found is None or found[1] != document_id:
+                continue
+            items.append(
+                {
+                    "direction": row["direction"],
+                    "scope": "same_document",
+                    "relation": row["relation"],
+                    "page_id": found[0] if outgoing_dep else other,
+                }
+            )
         outgoing = [
             (row, names.resolve(str(row["target_name"]), exclude=document_id)) for row in references
         ]
@@ -334,22 +409,26 @@ class WikiGraphStore:
                 clauses.append(f"INSTR(:graph_ref_alias{index},r.target_key)>0")
                 extra[f"graph_ref_alias{index}"] = alias
             candidate_query = self.oracle._fetch_all(
-                f"""WITH {cte}
-                SELECT r.relation,r.target_key,r.target_section,v.page_id,v.document_id
+                f"""SELECT r.relation,r.target_key,r.target_section,r.page_id
                 FROM rag_wiki_references r
-                JOIN visible v ON v.page_id=r.page_id
-                WHERE ({" OR ".join(clauses)}) AND v.document_id<>:graph_doc
-                ORDER BY v.page_id,r.ordinal""",
-                {**binds, **extra, "graph_doc": document_id},
+                WHERE ({" OR ".join(clauses)}) AND r.document_id<>:graph_doc
+                ORDER BY r.page_id,r.ordinal""",
+                {**extra, "graph_doc": document_id},
             )
             # 自分を指す参照の章節は自分の文書の単位で解くので、参照先の候補と一緒に先に読む。
             targets.add(document_id)
         if candidate_query is None:
-            paths = await self._reference_targets(kb_id, sorted(targets))
+            paths = await self._reference_targets(scope, sorted(targets))
         else:
-            candidates, paths = await asyncio.gather(
-                candidate_query, self._reference_targets(kb_id, sorted(targets))
+            found_rows, paths = await asyncio.gather(
+                candidate_query, self._reference_targets(scope, sorted(targets))
             )
+            # 参照元は範囲の中の案内だけ。
+            candidates = [
+                {**row, "document_id": scope.pages[str(row["page_id"])][1]}
+                for row in found_rows
+                if str(row["page_id"]) in scope.pages
+            ]
         incoming = [
             row
             for row in candidates
@@ -484,17 +563,23 @@ class WikiGraphStore:
         ``document`` を渡すと、その文書と参照でつながる文書を参照の多い順に返す。
         返す文書（と ``document``）の間の参照は、向きと種類ごとの件数にまとめて返す。
         """
-        names = await self._document_names(kb_id)
-        cte, binds = visible_pages_cte(kb_id)
-        rows = await self.oracle._fetch_all(
-            f"""WITH {cte}
-            SELECT v.document_id,r.target_name,r.relation
-            FROM rag_wiki_references r JOIN visible v ON v.page_id=r.page_id""",
-            binds,
-        )
+        scope = await self._scope(kb_id)
+        names = scope.names
+        documents = sorted({document for _, document in scope.pages.values()})
+        rows: list[dict[str, Any]] = []
+        if documents:
+            clause, binds = _oracle_in_predicate("r.document_id", "graph_ref_doc", documents)
+            rows = await self.oracle._fetch_all(
+                f"""SELECT r.page_id,r.target_name,r.relation
+                FROM rag_wiki_references r WHERE {clause}""",
+                binds,
+            )
         links: Counter[tuple[str, str, str]] = Counter()
         for row in rows:
-            source = str(row["document_id"])
+            # 参照元は範囲の中の案内だけ（文書の古い版の案内の参照は数えない）。
+            if str(row["page_id"]) not in scope.pages:
+                continue
+            source = scope.pages[str(row["page_id"])][1]
             for target in names.resolve(str(row["target_name"]), exclude=source):
                 links[(source, target, str(row["relation"]))] += 1
         degree: Counter[str] = Counter()
@@ -537,26 +622,27 @@ class WikiGraphStore:
         ids = list(dict.fromkeys(unit_ids))
         if len(ids) < 2:
             return []
-        cte, binds = visible_pages_cte(kb_id)
-        # 範囲の中の選んだ単位（関係の照会と同じ形で、案内と文書を引く）。
-        unit_clause, unit_binds = _oracle_in_predicate("unit_id", "graph_conn_u", ids)
-        selected = await self.oracle._fetch_all(
-            f"WITH {cte} SELECT page_id,unit_id,document_id FROM visible WHERE {unit_clause}",
-            {**binds, **unit_binds},
-        )
-        if len(selected) < 2:
-            return []
-        by_page = {str(row["page_id"]): row for row in selected}
-        documents = {str(row["unit_id"]): str(row["document_id"]) for row in selected}
-        # 範囲の照合は上の 1 回だけ。依存と参照は、範囲にあると確かめた案内の ID で引く（#5966）。
+        scope = await self._scope(kb_id)
+        # 範囲の中の選んだ単位。依存と参照は、範囲にあると確かめた案内の ID で引く（#5966）。
         # 線の相手は選んだ単位（範囲の中）だけを採るので、相手の側を範囲で照合し直さない。
+        by_page = {
+            scope.units[uid][0]: {
+                "page_id": scope.units[uid][0],
+                "unit_id": uid,
+                "document_id": scope.units[uid][1],
+            }
+            for uid in ids
+            if uid in scope.units
+        }
+        if len(by_page) < 2:
+            return []
+        documents = {row["unit_id"]: row["document_id"] for row in by_page.values()}
+        names = scope.names
         page_clause, page_binds = _oracle_in_predicate("e.page_id", "graph_conn_p", list(by_page))
         source_clause, source_binds = _oracle_in_predicate(
             "r.page_id", "graph_conn_s", list(by_page)
         )
-        # 依存・参照・文書の名前は互いに依存しないので並行に読む（#5966）。名前は参照が無ければ
-        # 使わないが、参照を読んでから名前を読むと 1 段ぶん待ちが増える。
-        deps, reference_rows, names = await asyncio.gather(
+        deps, reference_rows = await asyncio.gather(
             self.oracle._fetch_all(
                 f"""SELECT e.page_id,e.target_unit_id AS target_id,e.relation
                 FROM rag_wiki_graph_deps e WHERE {page_clause}""",
@@ -567,7 +653,6 @@ class WikiGraphStore:
                 FROM rag_wiki_references r WHERE {source_clause}""",
                 source_binds,
             ),
-            self._document_names(kb_id),
         )
         found: dict[tuple[str, str, str], str] = {}
         for row in deps:
@@ -590,7 +675,7 @@ class WikiGraphStore:
                 for row in references
             ]
             targets = await self._reference_targets(
-                kb_id, sorted({doc for _, docs in resolved for doc in docs})
+                scope, sorted({doc for _, docs in resolved for doc in docs})
             )
             pages = [
                 (row, page)
@@ -637,20 +722,27 @@ class WikiGraphStore:
                 headings.setdefault(did, []).append(str(row["heading"]))
         return DocumentNames(list(catalog.values()), headings)
 
-    async def _reference_targets(self, kb_id: str, documents: list[str]) -> ReferenceTargets:
-        if not documents:
-            return ReferenceTargets([])
-        where, binds = graph_scope(kb_id)
-        clause, extra = _oracle_in_predicate("p.document_id", "graph_target", documents)
-        with read_lobs_as_values():
-            rows = await self.oracle._fetch_all(
-                f"""SELECT p.page_id AS unit_id,p.document_id,
-                JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS target_path
-                {WIKI_PAGE_FROM} WHERE {where} AND {clause}
-                ORDER BY p.document_id,c.chunk_index,p.unit_id""",
-                {**binds, **extra},
+    async def _reference_targets(self, scope: GraphScope, documents: list[str]) -> ReferenceTargets:
+        """参照先の文書の章節の候補（原文の順）。範囲の版の中で、文書ごとに 1 回だけ読む。"""
+        missing = [doc for doc in documents if doc not in scope.targets.by_document]
+        if missing:
+            clause, binds = _oracle_in_predicate("p.document_id", "graph_target", missing)
+            with read_lobs_as_values():
+                rows = await self.oracle._fetch_all(
+                    f"""SELECT p.page_id AS unit_id,p.document_id,
+                    JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS target_path
+                    FROM rag_wiki_pages p
+                    JOIN rag_wiki_documents w ON w.document_id=p.document_id
+                        AND p.source_fingerprint=w.published_fingerprint
+                    JOIN rag_chunks c ON c.chunk_id=p.source_chunk_id
+                    WHERE {clause} ORDER BY p.document_id,c.chunk_index,p.unit_id""",
+                    binds,
+                )
+            # 範囲の照合は版ごとの 1 回（``_scope``）。ここは範囲の中の案内だけを残す。
+            scope.targets.extend(
+                missing, [row for row in rows if str(row["unit_id"]) in scope.pages]
             )
-        return ReferenceTargets(rows)
+        return scope.targets
 
     async def _unit_refs(self, page_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
         if not page_ids:

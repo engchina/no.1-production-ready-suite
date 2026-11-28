@@ -6,7 +6,10 @@ SQL は実 Oracle のテスト（test_wiki_graph_store_oracle.py）で確かめ�
 
 from __future__ import annotations
 
+import itertools
 import json
+import sys
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -17,9 +20,16 @@ from app.api.routes import wiki_graph as routes
 from app.clients.wiki_graph_store import WikiGraphStore, graph_scope, section_id
 from app.clients.wiki_store import WIKI_PUBLISHED_SQL
 from app.rag.cross_references import reference_name_key
+from app.rag.request_context import (
+    current_audit_request_context,
+    reset_audit_request_context,
+    set_audit_request_context,
+)
 from app.rag.wiki_models import WikiContext, WikiDependency, WikiPage, WikiUnit, fingerprint
 
 KB = "kb-a"
+# Fake ごとに別の DB の版（範囲のキャッシュをテストの間で共有しない）。
+_VERSIONS = itertools.count()
 
 
 def _unit(uid: str, document: str, path: list[str], title: str) -> WikiUnit:
@@ -89,6 +99,7 @@ class FakeOracle:
     def __init__(self, *, empty: bool = False) -> None:
         self.statements: list[tuple[str, dict[str, Any]]] = []
         self.visible = set() if empty else set(VISIBLE)
+        self.version = next(_VERSIONS)
 
     def _pages(self) -> list[tuple[int, WikiPage]]:
         return [(index, PAGES[name]) for index, name in enumerate(PAGES) if name in self.visible]
@@ -101,6 +112,10 @@ class FakeOracle:
         binds = dict(binds or {})
         self.statements.append((statement, binds))
         pages = self._pages()
+        if "ORA_ROWSCN" in statement:
+            return [{"v0": self.version}]
+        # 表の行（範囲の外の案内 c1 も含む）。範囲の照合をしない照会はこちらを返す。
+        stored = {page.unit.unit_id: page for page in PAGES.values()}
         if "FROM rag_documents doc" in statement:
             documents = sorted({page.unit.document_id for _, page in pages})
             if statement.startswith("SELECT COUNT(*) AS total"):
@@ -111,22 +126,17 @@ class FakeOracle:
                 for did in documents[start : start + binds["graph_limit"]]
             ]
         by_id = {page.unit.unit_id: page for _, page in pages}
-        if "FROM rag_wiki_references r JOIN visible v ON v.page_id=r.page_id" in statement:
+        if "FROM rag_wiki_references r WHERE r.document_id IN" in statement:
+            wanted = {v for k, v in binds.items() if k.startswith("graph_ref_doc")}
             return [
-                {
-                    "document_id": by_id[source].unit.document_id,
-                    "target_name": name,
-                    "relation": relation,
-                }
+                {"page_id": source, "target_name": name, "relation": relation}
                 for source, name, _, relation in REFERENCES
-                if source in by_id
+                if stored[source].unit.document_id in wanted
             ]
-        if "SELECT page_id,unit_id,document_id FROM visible WHERE" in statement:
-            wanted = {v for k, v in binds.items() if k.startswith("graph_conn_u")}
+        if "SELECT page_id,unit_id,document_id FROM visible" in statement:
             return [
-                {"page_id": uid, "unit_id": uid, "document_id": by_id[uid].unit.document_id}
-                for uid in by_id
-                if uid in wanted
+                {"page_id": uid, "unit_id": uid, "document_id": page.unit.document_id}
+                for uid, page in by_id.items()
             ]
         if any(key.startswith("graph_conn_p") for key in binds):
             wanted_pages = {v for k, v in binds.items() if k.startswith("graph_conn_p")}
@@ -168,18 +178,19 @@ class FakeOracle:
                 else []
             )
         if "SELECT 'outgoing' AS direction" in statement:
+            # 保存した依存（自分への依存は保存しない）。相手が範囲にあるかは照合しない。
             uid = binds["graph_unit"]
             result = []
-            for page in by_id.values():
+            for page in stored.values():
                 for dep in page.navigation.dependencies:
                     src, dst = page.unit.unit_id, dep.unit_id
-                    if uid not in (src, dst) or src == dst or dst not in by_id:
+                    if uid not in (src, dst) or src == dst:
                         continue
                     result.append(
                         {
                             "direction": "outgoing" if src == uid else "incoming",
                             "relation": dep.relation,
-                            "page_id": dst if src == uid else src,
+                            "other": dst if src == uid else src,
                         }
                     )
             return result
@@ -207,15 +218,13 @@ class FakeOracle:
                     "page_id": source,
                     "target_key": reference_name_key(name),
                     "target_section": section,
-                    "document_id": by_id[source].unit.document_id,
                 }
                 for source, name, section, relation in REFERENCES
-                if source in by_id
-                and (
+                if (
                     reference_name_key(name) in keys
                     or any(str(reference_name_key(name)) in alias for alias in aliases)
                 )
-                and by_id[source].unit.document_id != binds["graph_doc"]
+                and stored[source].unit.document_id != binds["graph_doc"]
             ]
         if "AS target_path" in statement:
             wanted = {v for k, v in binds.items() if k.startswith("graph_target")}
@@ -225,7 +234,7 @@ class FakeOracle:
                     "document_id": p.unit.document_id,
                     "target_path": p.unit.section_path,
                 }
-                for p in by_id.values()
+                for p in stored.values()
                 if p.unit.document_id in wanted
             ]
         if "p.page_id IN" in statement or "graph_pages" in "".join(binds):
@@ -483,6 +492,70 @@ async def test_connections_return_relations_between_selected_units_only() -> Non
     pair = await store.connections(KB, [U["a1"], U["a3"]])
     assert [(c["source_id"], c["target_id"]) for c in pair] == [(U["a3"], U["a1"])]
     assert await store.connections(KB, [U["a1"]]) == []
+
+
+def _scope_loads(oracle: FakeOracle) -> int:
+    return len([sql for sql, _ in oracle.statements if "WITH visible AS" in sql])
+
+
+async def test_graph_reads_reuse_the_scope_until_the_database_changes() -> None:
+    """範囲の照合と文書の名前は DB の版ごとに 1 回（#5966）。版が変われば読み直す。"""
+    oracle = FakeOracle()
+    store = WikiGraphStore(oracle)  # type: ignore[arg-type]
+    first = await store.relations(KB, U["a1"], 0, 25, grouped=True)
+    assert _scope_loads(oracle) == 1
+    oracle.statements.clear()
+    # 要求ごとに作る store でも使い回す（route は要求ごとに作る）。
+    again = WikiGraphStore(oracle)  # type: ignore[arg-type]
+    assert await again.relations(KB, U["a1"], 0, 25, grouped=True) == first
+    await again.connections(KB, [U["a1"], U["a2"], U["b1"]])
+    await again.document_graph(KB, offset=0, limit=25)
+    assert _scope_loads(oracle) == 0
+    assert not [sql for sql, _ in oracle.statements if "SELECT DISTINCT p.document_id" in sql]
+    # 参照先の章節も、読んだ文書は読み直さない。
+    assert not [sql for sql, _ in oracle.statements if "AS target_path" in sql]
+    # 文書 B の公開を取り消すと版が変わり、B への参照は開けない参照になる。
+    oracle.visible.discard("b1")
+    oracle.version = next(_VERSIONS)
+    changed = await again.relations(KB, U["a1"], 0, 25)
+    assert _scope_loads(oracle) == 1
+    cross = [item for item in changed["items"] if item["scope"] == "cross_document"]
+    assert [(item["unit"], item["target_name"]) for item in cross] == [(None, "synthetic-b.pdf")]
+
+
+async def test_graph_scope_cache_is_separate_per_access_scope() -> None:
+    """権限（読める文書）の違う利用者は、別の範囲として照合する（使い回さない）。"""
+    oracle = FakeOracle()
+    store = WikiGraphStore(oracle)  # type: ignore[arg-type]
+    await store.relations(KB, U["a1"], 0, 25)
+    narrowed = replace(current_audit_request_context(), allowed_document_ids=frozenset({"doc-a"}))
+    token = set_audit_request_context(narrowed)
+    try:
+        await store.relations(KB, U["a1"], 0, 25)
+    finally:
+        reset_audit_request_context(token)
+    await store.relations(KB, U["a1"], 0, 25)
+    assert _scope_loads(oracle) == 2
+
+
+async def test_graph_ignores_dependencies_and_references_from_outside_the_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """依存・参照は索引から案内の ID で引くので、範囲の外の案内（c1）の行は範囲で落とす。"""
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "REFERENCES",
+        [*REFERENCES, (U["c1"], "synthetic-a.pdf", "第 1 章", "reference")],
+    )
+    monkeypatch.setitem(
+        PAGES, "c1", _page(_unit(U["c1"], "doc-c", [], "単位 c1"), [(U["a3"], "reference")])
+    )
+    store = WikiGraphStore(FakeOracle())  # type: ignore[arg-type]
+    items = (await store.relations(KB, U["a3"], 0, 25))["items"]
+    assert U["c1"] not in {item["unit"]["id"] for item in items if item["unit"]}
+    sample = await store.document_graph(KB, offset=0, limit=25)
+    assert {d["id"] for d in sample["documents"]} == {"doc-a", "doc-b"}
+    assert all("doc-c" not in (link["source_id"], link["target_id"]) for link in sample["links"])
 
 
 async def test_search_matches_unit_titles_and_guidance() -> None:
