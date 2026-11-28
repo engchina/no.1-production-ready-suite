@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 
+import { ProgressLog } from "./fixtures/chat-progress-events";
 import { MOCK_NOW, expect, test, type MockApi } from "./fixtures/mock-api";
 import { expectNoPageHorizontalOverflow } from "./fixtures/page-overflow";
 
@@ -189,6 +190,71 @@ test("実行の詳細の「成果物」にも、ファイルのダウンロー�
   expect(requested).toEqual([`/api/runs/${RUN_ID}/artifacts/artifact-pptx/download`]);
   await expectNoPageHorizontalOverflow(page);
 });
+
+// #5950: ファイルは実行が完了してから渡す（backend は完了していない Run の応答にファイルの成果物を入れない。mock-api も
+// 同じ規則）。実行中はツールの段だけを出し、ファイルの行・ダウンロードのボタンを出さない。完了したら読み直しで出す。
+test("実行中はファイルの行を出さず、完了してから出す", async ({ page, mockApi }, testInfo) => {
+  test.setTimeout(60_000);
+  const startedAt = new Date(Date.now() - 3_000).toISOString();
+  const progress = new ProgressLog(RUN_ID, undefined, startedAt)
+    .step("chat-1", "done", { kind: "plan", startedAt })
+    .step("tool:xlsx_create", "running")
+    .step("tool:xlsx_create", "done")
+    .step("chat-2", "running");
+  seedRun(mockApi);
+  const run = mockApi.state.runs[0] as Record<string, unknown> & { artifacts: Record<string, unknown>[] };
+  const answer = run.artifacts.find((artifact) => artifact.kind === "answer");
+  // 保存したファイルは Run にあるが、回答はまだ無い（実行中）。
+  Object.assign(run, {
+    status: "running",
+    created_at: startedAt,
+    updated_at: startedAt,
+    artifacts: run.artifacts.filter((artifact) => artifact.kind === "file"),
+    progress_events: progress.events,
+  });
+  const requested = await mockDownload(page);
+  await page.goto("/chat");
+  await openThread(page);
+
+  const turn = page.getByTestId(`chat-turn-${RUN_ID}`);
+  await expect(turn.getByTestId("chat-progress-current")).toBeVisible();
+  await expect(turn.getByTestId("chat-progress-step-tool:xlsx_create")).toHaveCount(1);
+  await expect(turn.getByRole("region", { name: "作成したファイル" })).toHaveCount(0);
+  await expect(turn.getByRole("button", { name: /をダウンロード$/ })).toHaveCount(0);
+  await turn.screenshot({ path: testInfo.outputPath("chat-files-running.png") });
+
+  run.status = "completed";
+  run.artifacts = [...run.artifacts, answer!];
+  progress.step("chat-2", "done", { kind: "respond" }).terminal("done");
+  run.progress_events = progress.events;
+
+  const files = turn.getByRole("region", { name: "作成したファイル" });
+  await expect(files).toBeVisible({ timeout: 30_000 });
+  await expect(turn.getByTestId(`chat-answer-${RUN_ID}`)).toContainText("合成のファイルを作りました。");
+  await expect(files.getByRole("button", { name: /をダウンロード$/ })).toHaveCount(3);
+  await turn.screenshot({ path: testInfo.outputPath("chat-files-completed.png") });
+  expect(requested).toEqual([]);
+});
+
+for (const status of ["failed", "cancelled"] as const) {
+  test(`${status === "failed" ? "失敗" : "取消"}した実行には、ファイルの行を出さない`, async ({ page, mockApi }) => {
+    seedRun(mockApi);
+    const run = mockApi.state.runs[0] as Record<string, unknown> & { artifacts: Record<string, unknown>[] };
+    run.status = status;
+    run.artifacts = run.artifacts.filter((artifact) => artifact.kind === "file");
+    await page.goto("/chat");
+    await openThread(page);
+
+    await expect(page.getByTestId(`chat-turn-${RUN_ID}`)).toBeVisible();
+    await expect(page.getByRole("region", { name: "作成したファイル" })).toHaveCount(0);
+
+    // 実行の詳細の「成果物」にも出さない。
+    await page.goto(`/runs?id=${RUN_ID}`);
+    await expect(page.getByText("合成の表を作って").first()).toBeVisible();
+    await expect(page.getByTestId("run-artifact-artifact-xlsx")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /をダウンロード$/ })).toHaveCount(0);
+  });
+}
 
 test("ファイルの無い実行には、作成したファイルの節を出さない", async ({ page, mockApi }) => {
   seedRun(mockApi);

@@ -801,7 +801,11 @@ def test_mcp_run_output_lists_the_file_without_its_content(run_id: str) -> None:
     [artifact] = _files(run_id)
     _, data = _presentation(run_id, artifact.id)
 
-    output = run_output(runtime_repository.get_run(run_id))
+    # ファイルを渡すのは完了した Run だけ（#5950）。
+    completed = runtime_repository.get_run(run_id).model_copy(
+        update={"status": RunStatus.COMPLETED}
+    )
+    output = run_output(completed)
 
     assert [item.model_dump() for item in output.files] == [
         {"file_name": "合成の報告.pptx", "mime_type": PPTX_MIME_TYPE, "size_bytes": len(data)}
