@@ -85,7 +85,7 @@ function seedReport(mockApi: MockApi) {
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`チャットの回答を評価し、役に立たなかった理由とコメントに付け直せる (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
+  test(`チャットの回答を評価し、解決しなかった理由とコメントに付け直せる (${viewport.name})`, async ({ page, mockApi }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto("/chat");
     const composer = page.getByRole("textbox", { name: "質問" });
@@ -97,14 +97,14 @@ for (const viewport of VIEWPORTS) {
     const feedback = page.getByTestId(`chat-feedback-${runId}`);
 
     // 👍 はすぐ保存する。
-    await feedback.getByRole("button", { name: "この回答は役に立った" }).click();
+    await feedback.getByRole("button", { name: "解決した" }).click();
     await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
     await expect(feedback.getByRole("status")).toHaveText("保存済み・変更できます");
-    await expect(feedback.getByRole("button", { name: "この回答は役に立った" })).toHaveAttribute("aria-pressed", "true");
+    await expect(feedback.getByRole("button", { name: "解決した" })).toHaveAttribute("aria-pressed", "true");
     expect(mockApi.lastRequest("PUT", `/api/runs/${runId}/feedback`)?.body).toEqual({ rating: "helpful" });
 
     // 👎 は理由（必須）とコメントを開く。理由を選ぶまで保存できない。
-    await feedback.getByRole("button", { name: "この回答は役に立たなかった" }).click();
+    await feedback.getByRole("button", { name: "解決しなかった" }).click();
     const save = feedback.getByRole("button", { name: "フィードバックを保存" });
     await expect(save).toBeDisabled();
     await feedback.getByRole("button", { name: "情報が足りない" }).click();
@@ -112,7 +112,7 @@ for (const viewport of VIEWPORTS) {
     await expect(feedback.getByText("14/1000文字")).toBeVisible();
     await feedback.screenshot({ path: testInfo.outputPath(`chat-feedback-${viewport.name}.png`) });
     await save.click();
-    await expect(feedback.getByRole("button", { name: "この回答は役に立たなかった" })).toHaveAttribute("aria-pressed", "true");
+    await expect(feedback.getByRole("button", { name: "解決しなかった" })).toHaveAttribute("aria-pressed", "true");
     expect(mockApi.lastRequest("PUT", `/api/runs/${runId}/feedback`)?.body).toEqual({
       rating: "not_helpful",
       reason: "incomplete",
@@ -139,13 +139,13 @@ for (const viewport of VIEWPORTS) {
       await expect(reasons).toContainText("情報が足りない");
       await expect(reasons).toContainText("3 / 75%");
       await expect(page.getByTestId("feedback-admin-summary")).toHaveText(
-        "管理者の評価: 3 件（うち役に立たなかった 1 件）"
+        "管理者の評価: 3 件（うち解決しなかった 1 件）"
       )
 
       // 一覧の行は質問・評価（本人と管理者）・評価日時。理由・利用者は詳細で見る（#5071）。
       const table = page.getByRole("table", { name: "フィードバックの一覧" });
       const bad = table.getByRole("row", { name: /run-a/ });
-      await expect(bad).toContainText("役に立たなかった");
+      await expect(bad).toContainText("解決しなかった");
       await expect(bad).not.toContainText("山田 太郎");
 
       await expectNoPageHorizontalOverflow(page);
@@ -275,7 +275,7 @@ test("評価・理由で絞り込み、合う評価が無ければ絞り込み�
   mockApi.state.feedbackReport = { ...mockApi.state.feedbackReport, items: [], total: 0 };
   await withListFilters(page.getByTestId("feedback-filters"), async (filters) => {
     await filters.locator("#feedback-rating").click();
-    await page.getByRole("option", { name: "役に立たなかった" }).click();
+    await page.getByRole("option", { name: "解決しなかった" }).click();
   });
   await expect(page.getByText("条件に合う評価はありません")).toBeVisible();
   expect(mockApi.lastRequest("GET", "/api/feedback")?.searchParams.get("rating")).toBe("not_helpful");
@@ -394,12 +394,12 @@ test("管理者はだれの回答にも評価を付けられ、本人の評価�
     .getByRole("button", { name: /今月の契約件数は？/ })
     .click();
   const detail = page.getByRole("region", { name: "フィードバックの詳細" });
-  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("役に立った");
+  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("解決した");
   await expect(detail.getByTestId("feedback-detail-admin")).toContainText("まだ評価していません。");
 
   const review = detail.getByTestId("admin-review-run-admin-774");
   await expect(review).toContainText("管理者の評価");
-  await review.getByRole("button", { name: "この回答は役に立たなかった" }).click();
+  await review.getByRole("button", { name: "解決しなかった" }).click();
   await review.getByRole("button", { name: "内容が正しくない" }).click();
   await review.getByLabel("コメント").fill("件数は 15 件が正しい");
   await review.getByRole("button", { name: "フィードバックを保存" }).click();
@@ -411,14 +411,14 @@ test("管理者はだれの回答にも評価を付けられ、本人の評価�
   });
   await expect(detail.getByTestId("feedback-detail-admin")).toContainText("内容が正しくない");
   // 本人の評価はそのまま。
-  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("役に立った");
+  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("解決した");
   expect(mockApi.lastRequest("PUT", "/api/runs/run-admin-774/feedback")).toBeUndefined();
 
   // Run の詳細でも管理者の評価を付け直せる（付けた評価が選ばれている）。
   await page.keyboard.press("Escape");
   await page.goto("/runs?id=run-admin-774");
   const runReview = page.getByTestId("admin-review-run-admin-774");
-  await expect(runReview.getByRole("button", { name: "この回答は役に立たなかった" })).toHaveAttribute(
+  await expect(runReview.getByRole("button", { name: "解決しなかった" })).toHaveAttribute(
     "aria-pressed",
     "true"
   );
@@ -437,7 +437,7 @@ test("Agent 管理の権限が無い利用者には管理者の評価の操作�
   await expect(detail.getByTestId("admin-review-run-admin-774")).toHaveCount(0);
 });
 
-// ---- #810: 役に立たなかった回答を評価ケースに追加する -------------------------------------------------
+// ---- #810: 解決しなかった回答を評価ケースに追加する -------------------------------------------------
 
 const DISLIKED_QUESTION = "先月の契約件数は？";
 
@@ -496,7 +496,7 @@ async function openDislikedDetail(page: Page) {
 
 for (const viewport of VIEWPORTS) {
   for (const theme of ["light", "dark"] as const) {
-    test(`役に立たなかった回答を既存の評価セットに追加する (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
+    test(`解決しなかった回答を既存の評価セットに追加する (${viewport.name}, ${theme})`, async ({ page, mockApi }, testInfo) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await useTheme(page, theme);
       seedDislikedRun(mockApi);
@@ -600,16 +600,16 @@ test("評価ケースの下書きの読み込み中と失敗を出し、再試�
   await expectNoPageHorizontalOverflow(page);
 });
 
-test("品質評価の権限が無い利用者と、役に立った回答には評価ケースへの追加を出さない", async ({ page, mockApi }) => {
+test("品質評価の権限が無い利用者と、解決した回答には評価ケースへの追加を出さない", async ({ page, mockApi }) => {
   seedDislikedRun(mockApi);
   seedRatedRun(mockApi);
   mockApi.setCurrentUser(dbUser({ permissions: ["menu.feedback"] }));
   const detail = await openDislikedDetail(page);
-  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("役に立たなかった");
+  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("解決しなかった");
   await expect(detail.getByTestId("feedback-add-case-toggle")).toHaveCount(0);
 });
 
-test("役に立った回答の詳細には評価ケースへの追加を出さない", async ({ page, mockApi }) => {
+test("解決した回答の詳細には評価ケースへの追加を出さない", async ({ page, mockApi }) => {
   seedRatedRun(mockApi);
   await openRatings(page);
   await page
@@ -617,7 +617,7 @@ test("役に立った回答の詳細には評価ケースへの追加を出さ�
     .getByRole("button", { name: /今月の契約件数は？/ })
     .click();
   const detail = page.getByRole("region", { name: "フィードバックの詳細" });
-  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("役に立った");
+  await expect(detail.getByTestId("feedback-detail-owner")).toContainText("解決した");
   await expect(detail.getByTestId("feedback-add-case-toggle")).toHaveCount(0);
 });
 
@@ -654,7 +654,7 @@ test("管理者のみの評価を一覧の件数に含め、両方の評価を�
   await expect(page.getByTestId("feedback-list-toolbar")).toContainText("全 3 件");
   await withListFilters(page.getByTestId("feedback-filters"), async (filters) => {
     await filters.locator("#feedback-rating").click();
-    await page.getByRole("option", { name: "役に立たなかった", exact: true }).click();
+    await page.getByRole("option", { name: "解決しなかった", exact: true }).click();
   });
   await expect(page.getByTestId("feedback-list-toolbar")).toContainText("2 件（全 3 件）");
 });

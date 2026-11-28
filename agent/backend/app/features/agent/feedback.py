@@ -176,7 +176,7 @@ def summarize_feedback(facts: list[RunFact]) -> FeedbackSummary:
 def finish_summary(
     summary: FeedbackSummary, reasons: Mapping[FeedbackReason, int]
 ) -> FeedbackSummary:
-    """役に立った割合と、理由の件数の多い順（同じなら理由の定義順）を入れる（SQL の集計と共通）。"""
+    """解決した割合と、理由の件数の多い順（同じなら理由の定義順）を入れる（SQL の集計と共通）。"""
     if summary.total:
         summary.helpful_rate = summary.helpful / summary.total
     order = list(FeedbackReason)

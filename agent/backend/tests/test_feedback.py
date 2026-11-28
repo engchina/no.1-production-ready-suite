@@ -197,7 +197,7 @@ def test_user_rates_own_answer_and_can_change_it(seeded_runs: None) -> None:
     helpful = client.put(url, json={"rating": "helpful", "reason": "incorrect", "comment": "x"})
     assert helpful.status_code == 200, helpful.text
     feedback = helpful.json()["data"]["feedback"]
-    # 役に立った評価には理由・コメントを残さない。
+    # 解決した評価には理由・コメントを残さない。
     assert (feedback["rating"], feedback["reason"], feedback["comment"]) == ("helpful", None, "")
     assert feedback["user_uuid"] == LOCAL_DEBUG_USER_UUID
 

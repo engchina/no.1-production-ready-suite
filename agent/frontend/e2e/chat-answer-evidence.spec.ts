@@ -786,7 +786,7 @@ for (const viewport of VIEWPORTS) {
     // 本文 → 注意書き → 根拠の塊 → 評価 の順（注意書きは本文には混ぜない）。
     const body = turn.getByTestId(`chat-answer-${RUN_ID}`);
     const citations = turn.getByTestId("answer-citations");
-    const feedback = turn.getByRole("group", { name: "この回答は役に立ちましたか？" });
+    const feedback = turn.getByRole("group", { name: "この回答で質問は解決しましたか？" });
     await expect(feedback).toBeVisible();
     const [bodyBox, noticeBox, citationsBox, feedbackBox] = await Promise.all([
       body.boundingBox(),

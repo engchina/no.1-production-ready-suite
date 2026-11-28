@@ -2424,7 +2424,7 @@ async def put_run_feedback(
     elif version_id:
         raise HTTPException(404, "回答の版が見つかりません。")
     elif feedback.rating == "not_helpful" and feedback.reason is None:
-        raise HTTPException(422, "役に立たなかった理由を選んでください。")
+        raise HTTPException(422, "解決しなかった理由を選んでください。")
     try:
         updated = await run_in_threadpool(
             runtime_repository.set_run_feedback,
@@ -2452,7 +2452,7 @@ async def put_run_admin_review(
 ) -> ApiResponse[RunState]:
     """管理者の評価（#774）。Agent 管理の権限でだれの回答にも付けられ、本人の評価とは別に残す。"""
     if review.rating == "not_helpful" and review.reason is None:
-        raise HTTPException(422, "役に立たなかった理由を選んでください。")
+        raise HTTPException(422, "解決しなかった理由を選んでください。")
     try:
         run = await run_in_threadpool(runtime_repository.get_run, run_id)
     except KeyError as exc:
