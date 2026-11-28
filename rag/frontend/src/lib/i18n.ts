@@ -3132,7 +3132,7 @@ export const ja = {
   "documents.excelWarning.headerLowConfidence":
     "シート「{sheet}」の表頭を推定できませんでした（信頼度が低い）。",
   "documents.excelWarning.formulaWithoutValue":
-    "シート「{sheet}」の数式 {count} 件に保存された値がありません。Excel で開いて保存し直すと値が入ります。",
+    "シート「{sheet}」の数式 {count} 件は保存された計算結果が無いため、本文に入れていません（位置: {cells}）。Excel で開いて再計算・保存してから、もう一度アップロードしてください。",
   "documents.excelWarning.sheetNotFound": "読むシートに指定した「{sheet}」が見つかりません。",
   "documents.excelWarning.rangeSheetNotFound": "読む範囲に指定したシート「{sheet}」が見つかりません。",
   "documents.excelWarning.reviewTitle": "Excel の表頭を確認してください",
