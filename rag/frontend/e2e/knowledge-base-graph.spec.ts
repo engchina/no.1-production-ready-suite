@@ -396,6 +396,9 @@ test("原文の関係は 1 回で取り切り、25 件ずつ展開して「さ�
   await page.getByRole("tab", { name: "検索結果" }).click();
   await page.getByRole("region", { name: "検索結果の一覧" }).getByRole("button", { name: /合成の原文 1 / }).click();
   const panel = detail(page, phone);
+  // 関係は「関係」のタブを開くまで読まない（選ぶたびに読むと、原文・線の照会と重なる。#5966）。
+  await expect(panel.getByRole("button", { name: "質問に追加" })).toBeVisible();
+  expect(control.calls.filter((u) => u.pathname.endsWith("/relations"))).toHaveLength(0);
   await panel.getByRole("tab", { name: "関係", exact: true }).click();
   // 関係の一覧は詳細の中でも共通のページング（25 件）。
   await expect(panel.getByRole("region", { name: "関係の一覧" }).getByRole("listitem")).toHaveCount(25);
