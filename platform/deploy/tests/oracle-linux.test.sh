@@ -77,8 +77,17 @@ for module in "${modules[@]}"; do
   esac
 done
 # 配備のスクリプトが使う module（nginx:1.24・3 製品の nodejs:24。#1591）が repository にあること。
+# repository の metadata の取得が一時的に失敗すると、module があっても info が失敗する（main の CI で 1 回あった。
+# #6000）。失敗したら metadata を取り直して 1 回だけやり直し、それでも失敗したら dnf のエラーを出す（module が
+# 無いのか、repository に届かないのかを log で分ける）。
 for module in "${modules[@]}" nodejs:24; do
-  dnf -q module info "${module}" >/dev/null 2>&1 || fail "module が無い: ${module}"
+  if ! dnf -q module info "${module}" >/dev/null 2>&1; then
+    dnf -q makecache --refresh >/dev/null 2>&1 || true
+    if ! output="$(dnf -q module info "${module}" 2>&1)"; then
+      printf '%s\n' "${output}" | tail -n 20 >&2
+      fail "module が無い: ${module}"
+    fi
+  fi
 done
 # 3 製品が同じ Compute で使う組み合わせ（nginx:1.24 と RAG / NL2SQL の nodejs:24）で、すべての package を解決する。
 dnf -y -q module reset nodejs nginx >/dev/null
