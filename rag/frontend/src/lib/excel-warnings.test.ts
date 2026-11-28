@@ -10,8 +10,12 @@ import {
 describe("excelWarningLabel", () => {
   it("Excel の前処理の warning を日本語にする", () => {
     expect(excelWarningLabel("excel_header_low_confidence:費目")).toContain("シート「費目」の表頭");
-    expect(excelWarningLabel("excel_formula_without_cached_value:集計:3")).toContain(
-      "シート「集計」の数式 3 件"
+    expect(excelWarningLabel("excel_formula_without_cached_value:集計:3:C2,C3,C4")).toBe(
+      "シート「集計」の数式 3 件は保存された計算結果が無いため、本文に入れていません（位置: C2, C3, C4）。Excel で開いて再計算・保存してから、もう一度アップロードしてください。"
+    );
+    // 位置は先頭の数件だけ載る。シート名の「:」はそのまま残す。
+    expect(excelWarningLabel("excel_formula_without_cached_value:表:2:7:A1,B1")).toContain(
+      "シート「表:2」の数式 7 件は保存された計算結果が無いため、本文に入れていません（位置: A1, B1 …）"
     );
     expect(excelWarningLabel("excel_sheet_not_found:無い")).toContain("「無い」");
     expect(excelWarningLabel("excel_range_sheet_not_found:手順 1")).toContain("「手順 1」");

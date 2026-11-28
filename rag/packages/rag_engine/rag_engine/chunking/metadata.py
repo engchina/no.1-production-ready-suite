@@ -6,6 +6,7 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, load_ranges
 from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_VERSION
 
 from rag_engine.chunking.constants import (
@@ -187,7 +188,10 @@ _CHUNK_METADATA_REQUIRED_KEYS = frozenset(
     }
 )
 # chunk 直下の任意項目。位置系は layout に、問い合わせ profile は retrieval_profile にまとめる (#814)。
-_CHUNK_METADATA_OPTIONAL_KEYS = frozenset({"layout", "image_evidence", "table_context", "retrieval_profile", "answer_text_projection"})
+# NON_SOURCE_RANGES_KEY: 本文の中の原文に無い範囲（JSON の文字列。rag_parser_core.non_source_text。#5793）。
+_CHUNK_METADATA_OPTIONAL_KEYS = frozenset(
+    {"layout", "image_evidence", "table_context", "retrieval_profile", "answer_text_projection", NON_SOURCE_RANGES_KEY}
+)
 _CHUNK_LAYOUT_KEYS = frozenset(
     {
         "display_regions",
@@ -270,6 +274,10 @@ def _validate_chunk_metadata_v4(metadata: Any) -> dict[str, Any]:
     for key in ("image_evidence", "table_context"):
         if key in metadata and not isinstance(metadata[key], list):
             raise ValueError(f"chunk metadata v4 の {key} が配列ではありません。")
+    if NON_SOURCE_RANGES_KEY in metadata and (
+        not isinstance(metadata[NON_SOURCE_RANGES_KEY], str) or not load_ranges(metadata[NON_SOURCE_RANGES_KEY], 2**62)
+    ):
+        raise ValueError(f"chunk metadata v4 の {NON_SOURCE_RANGES_KEY} が不正です。")
     layout = metadata.get("layout")
     if layout is not None:
         if not isinstance(layout, dict) or set(layout) - _CHUNK_LAYOUT_KEYS:

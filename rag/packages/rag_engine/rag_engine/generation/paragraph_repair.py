@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 from pydantic import BaseModel, create_model, model_validator
 
@@ -93,7 +94,9 @@ class ParagraphRepair:
                         return self.original.model_copy(update={"answer_body": "".join(self.parts)})
             raise ValueError("回答の段落を再生成してください。")
 
-        return create_model(base.__name__, __base__=base, __validators__={"check_paragraph_text": model_validator(mode="after")(check)})
+        # pydantic の型の宣言は ``__validators__`` に ``model_validator`` の戻り値（記述子）を書けない（実行時は受け付ける）。
+        validator = cast(Callable[..., Any], model_validator(mode="after")(check))
+        return create_model(base.__name__, __base__=base, __validators__={"check_paragraph_text": validator})
 
     def step(self) -> str:
         i = self.pending[0]

@@ -361,6 +361,23 @@ test("Excel の表頭の確認の案内は先頭の 1 か所で、構造化要�
   await expect(codes).toBeVisible();
 });
 
+// キャッシュ値の無い数式は本文に入れず、件数・位置・直し方を利用者の言葉で出す（#6006）。
+test("Excel のキャッシュ値の無い数式は、件数と位置と直し方を出す（#6006）", async ({ page }) => {
+  await mockReviewWorkspace(page, {
+    extractionWarnings: ["excel_formula_without_cached_value:集計:7:C2,C3,C4,C5,C6"],
+  });
+  await page.goto(`/documents/${DOC_ID}`);
+  await page.getByRole("tab", { name: "構造化要素" }).click();
+
+  const warnings = page.getByTestId("extraction-warnings");
+  await expect(
+    warnings.getByText(
+      "シート「集計」の数式 7 件は保存された計算結果が無いため、本文に入れていません（位置: C2, C3, C4, C5, C6 …）。Excel で開いて再計算・保存してから、もう一度アップロードしてください。"
+    )
+  ).toBeVisible();
+  await expect(page.getByText(/excel_formula_without_cached_value/)).toBeHidden();
+});
+
 test("承認すると chunk job を投入し成功 toast を出す", async ({ page }) => {
   const calls = await mockReviewWorkspace(page);
   await page.goto(`/documents/${DOC_ID}`);

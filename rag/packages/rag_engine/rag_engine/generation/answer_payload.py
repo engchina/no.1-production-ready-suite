@@ -134,23 +134,23 @@ def _published_reference_records(records: Sequence[AnswerRecord], trace: dict[st
                 if span.get("page_end") and span["page_end"] > span["page"]:
                     pages[span["source_id"]].add(span["page_end"])
     # parent先頭は別項目の場合があるため、引用欄の抜粋も採用した原文から作る。
-    return [
-        replace(
-            r,
-            text="\n".join(selected[getattr(r, "chunk_uid", "") or r.id]),
-            **(
-                {
-                    "page": next(iter(pages[r.chunk_uid or r.id])),
-                    "page_end": next(iter(pages[r.chunk_uid or r.id])),
-                    "source_seq_ranges": tuple(v for v in r.source_seq_ranges if v.get("page") in pages[r.chunk_uid or r.id]),
-                }
-                if finalization.get("citations_synchronized") and len(pages.get(r.chunk_uid or r.id, set())) == 1
-                else {}
-            ),
-        )
-        for r in records
-        if (getattr(r, "chunk_uid", "") or r.id) in selected
-    ]
+    published: list[AnswerRecord] = []
+    for r in records:
+        key = getattr(r, "chunk_uid", "") or r.id
+        if key not in selected:
+            continue
+        record = replace(r, text="\n".join(selected[key]))
+        record_pages = pages.get(r.chunk_uid or r.id, set())
+        if finalization.get("citations_synchronized") and len(record_pages) == 1:
+            page = next(iter(record_pages))
+            record = replace(
+                record,
+                page=page,
+                page_end=page,
+                source_seq_ranges=tuple(v for v in r.source_seq_ranges if v.get("page") in record_pages),
+            )
+        published.append(record)
+    return published
 
 
 def format_references(records: Sequence[AnswerRecord], limit: int = 5, *, include_source: bool = False) -> str:
@@ -318,11 +318,8 @@ def answer_evidence_items(
                 child_items.append(child_item)
                 if child.role == "retrieved_anchor":
                     anchor_refs.extend(child.record.source_record_refs)
-            child_usage_ranks = [
-                _finite_float(child.get("model_usage_rank"))
-                for child in child_items
-                if child.get("is_model_used") or _finite_float(child.get("model_usage_rank")) is not None
-            ]
+            # 回答に使った子は必ず順位を持つ（``_model_usage_order`` と同じ ID から決める）。
+            child_usage_ranks = [rank for child in child_items if (rank := _finite_float(child.get("model_usage_rank"))) is not None]
             parent_item.update(
                 {
                     "retrieval_role": parent.role,
@@ -343,12 +340,12 @@ def answer_evidence_items(
             items.append(parent_item)
         return items
 
-    items: list[dict[str, Any]] = []
+    flat_items: list[dict[str, Any]] = []
     for record in records:
         item = _answer_record_evidence_item(record, used_ids, usage_order, uses)
         item["children"] = []
-        items.append(item)
-    return [item for _, item in sorted(enumerate(items), key=lambda pair: _evidence_item_sort_key(pair, rerank_first=True))]
+        flat_items.append(item)
+    return [item for _, item in sorted(enumerate(flat_items), key=lambda pair: _evidence_item_sort_key(pair, rerank_first=True))]
 
 
 def _answer_record_evidence_item(
@@ -461,9 +458,8 @@ def _display_regions_for_record(
 
 
 def _display_regions_from_metadata(metadata: dict[str, Any]) -> list[dict[str, Any]]:
-    layout = metadata.get("layout") if isinstance(metadata.get("layout"), dict) else {}
-    raw = layout.get("display_regions")
-    return _normalize_display_regions(raw)
+    layout = metadata.get("layout")
+    return _normalize_display_regions(layout.get("display_regions") if isinstance(layout, dict) else None)
 
 
 def _display_regions_from_refs(refs: Sequence[Any]) -> list[dict[str, Any]]:
@@ -571,17 +567,16 @@ def _ascending_number_sort_key(value: Any) -> tuple[int, float]:
 def _best_mapping_number(value: Any) -> float | None:
     if not isinstance(value, dict):
         return None
-    numbers = [_finite_float(item) for item in value.values()]
-    numbers = [number for number in numbers if number is not None]
+    numbers = [number for item in value.values() if (number := _finite_float(item)) is not None]
     return max(numbers) if numbers else None
 
 
 def _best_evidence_rank(item: dict[str, Any]) -> float | None:
-    ranks = [_finite_float(item.get(key)) for key in ("vector_rank", "text_rank", "profile_rank")]
+    values = [item.get(key) for key in ("vector_rank", "text_rank", "profile_rank")]
     channel_ranks = item.get("channel_ranks")
     if isinstance(channel_ranks, dict):
-        ranks.extend(_finite_float(value) for value in channel_ranks.values())
-    ranks = [rank for rank in ranks if rank is not None and rank > 0]
+        values.extend(channel_ranks.values())
+    ranks = [rank for value in values if (rank := _finite_float(value)) is not None and rank > 0]
     return min(ranks) if ranks else None
 
 

@@ -947,6 +947,27 @@ def test_parser_registry_preserves_xlsx_table_cells() -> None:
     assert segments.segments[0].extraction.tables[0].cells[3].text == "1200"
 
 
+def test_parser_registry_does_not_put_uncached_formula_in_table_text() -> None:
+    """キャッシュ値の無い数式の文字列は表のセル(本文)にしない(#6006)。"""
+    data = _xlsx_formula_table_bytes(cached=False)
+    content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    profile = build_source_profile(
+        original_file_name="formula.xlsx",
+        sanitized_file_name="formula.xlsx",
+        content_type=content_type,
+        file_size_bytes=len(data),
+        content_sha256="8" * 64,
+        data=data,
+    )
+
+    result = parse_with_registry(data, source_profile=profile, content_type=content_type)
+
+    assert result.extraction is not None
+    table = result.extraction.tables[0]
+    assert all(not cell.text.startswith("=") for cell in table.cells)
+    assert "=SUM" not in result.extraction.raw_text
+
+
 def test_parser_registry_preserves_xlsx_formula_lineage() -> None:
     """XLSX formula cell は table metadata と equation chunk に残す。"""
     data = _xlsx_formula_table_bytes()
@@ -3241,7 +3262,7 @@ def _xlsx_table_bytes(rows: list[list[str]]) -> bytes:
     )
 
 
-def _xlsx_formula_table_bytes() -> bytes:
+def _xlsx_formula_table_bytes(*, cached: bool = True) -> bytes:
     shared = "<sst><si><t>項目</t></si><si><t>合計</t></si></sst>"
     worksheet = (
         "<worksheet><sheetData>"
@@ -3251,7 +3272,7 @@ def _xlsx_formula_table_bytes() -> bytes:
         "</row>"
         '<row r="2">'
         '<c r="A2"><v>1200</v></c>'
-        '<c r="B2"><f>SUM(A2:A2)</f><v>1200</v></c>'
+        f'<c r="B2"><f>SUM(A2:A2)</f>{"<v>1200</v>" if cached else ""}</c>'
         "</row>"
         "</sheetData></worksheet>"
     )

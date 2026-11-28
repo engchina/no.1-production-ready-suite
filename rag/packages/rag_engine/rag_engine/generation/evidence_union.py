@@ -107,7 +107,9 @@ def _ranked_together(context: AnswerContext, added: list[AnswerRecord]) -> tuple
     def lowered(record: Any) -> Any:
         score = _rerank_score(record)
         rank = record.metadata["rerank"].get("rank") if score is not None else None
-        ahead = sum(value > score for value, _ in roots) if isinstance(rank, int) and score is not None else 0
+        if score is None or not isinstance(rank, int):
+            return record
+        ahead = sum(value > score for value, _ in roots)
         if not ahead:
             return record
         return replace(record, metadata={**record.metadata, "rerank": {**record.metadata["rerank"], "rank": rank + ahead}})

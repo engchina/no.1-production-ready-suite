@@ -297,16 +297,18 @@ def read_excel(
             skipped.append(SkippedSheet(name=grid.name, reason="hidden"))
             continue
         sheet_ranges = _ranges_for(grid.name, ranges)
-        tables = sheet_tables(_crop(grid, sheet_ranges) if sheet_ranges else grid, options)
+        target = _crop(grid, sheet_ranges) if sheet_ranges else grid
+        # キャッシュ値の無い数式は本文に入れないので、表にならないシート・範囲でも件数と位置を
+        # 知らせる(#6006)。
+        if target.missing_formula_cells:
+            warnings.append(formula_without_cached_value_warning(grid.name, target))
+        tables = sheet_tables(target, options)
         if not tables:
             skipped.append(SkippedSheet(name=grid.name, reason="empty"))
             continue
         diagnostics = [item for sheet in tables for item in sheet.diagnostics]
         if any(item.code == "header_low_confidence" for item in diagnostics):
             warnings.append(f"excel_header_low_confidence:{grid.name}")
-        missing = sum(1 for item in diagnostics if item.code == "formula_without_cached_value")
-        if missing:
-            warnings.append(f"excel_formula_without_cached_value:{grid.name}:{missing}")
         sheets.extend(tables)
     for key in options.column_roles:
         # 指定した列がどのシートにも無ければ警告する（列名の書き違いに気付けるように）。
@@ -322,6 +324,20 @@ def read_excel(
         source_format="xlsx" if is_xlsx else "xls", sheets=sheets, skipped_sheets=skipped
     )
     return ExcelReadResult(document, warnings=tuple(warnings))
+
+
+# warning に載せるキャッシュ値の無い数式のセルの位置の数(件数は全体を載せる)。
+FORMULA_WARNING_CELL_LIMIT = 5
+
+
+def formula_without_cached_value_warning(sheet: str, grid: Grid) -> str:
+    """``excel_formula_without_cached_value:<シート>:<件数>:<先頭のセル,…>`` の warning。
+
+    シート名は ``:`` を含みうるので、読む側は件数とセルを末尾から取る。
+    """
+    cells = sorted(grid.missing_formula_cells)
+    refs = ",".join(f"{column_letter(col)}{row}" for row, col in cells[:FORMULA_WARNING_CELL_LIMIT])
+    return f"excel_formula_without_cached_value:{sheet}:{len(cells)}:{refs}"
 
 
 # ---- 読み取り ------------------------------------------------------------------------
@@ -359,9 +375,9 @@ def _read_xlsx(
                     is_formula = isinstance(formula, str) and formula.startswith("=")
                     if cell.value is None:
                         if is_formula:
-                            # キャッシュの無い数式は空にせず、数式の文字列にして診断を残す。
+                            # キャッシュの無い数式は値が分からない。数式の文字列は値ではないので
+                            # セルの値(本文)にせず、位置つきの診断と warning で知らせる(#6006)。
                             grid.missing_formula_cells.add((cell.row, cell.column))
-                            grid.cells[(cell.row, cell.column)] = str(formula)
                         continue
                     text = _format_value(cell.value, cell.number_format, is_date=cell.is_date)
                     if text:

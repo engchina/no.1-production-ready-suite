@@ -671,7 +671,7 @@ def _by_document(entries: Sequence[CheckedItem], order: Mapping[tuple[str, ...],
 
 def _scope_decisions(plan: Any, label: str) -> list[Any]:
     """同じ根拠の別主張に重ねた同一の判断をまとめ、矛盾する判断は残す。"""
-    unique = {}
+    unique: dict[tuple[str, str], Any] = {}
     for scope in plan.evidence_scope:
         if scope.evidence_id == label:
             key = (scope.relation, scope.link_quote.strip() if scope.relation == "linked" else "")
@@ -1167,7 +1167,7 @@ def _shown_as_quote(entry: CheckedItem) -> bool:
     """
     if entry.quote_only:
         return True
-    return entry.published and bool(entry.span) and entry.item.applies == "unverified" and not entry.state
+    return entry.published and bool(entry.span) and entry.item.applies == "unverified"
 
 
 def _displayed_quote(entry: CheckedItem) -> str:
@@ -1398,16 +1398,6 @@ def user_condition_lines(settled: SettledConfirmations) -> list[str]:
 
 # ---- 廃止・旧版の文書（#1492） ----------------------------------------------------
 # 版を比べる・旧版を尋ねる質問。旧版の記載はそのまま答えに使う。
-
-
-def render(summary: str, checked: Sequence[CheckedItem], unanswered: Sequence[str] = (), confirmations: Sequence[str] = ()) -> str:
-    """kind と検査結果から本文を決定的に組み立てる。プレーンテキスト、出典は説明直後の独立行。
-
-    unanswered は説明の無い要求の説明。回答本文に出さないと、質問の一部が
-    黙って落ちる（insufficient_reason には残っていたが本文には出ていなかった）(#622)。
-    confirmations は回答の確定に必要な実データ・別の資料の確認（`confirmation_lines`）。最後の節に出す (#688)。
-    """
-    return render_with_citations(summary, checked, unanswered, confirmations)[0]
 
 
 def _citation_coordinate_ranges(span: Mapping[str, Any], proof: Mapping[str, Any]) -> list[tuple[int, int]]:

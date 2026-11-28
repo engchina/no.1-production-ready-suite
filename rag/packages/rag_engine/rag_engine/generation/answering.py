@@ -3392,9 +3392,9 @@ def answer_question_result(
         (vector_query,) = _merge_retrieval_queries(normalized_question)
         retrieval_queries: tuple[str, ...] = (vector_query,)
         original_query_only = bool(getattr(settings, "original_query_only", False))
-        expanded = runtime_knowledge.expanded_question != runtime_knowledge.original_question
+        question_expanded = runtime_knowledge.expanded_question != runtime_knowledge.original_question
         text_query = vector_query
-        if expanded and not original_query_only:
+        if question_expanded and not original_query_only:
             # 原質問と同じ形（NFKC・制御文字の除去・空白の正規化）にする。
             # 用語・同義語を足した文（利用者の質問で照合した）の後ろにも、質問に足す文を足す（#5848）。
             text_query = (

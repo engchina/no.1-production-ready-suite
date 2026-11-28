@@ -43,7 +43,7 @@ explicit = true
 
 [dependency-groups]
 # CI（`RAG / Engine`）は `uv sync --locked` で入れる。lock から取るので PyPI の索引に頼らない（#387）。
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "mypy>=1.14"]
 
 [build-system]
 requires = ["hatchling"]
@@ -51,6 +51,15 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["rag_engine"]
+
+# 回答生成（generation）を型検査する（CI の `RAG / Engine`。#2861）。ほかの package の既存の型エラーは
+# 範囲を広げるときに直すので、import 先のエラーは出さない（follow_imports = "silent"）。
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+files = ["rag_engine/generation"]
+follow_imports = "silent"
+check_untyped_defs = true
 
 [tool.ruff]
 line-length = 140

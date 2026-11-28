@@ -530,3 +530,26 @@ def test_procedure_sheet_keeps_trailing_single_cell_rows_in_the_last_step() -> N
     assert sheet.mode == "procedure"
     assert sheet.notes == []
     assert "※ 合成の補足" in sheet.blocks[-1].lines[-1]
+
+
+def test_formula_without_cached_value_is_not_a_cell_value() -> None:
+    """キャッシュ値の無い数式の文字列は値にせず、件数と先頭のセルの位置を warning に出す(#6006)。"""
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    assert worksheet is not None
+    worksheet.title = "S"
+    worksheet.append(["単価", "数量", "金額"])
+    for row in range(2, 9):
+        worksheet.append([100, row, f"=A{row}*B{row}"])
+
+    result = read_excel(_bytes(workbook))
+
+    assert result.document is not None
+    [sheet] = result.document.sheets
+    assert all("金額" not in block.values for block in sheet.blocks)
+    assert not any(
+        value.startswith("=") for block in sheet.blocks for value in block.values.values()
+    )
+    assert "excel_formula_without_cached_value:S:7:C2,C3,C4,C5,C6" in result.warnings
+    cells = [item.cell for item in sheet.diagnostics if item.code == "formula_without_cached_value"]
+    assert cells == [f"C{row}" for row in range(2, 9)]

@@ -41,8 +41,10 @@ from rag_engine.generation.answer_models import AnswerContext
 from rag_engine.generation.answer_records import AnswerRecord, _stored_chunk_answer_record
 from rag_engine.resources.deadline import ANSWER_FINALIZE_RESERVE_SECONDS, DEFAULT_GENERATION_ROUND_SECONDS
 from rag_engine.retrieval.context_builder import (
+    ChildEvidenceRole,
     ContextChildEvidence,
     ContextParentEvidence,
+    ParentEvidenceRole,
     context_bundle_from_parent_evidence,
 )
 
@@ -50,7 +52,7 @@ from rag_engine.retrieval.context_builder import (
 ROOT_SECTION_ID = "document"
 # 広げた章節の根拠の役割（context の parent の理由と child の役割）。
 SECTION_EXPANSION_REASON = "section_expansion"
-SECTION_CONTEXT_ROLE = "section_context"
+SECTION_CONTEXT_ROLE: ChildEvidenceRole = "section_context"
 # モデルの入力の上限の既定（tokens。platform の DEFAULT_ENTERPRISE_AI_MAX_INPUT_TOKENS と同じ。#1437）。
 DEFAULT_MODEL_INPUT_TOKENS = 128_000
 # 広げる段の上限の最大（1 = 所有の章節。#5812）。
@@ -424,7 +426,7 @@ class SectionReader:
             group_key = str(getattr(record, "parent_chunk_uid", "") or "") or _record_key(record)
             grouped.setdefault(group_key, []).append(record)
 
-        def evidence(record: AnswerRecord, members: Sequence[AnswerRecord], role: str) -> ContextParentEvidence:
+        def evidence(record: AnswerRecord, members: Sequence[AnswerRecord], role: ParentEvidenceRole) -> ContextParentEvidence:
             return ContextParentEvidence(
                 record=record,
                 role=role,
@@ -432,7 +434,7 @@ class SectionReader:
                 children=tuple(
                     ContextChildEvidence(
                         record=child,
-                        role=SECTION_CONTEXT_ROLE,  # type: ignore[arg-type]
+                        role=SECTION_CONTEXT_ROLE,
                         reason=SECTION_EXPANSION_REASON,
                     )
                     for child in members

@@ -29,6 +29,7 @@ from rag_pipeline_core.chunking import (
 from app.rag.answer_engine import _SearchState, _stored_child, _stored_parents
 from app.rag.chunking_small_to_big import build_parent_child_chunks
 from app.rag.chunking_strategy import SmallToBigParams
+from app.schemas.extraction import StructuredExtraction
 from app.schemas.search import RetrievedChunk
 
 FIXTURE = (
@@ -183,3 +184,62 @@ def test_parent_without_recorded_ranges_drops_the_child_ranges() -> None:
     assert NON_SOURCE_RANGES_KEY not in parent.metadata
     plain = _child(1, "本文だけの行です。", "本文だけの行です。")
     assert NON_SOURCE_RANGES_KEY not in _stored_child(plain, rrf_score=1.0).metadata
+
+
+def _layout_record(seq: int, category: str, text: str, raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": f"docling-p1-{seq}",
+        "engine": "docling",
+        "page": 1,
+        "seq_no": seq,
+        "bbox": [50, 100 * seq, 900, 100 * seq + 80],
+        "coord_system": "image_top_left",
+        "page_width": 1000,
+        "page_height": 1400,
+        "category": category,
+        "text": text,
+        "raw_type": category.lower(),
+        "raw": raw,
+    }
+
+
+def test_layout_image_marker_is_non_source_in_the_child_and_the_parent() -> None:
+    """本文の無い図の chunk の画像の標識を、子と親の原文に無い範囲として回答まで運ぶ（#5793）。"""
+    body = "合成の手順の本文です。設定画面で値を入力します。"
+    picture_raw = {"vision_crop": "docling/vision/docling-p1-2.png", "vision_error": "timeout"}
+    extraction = StructuredExtraction(
+        raw_text=body,
+        parser_artifacts={
+            "layout_records": {
+                "version": 1,
+                "pages": [{"page": 1, "width": 1000, "height": 1400}],
+                "records": [
+                    _layout_record(1, "Text", body, {}),
+                    _layout_record(2, "Picture", "", picture_raw),
+                ],
+            }
+        },
+    )
+    chunks = build_parent_child_chunks(extraction, source_name="synthetic.pdf")
+    marker = next(chunk for chunk in chunks if "Image evidence" in chunk.text)
+    assert _ranges(marker.text, marker.metadata) == ((0, len(marker.text)),)
+    parent_text = str(marker.metadata["parent_text"])
+    parent_ranges = load_ranges(marker.metadata[PARENT_NON_SOURCE_RANGES_KEY], len(parent_text))
+    assert [parent_text[a:b] for a, b in parent_ranges] == [marker.text]
+
+    children = [
+        _child(
+            index,
+            chunk.text,
+            parent_text,
+            **{
+                key: chunk.metadata[key]
+                for key in (NON_SOURCE_RANGES_KEY, PARENT_NON_SOURCE_RANGES_KEY)
+                if key in chunk.metadata
+            },
+        )
+        for index, chunk in enumerate(chunks)
+    ]
+    stored = [_stored_child(value, rrf_score=1.0) for value in children]
+    (parent,) = _stored_parents(stored, _SearchState(chunks={c.chunk_id: c for c in children}))
+    assert _ranges(parent.text, parent.metadata) == parent_ranges
