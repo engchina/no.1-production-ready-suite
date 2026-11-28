@@ -201,6 +201,11 @@ function resolveColors(host: HTMLElement, kinds: readonly GraphExplorerNodeKind[
 const NODE_FONT_SIZE = 13;
 const EDGE_FONT_SIZE = 11;
 const LABEL_MIN_PX = 7;
+/**
+ * 開いた直後の縮尺の下限（#5973）。名前が画面上で 8px 強になり、節点の名前を読める。名前を隠す縮尺（0.54）
+ * ちょうどでは 7px で読みにくいので、それより大きくする。全体表示・手の操作はこれより縮められる。
+ */
+const OPEN_MIN_ZOOM = 0.65;
 
 /**
  * 画布の見た目（C 案）。中くらいの円、名前は円の下に 2 行まで（座標の 13px。読める縮尺の下限 0.8 で 10px 前後）。
@@ -356,7 +361,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
   const controls = useRef<HTMLDivElement>(null);
   const hovered = useRef<string | null>(null);
   /** 全体を収めたときの表示。利用者が動かすまでは、画布の大きさが変わったとき・ノードを足したときに収め直す。 */
-  const allFitted = useRef<GraphViewport | null>(null);
+  const allFitted = useRef<(GraphViewport & { overview: boolean }) | null>(null);
   const cyRef = useRef<Core | null>(null);
   const laidOut = useRef<string | null>(null);
   const syncingSelection = useRef(false);
@@ -389,7 +394,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
    * 範囲を画布に合わせる。`ids` を省くと図の全体。縮尺の下限の既定は読める縮尺（選択に合わせる・展開の後）。
    * 余白は、画布に重ねた操作の行（広い画面は上、狭い画面は下）の分を空ける。
    */
-  const fitTo = useCallback((ids?: readonly string[], maxZoom = 1, minZoom = GRAPH_READABLE_MIN_ZOOM) => {
+  const fitTo = useCallback((ids?: readonly string[], maxZoom = 1, minZoom = GRAPH_READABLE_MIN_ZOOM, centered = false) => {
     const cy = cyRef.current;
     if (!cy || !cy.width() || !cy.height()) return;
     const visible = cy.elements().not(".hidden");
@@ -406,16 +411,21 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
       padding,
       minZoom,
       maxZoom,
+      align: centered ? { x: "center", y: "center" } : undefined,
     });
     cy.viewport({ zoom: viewport.zoom, pan: { x: viewport.x, y: viewport.y } });
   }, []);
-  /** 図の全体を画布に収める（初期表示・全体表示・自動配置に戻す。下限は手で縮める下限。#5953）。 */
-  const fitAll = useCallback(() => {
-    fitTo(undefined, 1, GRAPH_OVERVIEW_MIN_ZOOM);
+  /**
+   * 図の全体に合わせる。初期表示・自動配置に戻すは、節点の名前を読める縮尺（`OPEN_MIN_ZOOM`）より縮めない（全体が収まらない図は
+   * 中央を表示し、残りは動かして見る。名前の無い丸だけの図にしない。#5973）。`overview`（「全体表示」）は
+   * 手で縮める下限まで縮めて全体を収める（#5953）。
+   */
+  const fitAll = useCallback((overview = false) => {
+    fitTo(undefined, 1, overview ? GRAPH_OVERVIEW_MIN_ZOOM : OPEN_MIN_ZOOM, true);
     const cy = cyRef.current;
-    allFitted.current = cy ? { ...cy.pan(), zoom: cy.zoom() } : null;
+    allFitted.current = cy ? { ...cy.pan(), zoom: cy.zoom(), overview } : null;
   }, [fitTo]);
-  /** 全体を収めたまま（利用者が動かしていない）か。 */
+  /** 全体に合わせたまま（利用者が動かしていない）か。 */
   const stillFitted = useCallback(() => {
     const cy = cyRef.current;
     const last = allFitted.current;
@@ -496,7 +506,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
 
   useImperativeHandle(ref, () => ({
     focusNode: (id: string) => { selectOnly(id); centerOn(id); },
-    fit: () => { remember(); fitAll(); },
+    fit: () => { remember(); fitAll(true); },
   }), [centerOn, fitAll, remember, selectOnly]);
 
   // 画布を作る（1 度だけ）。
@@ -564,7 +574,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     });
     // 全体を収めたまま（利用者が動かしていない）なら、画布の大きさが変わったときに収め直す（隠れていた画布が
     // 見えたとき・全画面・詳細の開閉）。
-    cy.on("resize", () => { if (stillFitted()) fitAll(); });
+    cy.on("resize", () => { if (stillFitted()) fitAll(allFitted.current?.overview); });
     // 要素の増減は、反映の effect の終わりで出す（追加の batch の中で範囲を測ると、名前の大きさが決まる前の
     // 範囲が cache に残り、最初の配置が名前を含まない大きさで計算される）。
     cy.on("viewport layoutstop", report);
@@ -638,10 +648,12 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
     if (!added.length) return;
     const fixed = [...existing].map(([nodeId, position]) => ({ nodeId, position }));
     cy.layout(layoutOptions(cy, fixed)).run();
-    // 全体を収めたまま（利用者が動かしていない）なら、足した後も全体を収める（足したノードを画面の外に出さない）。
+    // 全体に合わせたまま（利用者が動かしていない）なら、足した後も同じ合わせ方にする。全体が収まれば、足した
+    // ノードも画面の中にある。名前を読める縮尺で収まらない図は中央を表示するので、足したノードが外なら下で合わせる。
     if (stillFitted()) {
-      fitAll();
-      return;
+      fitAll(allFitted.current?.overview);
+      const box = cy.elements().not(".hidden").renderedBoundingBox({ includeLabels: true });
+      if (box.x1 >= 0 && box.y1 >= 0 && box.x2 <= cy.width() && box.y2 <= cy.height()) return;
     }
     // 足したノードが画面の外なら、足したノードとつながる既存のノードに合わせる（縮尺は読める大きさ以上）。
     // 名前を含む範囲が画布の端（上は右上の操作の分）に掛かるものも外とみなす。
@@ -859,7 +871,7 @@ export const GraphExplorer = forwardRef<GraphExplorerHandle, GraphExplorerProps>
         <div ref={controls} className="absolute right-3 top-3 z-10 flex max-w-[calc(100%-1.5rem)] items-center gap-1 overflow-x-auto rounded-md border border-border bg-surface p-1 shadow-sm max-sm:bottom-3 max-sm:top-auto">
           <Button type="button" size="sm" variant="ghost" iconOnly icon={Plus} aria-label={labels.zoomIn} onClick={() => zoomBy(1.2)} />
           <Button type="button" size="sm" variant="ghost" iconOnly icon={Minus} aria-label={labels.zoomOut} onClick={() => zoomBy(1 / 1.2)} />
-          <Button type="button" size="sm" variant="ghost" iconOnly icon={Maximize2} aria-label={labels.fit} onClick={() => { remember(); fitAll(); }} />
+          <Button type="button" size="sm" variant="ghost" iconOnly icon={Maximize2} aria-label={labels.fit} onClick={() => { remember(); fitAll(true); }} />
           <Button type="button" size="sm" variant="ghost" iconOnly icon={Focus} aria-label={labels.focus} disabled={!selectedNodes.length}
             onClick={() => { remember(); fitTo(selectedNodes); }} />
           <Button type="button" size="sm" variant="ghost" iconOnly icon={Undo2} aria-label={labels.previous} disabled={!history.length} onClick={previous} />

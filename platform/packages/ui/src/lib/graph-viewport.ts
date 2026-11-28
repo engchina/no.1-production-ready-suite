@@ -33,9 +33,13 @@ export function graphBounds(rects: Iterable<GraphRect>): GraphRect | null {
   return Number.isFinite(left) ? { x: left, y: top, width: right - left, height: bottom - top } : null;
 }
 
+/** 下限の縮尺で収まらない向きの合わせ方（start = 左・上の端、end = 右・下の端、center = 範囲の中央）。 */
+export type GraphViewportAlign = "start" | "end" | "center";
+
 /**
  * 範囲を画布に合わせる表示（React Flow の viewport）。縮尺は `minZoom`〜`maxZoom` に収め、
- * 下限で収まらない向きは `align` の端（start = 左・上、end = 右・下）を画布の端にそろえる。収まる向きは中央。
+ * 下限で収まらない向きは `align` の端（start = 左・上、end = 右・下）を画布の端にそろえるか、範囲の中央
+ * （center）を画布の中央に置く。収まる向きは中央。
  */
 export function graphReadableViewport({
   bounds,
@@ -50,15 +54,15 @@ export function graphReadableViewport({
   padding?: GraphViewportPadding;
   minZoom?: number;
   maxZoom?: number;
-  align?: { x?: "start" | "end"; y?: "start" | "end" };
+  align?: { x?: GraphViewportAlign; y?: GraphViewportAlign };
 }): GraphViewport {
   const padding = typeof paddingInput === "number" ? { top: paddingInput, right: paddingInput, bottom: paddingInput, left: paddingInput } : paddingInput;
   const room = { width: Math.max(1, frame.width - padding.left - padding.right), height: Math.max(1, frame.height - padding.top - padding.bottom) };
   const fit = Math.min(room.width / Math.max(1, bounds.width), room.height / Math.max(1, bounds.height));
   const zoom = Math.min(maxZoom, Math.max(minZoom, fit));
   // 収まる向きは余白の内側の中央、収まらない向きは指定の端をそろえる。
-  const place = (start: number, length: number, before: number, roomLength: number, side: "start" | "end") => {
-    if (length * zoom <= roomLength) return before + roomLength / 2 - (start + length / 2) * zoom;
+  const place = (start: number, length: number, before: number, roomLength: number, side: GraphViewportAlign) => {
+    if (length * zoom <= roomLength || side === "center") return before + roomLength / 2 - (start + length / 2) * zoom;
     return side === "end" ? before + roomLength - (start + length) * zoom : before - start * zoom;
   };
   return {
