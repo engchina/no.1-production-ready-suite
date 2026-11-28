@@ -9,9 +9,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import unicodedata
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from typing import Any
 
 from app.clients.oracle import (
@@ -284,16 +285,26 @@ class WikiGraphStore:
             }
         document_id = str(selected["document_id"])
         page_id = str(selected["page_id"])
-        rows = await self.oracle._fetch_all(
-            f"""WITH {cte}
-            SELECT 'outgoing' AS direction,e.relation,other.page_id
-            FROM rag_wiki_graph_deps e JOIN visible other ON other.unit_id=e.target_unit_id
-            WHERE e.page_id=:graph_page AND other.document_id=:graph_doc
-            UNION ALL
-            SELECT 'incoming',e.relation,other.page_id
-            FROM rag_wiki_graph_deps e JOIN visible other ON other.page_id=e.page_id
-            WHERE e.target_unit_id=:graph_unit AND other.document_id=:graph_doc""",
-            {**binds, "graph_page": page_id, "graph_doc": document_id, "graph_unit": unit_id},
+        # 互いに依存しない読み取りは並行に読む。1 要求で 8 本を順に読むと、DB の 1 本ごとの待ちが
+        # 積み重なり、並行の要求で読み取りの上限を超えた（#5966）。
+        rows, names, references = await asyncio.gather(
+            self.oracle._fetch_all(
+                f"""WITH {cte}
+                SELECT 'outgoing' AS direction,e.relation,other.page_id
+                FROM rag_wiki_graph_deps e JOIN visible other ON other.unit_id=e.target_unit_id
+                WHERE e.page_id=:graph_page AND other.document_id=:graph_doc
+                UNION ALL
+                SELECT 'incoming',e.relation,other.page_id
+                FROM rag_wiki_graph_deps e JOIN visible other ON other.page_id=e.page_id
+                WHERE e.target_unit_id=:graph_unit AND other.document_id=:graph_doc""",
+                {**binds, "graph_page": page_id, "graph_doc": document_id, "graph_unit": unit_id},
+            ),
+            self._document_names(kb_id),
+            self.oracle._fetch_all(
+                """SELECT target_name,target_section,relation FROM rag_wiki_references
+                WHERE page_id=:graph_page ORDER BY ordinal""",
+                {"graph_page": page_id},
+            ),
         )
         items: list[dict[str, Any]] = [
             {
@@ -304,19 +315,14 @@ class WikiGraphStore:
             }
             for row in rows
         ]
-        names = await self._document_names(kb_id)
-        references = await self.oracle._fetch_all(
-            """SELECT target_name,target_section,relation FROM rag_wiki_references
-            WHERE page_id=:graph_page ORDER BY ordinal""",
-            {"graph_page": page_id},
-        )
         outgoing = [
             (row, names.resolve(str(row["target_name"]), exclude=document_id)) for row in references
         ]
         targets = {target for _, docs in outgoing for target in docs}
         keys = sorted(names.keys(document_id))
         aliases = sorted(names.aliases(document_id))
-        incoming = []
+        candidates: list[dict[str, Any]] = []
+        candidate_query: Awaitable[list[dict[str, Any]]] | None = None
         if keys or aliases:
             # 種類の呼び名で書いた参照も拾い、当たる文書は出る向きと同じ照合で決める（#5795）。
             clauses: list[str] = []
@@ -327,7 +333,7 @@ class WikiGraphStore:
             for index, alias in enumerate(aliases):
                 clauses.append(f"INSTR(:graph_ref_alias{index},r.target_key)>0")
                 extra[f"graph_ref_alias{index}"] = alias
-            candidates = await self.oracle._fetch_all(
+            candidate_query = self.oracle._fetch_all(
                 f"""WITH {cte}
                 SELECT r.relation,r.target_key,r.target_section,v.page_id,v.document_id
                 FROM rag_wiki_references r
@@ -336,15 +342,20 @@ class WikiGraphStore:
                 ORDER BY v.page_id,r.ordinal""",
                 {**binds, **extra, "graph_doc": document_id},
             )
-            incoming = [
-                row
-                for row in candidates
-                if document_id
-                in names.resolve_key(str(row["target_key"]), exclude=str(row["document_id"]))
-            ]
-            if incoming:
-                targets.add(document_id)
-        paths = await self._reference_targets(kb_id, sorted(targets))
+            # 自分を指す参照の章節は自分の文書の単位で解くので、参照先の候補と一緒に先に読む。
+            targets.add(document_id)
+        if candidate_query is None:
+            paths = await self._reference_targets(kb_id, sorted(targets))
+        else:
+            candidates, paths = await asyncio.gather(
+                candidate_query, self._reference_targets(kb_id, sorted(targets))
+            )
+        incoming = [
+            row
+            for row in candidates
+            if document_id
+            in names.resolve_key(str(row["target_key"]), exclude=str(row["document_id"]))
+        ]
         for row, docs in outgoing:
             section = str(row.get("target_section") or "")
             matches: list[str | None] = [*docs] or [None]
@@ -401,12 +412,12 @@ class WikiGraphStore:
                     target = item["page_id"] if len(targets_by_group[group]) <= limit else None
                     representatives.setdefault((*group, target), item)
         preview_ids = {item["page_id"] for item in representatives.values()}
-        connections: list[dict[str, Any]] = []
+        connection_query: Awaitable[list[dict[str, Any]]] | None = None
         if len(preview_ids) > 1:
             clause, page_binds = _oracle_in_predicate(
                 "page_id", "preview_page", sorted(preview_ids)
             )
-            connections = await self.oracle._fetch_all(
+            connection_query = self.oracle._fetch_all(
                 f"""WITH shown_pages AS (
                     SELECT page_id,unit_id,document_id FROM rag_wiki_pages WHERE {clause}
                 )
@@ -416,13 +427,18 @@ class WikiGraphStore:
                 WHERE s.unit_id<>t.unit_id ORDER BY s.unit_id,t.unit_id,e.relation""",
                 page_binds,
             )
-        units = await self._unit_refs(
+        unit_query = self._unit_refs(
             [
                 item["page_id"]
                 for item in [*page_items, *representatives.values()]
                 if item["page_id"]
             ]
         )
+        if connection_query is None:
+            connections: list[dict[str, Any]] = []
+            units = await unit_query
+        else:
+            connections, units = await asyncio.gather(connection_query, unit_query)
 
         def entry(item: dict[str, Any]) -> dict[str, Any]:
             return {
@@ -535,10 +551,23 @@ class WikiGraphStore:
         # 範囲の照合は上の 1 回だけ。依存と参照は、範囲にあると確かめた案内の ID で引く（#5966）。
         # 線の相手は選んだ単位（範囲の中）だけを採るので、相手の側を範囲で照合し直さない。
         page_clause, page_binds = _oracle_in_predicate("e.page_id", "graph_conn_p", list(by_page))
-        deps = await self.oracle._fetch_all(
-            f"""SELECT e.page_id,e.target_unit_id AS target_id,e.relation
-            FROM rag_wiki_graph_deps e WHERE {page_clause}""",
-            page_binds,
+        source_clause, source_binds = _oracle_in_predicate(
+            "r.page_id", "graph_conn_s", list(by_page)
+        )
+        # 依存・参照・文書の名前は互いに依存しないので並行に読む（#5966）。名前は参照が無ければ
+        # 使わないが、参照を読んでから名前を読むと 1 段ぶん待ちが増える。
+        deps, reference_rows, names = await asyncio.gather(
+            self.oracle._fetch_all(
+                f"""SELECT e.page_id,e.target_unit_id AS target_id,e.relation
+                FROM rag_wiki_graph_deps e WHERE {page_clause}""",
+                page_binds,
+            ),
+            self.oracle._fetch_all(
+                f"""SELECT r.page_id,r.target_name,r.target_section,r.relation
+                FROM rag_wiki_references r WHERE {source_clause}""",
+                source_binds,
+            ),
+            self._document_names(kb_id),
         )
         found: dict[tuple[str, str, str], str] = {}
         for row in deps:
@@ -547,23 +576,15 @@ class WikiGraphStore:
             # 案内の依存は同じ文書の中だけ（別の文書は下の参照で解く）。
             if target != source and documents.get(target) == documents[source]:
                 found[(source, target, str(row["relation"]))] = "same_document"
-        source_clause, source_binds = _oracle_in_predicate(
-            "r.page_id", "graph_conn_s", list(by_page)
-        )
         references = [
             {
                 **row,
                 "source_id": by_page[str(row["page_id"])]["unit_id"],
                 "document_id": by_page[str(row["page_id"])]["document_id"],
             }
-            for row in await self.oracle._fetch_all(
-                f"""SELECT r.page_id,r.target_name,r.target_section,r.relation
-                FROM rag_wiki_references r WHERE {source_clause}""",
-                source_binds,
-            )
+            for row in reference_rows
         ]
         if references:
-            names = await self._document_names(kb_id)
             resolved = [
                 (row, names.resolve(str(row["target_name"]), exclude=str(row["document_id"])))
                 for row in references
