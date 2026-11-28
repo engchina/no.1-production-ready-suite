@@ -96,6 +96,14 @@ for (const viewport of VIEWPORTS) {
     const runId = String(mockApi.state.runs.at(-1)?.id ?? mockApi.state.runs[0].id);
     const feedback = page.getByTestId(`chat-feedback-${runId}`);
 
+    // 問いの下に、文字つきの 2 つのボタンを出す（RAG を使った回答の評価と同じ見た目。#5969）。
+    const question = feedback.getByText("この回答で質問は解決しましたか？", { exact: true });
+    const helpful = feedback.getByRole("button", { name: "解決した", exact: true });
+    await expect(helpful).toHaveText("解決した");
+    await expect(feedback.getByRole("button", { name: "解決しなかった", exact: true })).toHaveText("解決しなかった");
+    const [questionBox, helpfulBox] = await Promise.all([question.boundingBox(), helpful.boundingBox()]);
+    expect(helpfulBox!.y).toBeGreaterThanOrEqual(questionBox!.y + questionBox!.height - 1);
+
     // 👍 はすぐ保存する。
     await feedback.getByRole("button", { name: "解決した" }).click();
     await expect(page.getByText("フィードバックを保存しました。")).toBeVisible();
