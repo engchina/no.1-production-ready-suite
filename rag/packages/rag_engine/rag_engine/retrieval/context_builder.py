@@ -43,6 +43,8 @@ ChildEvidenceRole = Literal[
     "parent_context",
     "operation_context",
     "visual_context",
+    # 章節の拡張で読んだ chunk（``generation.section_expansion.SECTION_CONTEXT_ROLE``。#1436）。
+    "section_context",
 ]
 ParentEvidenceRole = Literal["synthesis_parent", "child_fallback"]
 

@@ -177,7 +177,7 @@ def _answer_record(raw_record: Any, engine_labels: dict[str, str], source_name: 
     from rag_engine.chunking.records import _vision_projection_status
     from rag_engine.parsing.picture_descriptions import reproject_saved_vision_record
 
-    raw_record = {**raw_record, "raw": dict(raw_record.get("raw")) if isinstance(raw_record.get("raw"), dict) else {}}
+    raw_record = {**raw_record, "raw": dict(saved_raw) if isinstance(saved_raw := raw_record.get("raw"), dict) else {}}
     reproject_saved_vision_record(raw_record)
     state = _vision_projection_status(raw_record)
     raw = raw_record["raw"]

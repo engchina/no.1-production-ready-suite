@@ -425,7 +425,7 @@ def _format_execution_boundaries(execution_lines: Sequence[str]) -> list[str]:
         if not line.strip():
             continue
         if not line[0].isspace() and line.endswith(" 開始"):
-            node = {"name": line.removesuffix(" 開始"), "items": [], "status": "", "elapsed": None, "llm": 0}
+            node: dict[str, Any] = {"name": line.removesuffix(" 開始"), "items": [], "status": "", "elapsed": None, "llm": 0}
             stack[-1]["items"].append(node)
             stack.append(node)
         elif len(stack) > 1 and line.startswith(stack[-1]["name"] + " 終了"):
@@ -530,9 +530,7 @@ def _record_answer_execution(function):
             if not lines:
                 raise
             display = format_question_display(extract_original_question(question), _structured_execution_lines(steps) if steps else lines)
-            error = AnswerExecutionError(str(exc), display)
-            error.execution_steps = tuple(steps)
-            raise error from exc
+            raise AnswerExecutionError(str(exc), display) from exc
         finally:
             _llm_usage.reset(usage_token)
             llm_call_count.reset(llm_token)
