@@ -68,10 +68,21 @@ _SCOPE_VERSION_SQL = (
     )
     + " FROM dual"
 )
-# ponytail: プロセスごとの LRU（範囲 8 つ）。変更の直後に同時に来た要求は、それぞれが読み直す
-# （1 回の読み込みにまとめない）。範囲の数が増えて読み直しが重なるなら、鍵ごとの読み込みを共有する。
+# ponytail: プロセスごとの LRU（範囲 8 つ）。読める範囲の違う利用者が 8 を超えて
+# 交互に開くなら増やす。
 _SCOPE_CACHE_SIZE = 8
 _SCOPES: OrderedDict[tuple[object, ...], GraphScope] = OrderedDict()
+# 読み込み中の範囲（鍵と版ごと）。画面は線 1 本と関係数件を同時に読むので、変更の直後に
+# 同時に来た要求は 1 回の読み込みを待つ（要求の数だけ範囲を照合すると DB の CPU を取り合う）。
+_LOADING: dict[tuple[object, ...], asyncio.Future[GraphScope]] = {}
+
+
+def _finish_loading(key: tuple[object, ...], done: asyncio.Future[GraphScope]) -> None:
+    if _LOADING.get(key) is done:
+        del _LOADING[key]
+    # 待つ要求が全部打ち切られた読み込みの失敗も、読んだことにする（未回収の警告を出さない）。
+    if not done.cancelled():
+        done.exception()
 
 
 @dataclass
@@ -89,6 +100,8 @@ class GraphScope:
     names: DocumentNames
     # 参照先の章節の候補。参照先になった文書の分だけ、最初に要るときに読む。
     targets: ReferenceTargets = field(default_factory=lambda: ReferenceTargets([]))
+    # 図に出す単位の見出し（案内 → 単位・文書・見出し・章節）。出した案内の分だけ読む。
+    refs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 class WikiGraphStore:
@@ -107,6 +120,19 @@ class WikiGraphStore:
         if cached is not None and version and cached.version == version:
             _SCOPES.move_to_end(key)
             return cached
+        if not version:
+            return await self._load_scope(kb_id, key, version)
+        loading = _LOADING.get((*key, version))
+        if loading is None or loading.get_loop() is not asyncio.get_running_loop():
+            loading = asyncio.ensure_future(self._load_scope(kb_id, key, version))
+            _LOADING[(*key, version)] = loading
+            loading.add_done_callback(lambda done: _finish_loading((*key, version), done))
+        # 待つ要求が読み取りの上限で打ち切られても、読み込みは他の要求のために続ける。
+        return await asyncio.shield(loading)
+
+    async def _load_scope(
+        self, kb_id: str, key: tuple[object, ...], version: tuple[object, ...]
+    ) -> GraphScope:
         cte, cte_binds = visible_pages_cte(kb_id)
         rows, names = await asyncio.gather(
             self.oracle._fetch_all(
@@ -507,11 +533,12 @@ class WikiGraphStore:
                 page_binds,
             )
         unit_query = self._unit_refs(
+            scope,
             [
                 item["page_id"]
                 for item in [*page_items, *representatives.values()]
                 if item["page_id"]
-            ]
+            ],
         )
         if connection_query is None:
             connections: list[dict[str, Any]] = []
@@ -683,7 +710,7 @@ class WikiGraphStore:
                 for doc in docs
                 if (page := targets.resolve(doc, str(row.get("target_section") or "")))
             ]
-            units = await self._unit_refs([page for _, page in pages])
+            units = await self._unit_refs(scope, [page for _, page in pages])
             wanted = set(ids)
             for row, page in pages:
                 linked = units.get(page, {}).get("id")
@@ -744,28 +771,30 @@ class WikiGraphStore:
             )
         return scope.targets
 
-    async def _unit_refs(self, page_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
-        if not page_ids:
-            return {}
-        clause, binds = _oracle_in_predicate("p.page_id", "graph_pages", sorted(set(page_ids)))
-        rows = await self.oracle._fetch_all(
-            f"""SELECT p.page_id,p.unit_id,p.document_id,d.file_name,
-            JSON_VALUE(p.page_json,'$.unit.title') AS title,
-            JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS section_path
-            FROM rag_wiki_pages p JOIN rag_documents d ON d.document_id=p.document_id
-            WHERE {clause}""",
-            binds,
-        )
-        return {
-            str(row["page_id"]): {
-                "id": row["unit_id"],
-                "document_id": row["document_id"],
-                "document_name": row["file_name"],
-                "label": row.get("title") or "",
-                "path": _json_list(row["section_path"]),
-            }
-            for row in rows
-        }
+    async def _unit_refs(
+        self, scope: GraphScope, page_ids: Sequence[str]
+    ) -> dict[str, dict[str, Any]]:
+        """図に出す単位の見出し。範囲の版の中で、案内ごとに 1 回だけ読む。"""
+        missing = sorted({page for page in page_ids if page not in scope.refs})
+        if missing:
+            clause, binds = _oracle_in_predicate("p.page_id", "graph_pages", missing)
+            rows = await self.oracle._fetch_all(
+                f"""SELECT p.page_id,p.unit_id,p.document_id,d.file_name,
+                JSON_VALUE(p.page_json,'$.unit.title') AS title,
+                JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS section_path
+                FROM rag_wiki_pages p JOIN rag_documents d ON d.document_id=p.document_id
+                WHERE {clause}""",
+                binds,
+            )
+            for row in rows:
+                scope.refs[str(row["page_id"])] = {
+                    "id": row["unit_id"],
+                    "document_id": row["document_id"],
+                    "document_name": row["file_name"],
+                    "label": row.get("title") or "",
+                    "path": _json_list(row["section_path"]),
+                }
+        return {page: scope.refs[page] for page in page_ids if page in scope.refs}
 
     async def _source_chunks(self, chunk_ids: Sequence[str]) -> list[dict[str, Any]]:
         """原文の位置（保存順）。案内が範囲にあることを確かめた後に読む。"""
