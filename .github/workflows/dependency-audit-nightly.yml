@@ -90,7 +90,9 @@ jobs:
           version="$(sed -n '/^name = "pip-audit"$/{n;s/^version = "\(.*\)"$/\1/p;}' rag/backend/uv.lock)"
           test -n "${version}"
           status=0
-          for lock in rag/packages/*/uv.lock rag/services/*/*/uv.lock; do
+          # rag/backend の per-adapter extra（ローカルの単一 adapter のデバッグ用。配備では入れない）も検査する。
+          # 上の「RAG / Backend」は既定の venv（extra なし）だけで、extra の古い依存を見逃した（#4994）。
+          for lock in rag/backend/uv.lock rag/packages/*/uv.lock rag/services/*/*/uv.lock; do
             dir="$(dirname "${lock}")"
             echo "::group::${dir}"
             (cd "${dir}" && uv export --locked --no-dev --all-extras --no-emit-local --format requirements.txt \
