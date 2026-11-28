@@ -331,3 +331,24 @@ def test_selection_over_the_limit_is_rejected() -> None:
     with pytest.raises(HTTPException) as raised:
         require_selection_within_limit(4, settings)
     assert raised.value.status_code == 422 and "3 件まで" in str(raised.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("only", [True, False])
+async def test_selected_only_does_not_add_the_first_chunk_of_the_document(
+    monkeypatch: pytest.MonkeyPatch, only: bool
+) -> None:
+    """文書の背景の先頭の chunk は、選んだ原文だけで答えるときは根拠に足さない（#5981）。"""
+    import app.rag.document_background as background
+
+    first = RetrievedChunk(
+        chunk_id="first", document_id="doc", file_name="合成.md", text="合成の先頭。", score=0.0
+    )
+
+    async def rows(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return [{"document_id": "doc", "first_chunk": first}]
+
+    monkeypatch.setattr(background, "selected_document_backgrounds", rows)
+    found = await _selected(only=only)._selected_document_backgrounds(request(), _SearchState(), [])
+    assert found[0]["document_id"] == "doc"
+    assert (found[0]["first_chunk"] is None) is only
