@@ -46,6 +46,7 @@ from rag_parser_core.extraction import (
     heading_level_from_prefix,
     numbered_heading,
 )
+from rag_parser_core.input_errors import is_invalid_input_error
 from rag_parser_core.language.text import text_patterns
 from rag_parser_core.parsed_table import (
     HEADER_CELL_KEY,
@@ -985,7 +986,7 @@ def _external_adapter_result(
         if backend == "xml_tree_json":
             return _xml_tree_json_adapter_result(source_bytes)
     except Exception as exc:
-        invalid_input = _is_invalid_input_error(exc)
+        invalid_input = is_invalid_input_error(exc)
         logger.exception(
             "external parser adapter failed",
             extra={
@@ -1005,46 +1006,6 @@ def _external_adapter_result(
         # backend は ``:`` の前を code として扱う。
         return _adapter_fallback_result(backend, f"{backend}_adapter_failed: {type(exc).__name__}")
     return _adapter_fallback_result(backend, f"{backend}_adapter_unsupported")
-
-
-# 「入力ファイル自体が不正(破損・偽装拡張子・暗号化)」を示す例外の型名。
-# core は pypdfium2 / PIL 等の adapter 依存を import できない(adapter 未導入環境でも
-# registry は import される)ため、型そのものではなく型名でマッチする。
-_INVALID_INPUT_EXCEPTION_NAMES = frozenset(
-    {
-        "PdfiumError",  # pypdfium2: "Data format error" 等
-        "PDFSyntaxError",  # pdfminer(unstructured)
-        "PSEOF",
-        "PSSyntaxError",
-        "UnidentifiedImageError",  # PIL(画像系 OCR adapter)
-        "BadZipFile",  # docx/pptx/xlsx(unstructured/docling)
-        "FileDataError",  # dots.ocr の公式 parser が内部で PDF を開けないとき
-        "EmptyFileError",
-    }
-)
-_INVALID_INPUT_MESSAGE_MARKERS = (
-    "data format error",
-    "cannot open broken document",
-    "not a pdf",
-    "cannot identify image",
-    "file has not been decrypted",
-    "password",
-)
-
-
-def _is_invalid_input_error(exc: BaseException) -> bool:
-    """例外連鎖を辿り、入力データ不正(破損ファイル等)由来かを判定する。"""
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        if type(current).__name__ in _INVALID_INPUT_EXCEPTION_NAMES:
-            return True
-        message = str(current).casefold()
-        if any(marker in message for marker in _INVALID_INPUT_MESSAGE_MARKERS):
-            return True
-        current = current.__cause__ or current.__context__
-    return False
 
 
 def _external_adapter_package_available(backend: str) -> bool:

@@ -2819,6 +2819,61 @@ def test_running_ingestion_job_does_not_overwrite_cancelled_status(
     assert fake_document_dependencies.documents[document_id].status == FileStatus.UPLOADED
 
 
+def test_ai_calls_in_cancelled_ingestion_job_are_not_sent(
+    fake_document_dependencies: FakeWorkspaceOracle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """job の中で作る AI の実行器は、取消の後の試行をモデルへ送らない(#5696)。"""
+    from pr_backend_core.bounded_calls import Attempt
+
+    from app.clients.ai_calls import make_ai_caller
+
+    document_id = _upload("cancel-ai-call.txt", "合成の本文".encode(), "text/plain")
+    queued_job = IngestionJob(
+        id="job-cancel-ai-call",
+        document_id=document_id,
+        status=IngestionJobStatus.QUEUED,
+        parser_profile="local_text_structure",
+        queued_at=datetime.now(UTC),
+    )
+    fake_document_dependencies.ingestion_jobs[queued_job.id] = queued_job
+    sent: list[int] = []
+
+    async def send(attempt: Attempt) -> str:
+        sent.append(attempt.number)
+        return "ok"
+
+    async def cancel_between_calls(
+        oracle: object,
+        job: IngestionJob,
+        *,
+        cancel_checker: object | None = None,
+        lease_owner: str | None = None,
+    ) -> documents_route._RecipeJobResult:
+        _ = oracle, job, cancel_checker, lease_owner
+        caller = make_ai_caller(get_settings(), "field_extraction")
+        assert await caller.call(send) == "ok"
+        current = fake_document_dependencies.ingestion_jobs[queued_job.id]
+        fake_document_dependencies.ingestion_jobs[queued_job.id] = current.model_copy(
+            update={
+                "status": IngestionJobStatus.CANCELLED,
+                "error_message": documents_route.INGESTION_JOB_CANCELLED_MESSAGE,
+                "finished_at": datetime.now(UTC),
+            }
+        )
+        await caller.call(send)
+        raise AssertionError("取消の後の試行を送った")
+
+    monkeypatch.setattr(documents_route, "_materialize_experiment_candidate", cancel_between_calls)
+
+    anyio.run(documents_route._run_ingestion_job, queued_job.id)
+
+    assert sent == [1]
+    assert fake_document_dependencies.ingestion_jobs[queued_job.id].status == (
+        IngestionJobStatus.CANCELLED
+    )
+
+
 def _interleave_between_job_read_and_write(
     monkeypatch: pytest.MonkeyPatch,
     fake: FakeWorkspaceOracle,

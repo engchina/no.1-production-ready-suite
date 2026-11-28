@@ -386,7 +386,13 @@ function AssistantColumn({
   const attachedImages = finished ? answerAttachedImages(answerDiagnostics, passageSource) : 0;
   // 登録済みQ&Aの回答をそのまま返した回答は、モデルが作っていないので見出しをモデル名にしない（#4788）。
   const faqDirect = finished && answerFromApprovedFaq(answerDiagnostics, passageSource);
-  const heading = faqDirect ? t("chat.column.faqDirect") : answerModelHeading(label, attachedImages);
+  // 見出しは回答の列が終わってから出す（RAG 検索の見出しと同じ時期）。作成中に出すと、本文の無い枠にモデル名
+  // だけが見える（共有の ChatAnswer は中身が空のときだけ枠を隠す。#5753）。停止・失敗した列は終わっているので出す。
+  const heading = streaming
+    ? null
+    : faqDirect
+      ? t("chat.column.faqDirect")
+      : answerModelHeading(label, attachedImages);
   const listId = useId();
   const answerBody = (
     <AnswerText

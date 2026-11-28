@@ -42,7 +42,12 @@ from app.rag.field_extraction_units import (
     plan_field_extraction_units,
     split_field_extraction_unit,
 )
-from app.rag.ingestion import IngestionPipeline, IngestionUserError
+from app.rag.ingestion import (
+    INGESTION_JOB_CANCELLED_MESSAGE,
+    IngestionCancelledError,
+    IngestionPipeline,
+    IngestionUserError,
+)
 from app.schemas.extraction import DocumentElement, ExtractionField, StructuredExtraction
 from tests.prompt_support import UneditedPromptOracle
 
@@ -577,6 +582,60 @@ async def test_ingestion_resumes_only_failed_units(
     assert len(resumed.texts) == 1 and "合成の印" in resumed.texts[0]
     outcome = _outcome(result)
     assert outcome["reused_unit_count"] == outcome["unit_count"] - 1 == failed_calls - 1
+
+
+def _cancel_after(llm: _ScriptedLlm, sends: int) -> Any:
+    """``sends`` 回モデルへ送った後に取り消される job の関門(取込の job の取消の検査の代わり)。"""
+
+    async def gate() -> None:
+        if len(llm.texts) >= sends:
+            raise IngestionCancelledError(INGESTION_JOB_CANCELLED_MESSAGE)
+
+    return gate
+
+
+async def test_cancelled_job_does_not_send_next_unit_and_keeps_checkpoint(
+    small_model: int,
+) -> None:
+    """1 単位目を送った後に job が取り消されたら、2 単位目を送らずに取消のまま止まる(#5696)。"""
+    _ = small_model
+    fields_mod.save_field_schema(_DEFS)
+    storage = _MemoryStorage()
+    llm = _ScriptedLlm()
+
+    with (
+        ai_calls.ai_call_attempt_gate(_cancel_after(llm, 1)),
+        pytest.raises(IngestionCancelledError),
+    ):
+        await _pipeline(llm, storage)._attach_extraction_fields(
+            "trace", _long_document(), document_id="doc-a"
+        )
+
+    assert len(llm.texts) == 1
+    # 送り終えた単位の結果は保存したまま(再実行で使い直す)。
+    assert [key for key in storage.objects if "/fields/" in key] != []
+    resumed = _ScriptedLlm()
+    await _pipeline(resumed, storage)._attach_extraction_fields(
+        "trace", _long_document(), document_id="doc-a"
+    )
+    assert llm.texts[0] not in resumed.texts
+
+
+async def test_cancelled_job_does_not_send_retry(small_model: int) -> None:
+    """一時的な失敗の再試行の待ちの間に取り消されたら、再試行を送らない(#5696)。"""
+    _ = small_model
+    fields_mod.save_field_schema(_DEFS)
+    llm = _ScriptedLlm("段落", _HttpError(503, "busy"))
+
+    with (
+        ai_calls.ai_call_attempt_gate(_cancel_after(llm, 1)),
+        pytest.raises(IngestionCancelledError),
+    ):
+        await _pipeline(llm, _MemoryStorage())._attach_extraction_fields(
+            "trace", _long_document(), document_id="doc-a"
+        )
+
+    assert len(llm.texts) == 1
 
 
 @pytest.mark.parametrize(
