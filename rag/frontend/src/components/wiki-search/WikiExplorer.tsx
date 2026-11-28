@@ -337,7 +337,9 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
           {
             key: "document",
             header: t("wiki.graph.memberDocument"),
-            headerClassName: "hidden md:table-cell",
+            // 原文・章節の行がある一覧では、文書の名前が語の途中で折り返さない幅を取る（文書だけの一覧は
+            // 全行「—」なので取らない。#5976）。
+            headerClassName: `hidden md:table-cell${listPaging.pageItems.some((row) => row.node.kind !== "document") ? " md:w-[40%]" : ""}`,
             className: "hidden md:table-cell [overflow-wrap:anywhere]",
             render: (row) => (row.node.kind === "document" ? "—" : row.node.document_name),
           },
