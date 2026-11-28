@@ -113,6 +113,18 @@ def test_generic_names_resolve_to_titles_that_contain_them_in_the_scope() -> Non
     assert names.resolve("t.md", exclude="doc-1") == []
 
 
+def test_reverse_lookup_builds_the_reference_keys_once_per_document() -> None:
+    """ファイル名の形の参照を何件照合しても、文書の比較形は作り直さない（#5966）。"""
+    catalog = [{"document_id": f"doc-{i}", "title": f"t{i}.md"} for i in range(20)]
+    names = DocumentNames(catalog, {})
+    built = {did: names.keys(did) for did in names.files}
+    for i in range(20):
+        assert names.resolve(f"t{i}.md", exclude="doc-x") == [f"doc-{i}"]
+    # 照合の後も同じ object を返す（照合のたびに正規化し直すと、参照の数 × 文書の数になる）。
+    assert all(names.keys(did) is keys for did, keys in built.items())
+    assert names.keys("doc-none") == frozenset()
+
+
 def test_text_references_take_only_other_documents_from_chunk_metadata() -> None:
     targets = [
         {"label": "第3章", "kind": "chapter", "key": "3", "document_title": None},
