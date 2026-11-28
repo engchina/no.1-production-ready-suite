@@ -245,7 +245,8 @@ test(
       }));
     const base = reviewSnapshots("trace-model", "question").unresolved;
     const source = { ...base.versions[0].sources.question, citations: hits };
-    let state = { ...base, versions: [{ ...base.versions[0], sources: { question: source } }] };
+    // 選べる資料の上限は設定で変えられる（#5981。既定 5）。タグを 2 行以内に保つ確認のため、多い値にする。
+    let state = { ...base, selection_limit: 50, versions: [{ ...base.versions[0], sources: { question: source } }] };
     const commands: string[] = [];
     await mockApi(page, 0, true, hits);
     await page.route("**/api/feedback", (r) => r.fulfill({ json: envelope(r.request().postDataJSON()) }));
