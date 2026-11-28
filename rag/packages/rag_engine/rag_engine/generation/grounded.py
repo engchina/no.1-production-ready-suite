@@ -671,7 +671,7 @@ def _by_document(entries: Sequence[CheckedItem], order: Mapping[tuple[str, ...],
 
 def _scope_decisions(plan: Any, label: str) -> list[Any]:
     """同じ根拠の別主張に重ねた同一の判断をまとめ、矛盾する判断は残す。"""
-    unique = {}
+    unique: dict[tuple[str, str], Any] = {}
     for scope in plan.evidence_scope:
         if scope.evidence_id == label:
             key = (scope.relation, scope.link_quote.strip() if scope.relation == "linked" else "")

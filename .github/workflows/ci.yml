@@ -1113,12 +1113,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      # rag_poc 由来の解析・分割・回答・FAQ/ドメインキーワードの回帰テスト。
       # docling/torch は入れず、PDF 描画・日本語分割・Excel の任意依存だけを入れる。
+      - name: Install rag_engine
+        run: uv sync --locked --extra pdf --extra japanese --extra excel --extra oracle
+
+      # 回答生成（rag_engine/generation）の型検査。範囲は pyproject.toml の [tool.mypy]（#2861）。
+      - name: Type check rag_engine
+        run: uv run --locked --no-sync mypy
+
+      # rag_poc 由来の解析・分割・回答・FAQ/ドメインキーワードの回帰テスト。
       - name: Test rag_engine
-        run: |
-          uv sync --locked --extra pdf --extra japanese --extra excel --extra oracle
-          uv run --locked --no-sync python -m pytest -q tests
+        run: uv run --locked --no-sync python -m pytest -q tests
 
   services-scripts-lint:
     name: Lint / services & scripts

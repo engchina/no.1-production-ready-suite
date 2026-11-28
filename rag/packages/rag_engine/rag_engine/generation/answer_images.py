@@ -136,7 +136,7 @@ def answer_image_evidence(
             if not normalized_id or key in seen:
                 continue
             path, asset_kind, exists = _resolve_image_prompt_path(raw, record, root)
-            context_bbox = []
+            context_bbox: list[float] = []
             ref = next((r for r in record.source_record_refs if r.get("record_id") == image_id), {})
             # 説明の文が画像の外にある図は、解析時と同じ赤枠付きの文脈の画像を添付する。
             # 他ページや任意ファイルへ展開せず、同じ解析runの既存cropだけを使う。
@@ -164,7 +164,7 @@ def answer_image_evidence(
                 "bbox": raw.get("bbox") if isinstance(raw.get("bbox"), list) else [],
                 "raw_type": str(raw.get("raw_type") or ""),
                 "visual_kind": str(raw.get("visual_kind") or ""),
-                "visual_structure": (dict(raw.get("visual_structure")) if isinstance(raw.get("visual_structure"), dict) else {}),
+                "visual_structure": dict(structure) if isinstance(structure := raw.get("visual_structure"), dict) else {},
                 "relationship": str(raw.get("relationship") or ""),
                 "table_id": str(raw.get("table_id") or ""),
                 "asset_kind": asset_kind,

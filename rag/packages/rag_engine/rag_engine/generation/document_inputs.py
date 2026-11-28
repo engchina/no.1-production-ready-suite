@@ -134,7 +134,7 @@ def related_spans(spans: Sequence[Mapping[str, Any]]) -> list[list[int]]:
         for context in _contexts(span):
             if (place := _place(context)) is not None:
                 places.setdefault(place, set()).add(index)
-    pairs = []
+    pairs: list[tuple[int, int]] = []
     for index, span in enumerate(spans):
         for context in _contexts(span):
             for relation in context.get("wiki_relations") or ():

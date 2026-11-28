@@ -162,8 +162,8 @@ def calculate(
                         conflicts.add((key, ordinal))
     if not any(rows.values()) or patterns.keys() != names.keys():
         return None
-    blocks = []
-    snapshots = []
+    blocks: list[str] = []
+    snapshots: list[EvidenceUnitSnapshot] = []
     source_spans = []
     groups = []
     for key in patterns:

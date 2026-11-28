@@ -1445,7 +1445,10 @@ requires-dist = [
 provides-extras = ["docling", "pdf", "japanese", "oracle", "excel"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "mypy", specifier = ">=1.14" },
+    { name = "pytest", specifier = ">=8" },
+]
 
 [[package]]
 name = "rag-parser-core"
