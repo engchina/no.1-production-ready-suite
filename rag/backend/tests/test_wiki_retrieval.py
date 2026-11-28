@@ -135,12 +135,6 @@ class Store:
             values = [self.by_id[uid] for uid in kwargs["unit_ids"] if uid in self.by_id]
         return values[: kwargs["limit"]] if kwargs.get("limit") else values
 
-    async def cross_document_edges(
-        self, scope: WikiScope, roots: dict[str, WikiPage], budget: int
-    ) -> list[tuple[str, str, str]]:
-        self._scoped(scope)
-        return []
-
     async def read_sources(
         self, pages: list[WikiPage], filters: dict[str, str]
     ) -> list[RetrievedChunk]:
@@ -419,7 +413,7 @@ async def test_current_sources_fails_when_the_profile_turns_wiki_off() -> None:
         await retriever(Store(PAGES), enabled=False).current_sources("p", {}, PAGES[:1])
 
 
-# ---- 同じ文書の依存の辿り（#5492） ----
+# ---- 同じ文書の依存の辿り（#5492）。別の文書への参照は辿らない（#5841・#5965） ----
 
 A4, A5, A6 = "doc-a-a4", "doc-a-a5", "doc-a-a6"
 # 同じ文書の依存の鎖: a2 → a4（例外）→ a5（前提）→ a6（参照）。
@@ -544,7 +538,7 @@ TITLES = {row["document_id"]: row["title"] for row in CATALOG}
 class SqlOracle:
     """SQL を記録し、合成の行を返す Oracle の代役（実 SQL は test_wiki_store_oracle.py）。
 
-    索引・名前の解決・原文の照会をそれぞれ検証する。
+    知らない SQL（別の文書への参照の表の照会など）が来れば失敗にする。
     """
 
     def __init__(self, pages: list[WikiPage]) -> None:
@@ -578,35 +572,6 @@ class SqlOracle:
             ]
         if "VECTOR_DISTANCE" in sql:
             return [{"unit_id": uid} for uid in self.by_id]
-        if "rag_wiki_references" in sql:
-            units = self._values(binds, "wiki_ref_unit")
-            return [
-                {
-                    "unit_id": p.unit.unit_id,
-                    "document_id": p.unit.document_id,
-                    "target_name": ref.document,
-                    "target_section": ref.section,
-                    "relation": ref.relation,
-                }
-                for p in pages
-                if units is None or p.unit.unit_id in units
-                for ref in p.navigation.references
-            ]
-        if "AS heading" in sql:
-            return [
-                {"document_id": p.unit.document_id, "heading": p.unit.section_path[0]}
-                for p in pages
-                if p.unit.section_path
-            ]
-        if "AS target_path" in sql:
-            return [
-                {
-                    "unit_id": p.unit.unit_id,
-                    "document_id": p.unit.document_id,
-                    "target_path": p.unit.section_path,
-                }
-                for p in pages
-            ]
         if "p.page_json" in sql:
             units = self._values(binds, "wiki_unit")
             return [
@@ -659,7 +624,7 @@ async def test_search_evaluates_the_heavy_scope_once_and_rechecks_sources() -> N
     assert not any("rag_document_knowledge_bases" in sql for sql in later)
 
 
-# 別の文書への参照（#5841）: 起点 a2 は同じ文書の a4 に依存する。
+# 別の文書への参照（#5841・#5965）: 起点 a2 は同じ文書の a4 に依存する。
 # 出る向きは a2 が文書C を名前で挙げ、入る向きは文書C の c1 が a2 の文書（文書A）を名前で参照する。
 OUTGOING = [
     page("doc-a", "a2", ["章1", "節1"], deps=(A4,), refs=(("文書C", "通知", "exception"),)),
@@ -675,8 +640,10 @@ INCOMING = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pages", [OUTGOING, INCOMING], ids=["outgoing", "incoming"])
-async def test_cross_document_reference_links_one_verified_source(pages: list[WikiPage]) -> None:
-    """起点と結ぶ別文書の公開参照を一段だけ辿り、回答にはその原文を渡す。"""
+async def test_references_to_other_documents_are_not_followed(pages: list[WikiPage]) -> None:
+    """別の文書への参照は、出る向き（起点が別の文書の名前を挙げる）も入る向き（ほかの文書が起点の
+    文書を名前で参照する）も辿らない（#5841・#5965）。同じ文書の依存だけを足し、参照の表を
+    読まない。"""
     assert any(p.navigation.references for p in pages), "参照は原文の表記と合って残る"
     oracle = SqlOracle(pages)
     wiki = WikiRetriever(
@@ -687,13 +654,12 @@ async def test_cross_document_reference_links_one_verified_source(pages: list[Wi
     )
     result = await wiki.search(QUESTION, profile_id="p", filters={}, timeout=None, top_k=1)
 
-    assert _units(result) == [A2, A4, "doc-c-c1"]
+    assert _units(result) == [A2, A4]
     assert {c.chunk_id: c.metadata["wiki_origin"] for c in result.chunks} == {
         f"{A2}-chunk": "root",
         f"{A4}-chunk": "dependency",
-        "doc-c-c1-chunk": "link",
     }
-    assert {chunk.document_id for chunk in result.chunks} == {"doc-a", "doc-c"}
+    assert {chunk.document_id for chunk in result.chunks} == {"doc-a"}
     assert result.trace["link_hops"] == [
         {"depth": 1, "dependency_units": 1},
         {"depth": 2, "dependency_units": 0},
@@ -701,9 +667,9 @@ async def test_cross_document_reference_links_one_verified_source(pages: list[Wi
     assert result.trace["source_chunk_ids_by_origin"] == {
         "selected": [f"{A2}-chunk"],
         "dependency": [f"{A4}-chunk"],
-        "link": ["doc-c-c1-chunk"],
     }
-    assert any("rag_wiki_references" in sql for sql in oracle.sql)
+    assert "link_units" not in result.trace
+    assert not any("rag_wiki_references" in sql for sql in oracle.sql)
 
 
 def _relations(result: Any) -> dict[str, Any]:
