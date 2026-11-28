@@ -57,6 +57,7 @@ export interface WikiGraphState {
   expansions: Map<string, WikiExpansion>;
   /** ノードを足した展開元（折りたたむ対象）。最初の表示・検索で足したノードは持たない。 */
   owners: Map<string, string>;
+  /** 強調する節点（ナレッジベース詳細は図内検索の当たり、Wiki 検索は選んだ原文）。折りたたんでも残す。 */
   matched: Set<string>;
   /** 図にあるほかの原文との関係を照会した原文（足した原文だけを次に照会する。#5953）。 */
   linked: Set<string>;
@@ -181,6 +182,47 @@ export function collapseWikiNode(state: WikiGraphState, owner: string): WikiGrap
   const next = removeWikiNodes(state, [...removing]);
   next.expansions.delete(owner);
   return next;
+}
+
+/**
+ * 選んだ原文を選択から外す（Wiki 検索の図。#5981）。その原文が足した次の段（その先も）を外し、原文そのものは、
+ * ほかの節点の次の段として残っている場合だけ残す。外す節点のうち、図に残る展開元の隣接であるものは、その展開元の
+ * 次の段として残す（2 つの選んだ原文に共通の次の段を、片方を外しただけで消さない）。
+ */
+export function unpickWikiNode(state: WikiGraphState, id: string): WikiGraphState {
+  const next = cloned(state);
+  next.matched.delete(id);
+  if (!next.nodes.has(id)) return next;
+  const kept = new Map<string, string>();
+  let removing: Set<string>;
+  for (;;) {
+    removing = new Set<string>();
+    const queue = [id];
+    while (queue.length) {
+      const current = queue.shift()!;
+      for (const [node, by] of next.owners) {
+        if (by !== current || removing.has(node) || next.matched.has(node) || kept.has(node)) continue;
+        removing.add(node);
+        queue.push(node);
+      }
+    }
+    const addedBy = next.owners.get(id);
+    if (!kept.has(id) && !(addedBy && next.nodes.has(addedBy))) removing.add(id);
+    let rescued = false;
+    for (const [owner, expansion] of next.expansions) {
+      if (owner === id || removing.has(owner) || !next.nodes.has(owner)) continue;
+      for (const item of expansion.neighbors) {
+        if (!removing.has(item.node.id) || kept.has(item.node.id)) continue;
+        kept.set(item.node.id, owner);
+        rescued = true;
+      }
+    }
+    if (!rescued) break;
+  }
+  const result = removeWikiNodes(next, [...removing]);
+  for (const [node, owner] of kept) result.owners.set(node, owner);
+  result.expansions.delete(id);
+  return result;
 }
 
 /** ノードを外す（「このノードを外す」）。そのノードの展開の記録も消す。 */

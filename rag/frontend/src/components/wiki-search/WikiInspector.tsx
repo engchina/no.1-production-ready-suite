@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, BookOpen, Focus, GitFork, Minus, Plus } from "lucide-react";
 import { Banner, Button, ListScrollRegion, OffsetPagination, Skeleton, TabPanel, Tabs, useMediaQuery } from "@production-ready/ui";
@@ -14,7 +14,6 @@ import { wikiNodeTitle } from "./WikiGraphView";
 import {
   sourceLocation,
   sourcePick,
-  MAX_WIKI_SELECTION,
   wikiApi,
   type WikiDirection,
   type WikiPick,
@@ -76,14 +75,17 @@ interface Props {
   expanded: boolean;
   focus?: () => void;
   select: (node: WikiGraphNode) => void;
-  expand: () => void;
+  /** 隣接を図に展開する。無ければ操作を出さない（Wiki 検索で、図に無い原文。#5981）。 */
+  expand?: () => void;
   collapse: () => void;
   picks?: WikiPick[];
   toggle?: (pick: WikiPick) => void;
+  /** 一度に選べる原文の上限（backend の `selection_limit`）。 */
+  selectionLimit: number;
 }
 
 /** 選んだノードの詳細。単位は原文・関係・案内、文書と章節は構成、「さらに展開」は残りの件数。 */
-export function WikiInspector({ scope, node, remaining, expanded, focus, select, expand, collapse, picks, toggle }: Props) {
+export function WikiInspector({ scope, node, remaining, expanded, focus, select, expand, collapse, picks, toggle, selectionLimit }: Props) {
   const mobile = useMediaQuery("(max-width: 767px)", false);
   const idPrefix = mobile ? "wiki-sheet-tabs" : "wiki-detail-tabs";
   const unit = node.kind === "unit";
@@ -114,7 +116,8 @@ export function WikiInspector({ scope, node, remaining, expanded, focus, select,
     retry: false,
   });
   const chosen = picks?.some((item) => item.id === node.id) ?? false;
-  const validAdd = chosen || (picks?.length ?? 0) < MAX_WIKI_SELECTION;
+  const validAdd = chosen || (picks?.length ?? 0) < selectionLimit;
+  const limitId = useId();
   const items = (relations.data?.items ?? []).filter((row) => !filter || (row.relation === filter.relation && row.direction === filter.direction));
   const groups = new Map<string, { relation: WikiGraphRelation; direction: WikiDirection; count: number }>();
   for (const row of relations.data?.items ?? []) {
@@ -131,7 +134,7 @@ export function WikiInspector({ scope, node, remaining, expanded, focus, select,
       <div className="grid gap-3 p-3">
         <p className="text-xs text-fg-muted">{t("wiki.graph.kind.more")}</p>
         <p className="text-sm">{remaining ? t("wiki.graph.moreDetail", { count: remaining }) : t("wiki.graph.moreNodeUnknown")}</p>
-        <Button variant="secondary" size="sm" icon={GitFork} className="w-fit" onClick={expand}>{t("wiki.graph.expandMore")}</Button>
+        {expand && <Button variant="secondary" size="sm" icon={GitFork} className="w-fit" onClick={expand}>{t("wiki.graph.expandMore")}</Button>}
       </div>
     );
   }
@@ -278,15 +281,21 @@ export function WikiInspector({ scope, node, remaining, expanded, focus, select,
         {focus && <Button variant="secondary" size="sm" icon={Focus} onClick={focus}>{t("wiki.search.focus")}</Button>}
         {unit && toggle && original.data && (
           <Button variant="secondary" size="sm" icon={chosen ? Minus : Plus} disabled={!validAdd}
-            tooltip={!validAdd ? t("wiki.search.selectionLimit", { count: MAX_WIKI_SELECTION }) : undefined}
+            aria-describedby={validAdd ? undefined : limitId}
             onClick={() => toggle(sourcePick(original.data))}>
             {t(chosen ? "wiki.search.remove" : "wiki.search.add")}
           </Button>
         )}
         {expanded && <Button variant="secondary" size="sm" icon={Minus} onClick={collapse}>{t("wiki.search.collapse")}</Button>}
-        <Button variant="secondary" size="sm" icon={GitFork} onClick={expand}>
-          {remaining > 0 && expanded ? t("wiki.graph.expandMore") : t(unit ? "wiki.search.expand" : "wiki.search.expandStructure")}
-        </Button>
+        {expand && (
+          <Button variant="secondary" size="sm" icon={GitFork} onClick={expand}>
+            {remaining > 0 && expanded ? t("wiki.graph.expandMore") : t(unit ? "wiki.search.expand" : "wiki.search.expandStructure")}
+          </Button>
+        )}
+        {/* 押せない理由は常に出す（吹き出しに隠さない。messaging.md §3.8）。上限に達しても自動で入れ替えない。 */}
+        {unit && toggle && original.data && !validAdd && (
+          <p id={limitId} className="w-full text-xs text-fg-muted">{t("wiki.search.selectionLimit", { count: selectionLimit })}</p>
+        )}
       </div>
     </div>
   );

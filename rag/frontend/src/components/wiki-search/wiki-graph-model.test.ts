@@ -13,6 +13,7 @@ import {
   replaceWikiGraph,
   showNeighbors,
   unitsToConnect,
+  unpickWikiNode,
   wikiGraphRows,
   type WikiGraphNode,
   type WikiNeighbor,
@@ -100,5 +101,34 @@ describe("wiki graph model", () => {
     state = removeWikiNodes(addToWikiGraph(state, [], [], { linked: ["u4"] }), ["u4"]);
     expect(state.linked.has("u4")).toBe(false);
     expect(replaceWikiGraph(state, [node("x")], []).linked.size).toBe(0);
+  });
+
+  it("unpicking a selected unit removes its next hop but keeps what another selected unit still links to", () => {
+    // 選んだ原文 a・b（強調 = matched）。a の次の段は x・shared、b の次の段は shared・y。
+    let state = addToWikiGraph(emptyWikiGraph(), [node("a"), node("b")], [], { matched: ["a", "b"] });
+    state = showNeighbors(recordNeighbors(state, "a", [neighbor("a", "x"), neighbor("a", "shared")], true), "a", 10);
+    state = showNeighbors(recordNeighbors(state, "b", [neighbor("b", "shared"), neighbor("b", "y")], true), "b", 10);
+    expect([...state.nodes.keys()].sort()).toEqual(["a", "b", "shared", "x", "y"]);
+    // a を外すと、a と a だけの次の段（x）が消え、b の次の段でもある shared は残る。
+    const withoutA = unpickWikiNode(state, "a");
+    expect([...withoutA.nodes.keys()].sort()).toEqual(["b", "shared", "y"]);
+    expect(withoutA.matched.has("a")).toBe(false);
+    expect(withoutA.owners.get("shared")).toBe("b");
+    // 続けて b を外すと、図は空になる。
+    expect(unpickWikiNode(withoutA, "b").nodes.size).toBe(0);
+  });
+
+  it("an unpicked unit stays while it is the next hop of another selected unit, without its own next hop", () => {
+    // a を選び、次の段の n を選択に足して、n の次の段（m）も出した状態。
+    let state = addToWikiGraph(emptyWikiGraph(), [node("a")], [], { matched: ["a"] });
+    state = showNeighbors(recordNeighbors(state, "a", [neighbor("a", "n")], true), "a", 10);
+    state = addToWikiGraph(state, [], [], { matched: ["n"] });
+    state = showNeighbors(recordNeighbors(state, "n", [neighbor("n", "m")], true), "n", 10);
+    const next = unpickWikiNode(state, "n");
+    expect([...next.nodes.keys()].sort()).toEqual(["a", "n"]);
+    expect(next.expansions.has("n")).toBe(false);
+    // a を外すと、a の次の段でもある選んだ原文 n は残り、a だけが消える。
+    const dropped = unpickWikiNode(state, "a");
+    expect([...dropped.nodes.keys()].sort()).toEqual(["m", "n"]);
   });
 });

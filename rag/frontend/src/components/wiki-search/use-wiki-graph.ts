@@ -14,6 +14,7 @@ import {
   replaceWikiGraph,
   showNeighbors,
   unitsToConnect,
+  unpickWikiNode,
   type WikiGraphEdge,
   type WikiGraphNode,
   type WikiGraphState,
@@ -97,6 +98,50 @@ export function useWikiGraph(scope: WikiScope) {
     if (failed) throw failed.error;
   }, [scope, update]);
 
+  /**
+   * Wiki 検索の図を、選んだ原文とその次の段にそろえる（#5981）。選んだ原文は強調（`matched`）して図に置き、外した
+   * 原文はその次の段と一緒に外す。次の段（関係の出る向き・入る向き）は、選んだ原文ごとに最初の
+   * `selectedNeighbors` 件を出し、残りは「さらに展開」の点にする。関係は 1 件ずつ順に読み、読み終えてからまとめて
+   * 図に足す（読み取りを重ねない。#5966）。足すのと関係を読むのは、図を見ている間（`open`）だけ。選択から外した
+   * 原文は、図を見ていなくてもすぐ外す（照会は要らない。詳細が、外した原文を図にあるものとして扱わない）。
+   * 図に無かった原文を選んだときは、次の段を足すときに配置を最初からやり直す（選んだ原文だけを先に詰めて置いた
+   * 位置のまま次の段を足すと、選んだ原文どうしが近すぎる）。図にある節点（次の段）を選んだときは動かさない。
+   */
+  const firstHop = useRef(new Set<string>());
+  const syncPicked = useCallback((picked: readonly WikiGraphNode[], open: boolean) => {
+    const wanted = new Set(picked.map((node) => node.id));
+    const dropped = [...current.current.matched].filter((id) => !wanted.has(id));
+    for (const id of dropped) firstHop.current.delete(id);
+    if (dropped.length) update((old) => dropped.reduce(unpickWikiNode, old));
+    if (!open) return;
+    const added = picked.filter((node) => !current.current.matched.has(node.id));
+    const relayout = added.some((node) => !current.current.nodes.has(node.id));
+    if (added.length) update((old) => addToWikiGraph(old, added, [], { matched: added.map((node) => node.id) }));
+    const waiting = picked.map((node) => node.id).filter((id) => !firstHop.current.has(id));
+    if (!waiting.length) return;
+    for (const id of waiting) firstHop.current.add(id);
+    void run(async () => {
+      const loaded: { id: string; neighbors: Awaited<ReturnType<typeof loadNeighbors>> }[] = [];
+      try {
+        for (const id of waiting) {
+          const node = current.current.nodes.get(id);
+          // 読む前に選択から外した原文と、既に展開してある原文（次の段の節点を展開してから選んだ）は読まない。
+          if (!node || !current.current.matched.has(id) || current.current.expansions.has(id)) continue;
+          loaded.push({ id, neighbors: await loadNeighbors(client, scope, node, undefined) });
+        }
+      } finally {
+        update((old) => {
+          const next = loaded.reduce((state, item) => {
+            if (!state.matched.has(item.id) || state.expansions.has(item.id)) return state;
+            const recorded = recordNeighbors(state, item.id, item.neighbors.neighbors, item.neighbors.complete, undefined, item.neighbors.total);
+            return showNeighbors(recorded, item.id, WIKI_GRAPH_SETTINGS.selectedNeighbors);
+          }, old);
+          return relayout && next.nodes.size > old.nodes.size ? { ...next, generation: next.generation + 1 } : next;
+        });
+      }
+    });
+  }, [client, run, scope, update]);
+
   /** 選んだノードの間の関係を足す（単位は同じ文書の依存と別の文書への参照、文書は文書の間の参照）。 */
   const connect = useCallback((ids: readonly string[]) => {
     const nodes = ids.map((id) => current.current.nodes.get(id)).filter((node): node is WikiGraphNode => Boolean(node));
@@ -152,5 +197,5 @@ export function useWikiGraph(scope: WikiScope) {
     });
   }, [run, scope, state, update]);
 
-  return { state, pending: pending > 0, failure, run, expand, collapse, remove, keep, connect, replace, add, place, clear, reveal };
+  return { state, pending: pending > 0, failure, run, expand, collapse, remove, keep, connect, replace, add, place, clear, reveal, syncPicked };
 }

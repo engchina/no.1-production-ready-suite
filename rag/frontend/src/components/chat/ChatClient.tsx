@@ -50,8 +50,8 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
-import { SelectedSources } from "@production-ready/ui";
-import { isWikiDraft, type WikiDraft } from "@/components/wiki-search/wiki-api";
+import { MessageText, RadioOptionGroup, SelectedSources } from "@production-ready/ui";
+import { isWikiDraft, wikiSelectionLimit, type WikiDraft, type WikiSourceMode } from "@/components/wiki-search/wiki-api";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { AnswerCitations } from "@/components/search/CitationList";
 import { answerNoticeItems } from "@/components/search/AnswerDetailsPanel";
@@ -829,7 +829,12 @@ export function ChatClient() {
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
   const [wikiDraft, setWikiDraft] = useWorkspaceState<WikiDraft | null>("chat.wikiSources", null,
     (value): value is WikiDraft | null => value === null || isWikiDraft(value));
-  const wikiItems = auth.hasPermission(MENU_PERMISSIONS.wikiSearch) && wikiDraft?.profileId === searchAnswerProfileId ? wikiDraft.items : [];
+  // 選べる数の上限は Wiki 検索が渡した値（backend の `selection_limit`）。超える分は送らない（backend は 422 にする）。
+  const wikiLimit = wikiSelectionLimit(wikiDraft?.selectionLimit);
+  const wikiItems = auth.hasPermission(MENU_PERMISSIONS.wikiSearch) && wikiDraft?.profileId === searchAnswerProfileId ? wikiDraft.items.slice(0, wikiLimit) : [];
+  // 選んだ原文（とその文書の先頭の chunk）だけを根拠にする（既定）か、通常の検索の結果に足すか。次の 1 問だけに効く
+  // （送ると選んだ原文と一緒に消える。#5981）。
+  const wikiMode: WikiSourceMode = wikiDraft?.mode ?? "only";
   // 回答の前に選ぶ類似の登録済みQ&A（選ぶまで送らない。#684）。選ぶ前に画面を離れても、戻ったとき・
   // 再読込で同じ質問と候補を出す（作業状態。#702）。検索・回答プロファイルを変えたら消す。
   const [faqChoice, setFaqChoice] = useWorkspaceState<FaqChoice | null>(
@@ -1442,7 +1447,7 @@ export function ChatClient() {
         ...(questionContextToken ? { question_context_token: questionContextToken } : {}),
         model_ids: [],
         client_message_id: clientMessageId,
-        ...(wikiItems.length ? { wiki_sources: wikiItems.map(item => item.source) } : {}),
+        ...(wikiItems.length ? { wiki_sources: wikiItems.map(item => item.source), wiki_source_mode: wikiMode } : {}),
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
         ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
         ...(clarification ? { clarification } : {}),
@@ -1774,12 +1779,31 @@ export function ChatClient() {
                     会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
                 <ChatComposer
                   id="chat-composer"
-                  options={wikiItems.length ? <SelectedSources items={wikiItems} label={t("wiki.search.selected")}
-                    removeLabel={(name) => t("fileReview.remove", {name})}
-                    disabled={answerInProgress || sending}
-                    focusAfterLast={() => composerRef.current?.focus()}
-                    onRemove={(id) => setWikiDraft(previous => previous && ({...previous, items:previous.items.filter(item=>item.id!==id)}))}
-                    action={<Button variant="ghost" size="sm" onClick={() => navigate(wikiDraft?.knowledgeBaseId ? APP_ROUTES.knowledgeBases + "/" + encodeURIComponent(wikiDraft.knowledgeBaseId) + "#wiki-graph" : APP_ROUTES.wikiSearch)}>{t(wikiDraft?.knowledgeBaseId ? "wiki.search.returnToKnowledgeBase" : "wiki.search.return")}</Button>} /> : undefined}
+                  options={wikiItems.length ? (
+                    <div className="grid min-w-0 flex-1 gap-2" data-testid="chat-wiki-sources">
+                      <SelectedSources items={wikiItems} label={t("wiki.search.selected")} count={t("wiki.search.selectedCount", { count: wikiItems.length, limit: wikiLimit })}
+                        removeLabel={(name) => t("fileReview.remove", {name})}
+                        disabled={answerInProgress || sending}
+                        focusAfterLast={() => composerRef.current?.focus()}
+                        onRemove={(id) => setWikiDraft(previous => previous && ({...previous, items:previous.items.filter(item=>item.id!==id)}))}
+                        // 狭い画面では戻る操作をタグの下の行へ回す（タグの欄を全幅に使い、名前を切らない）。
+                        action={<div className="flex justify-end max-sm:w-full"><Button variant="ghost" size="sm" onClick={() => navigate(wikiDraft?.knowledgeBaseId ? APP_ROUTES.knowledgeBases + "/" + encodeURIComponent(wikiDraft.knowledgeBaseId) + "#wiki-graph" : APP_ROUTES.wikiSearch)}>{t(wikiDraft?.knowledgeBaseId ? "wiki.search.returnToKnowledgeBase" : "wiki.search.return")}</Button></div>} />
+                      <RadioOptionGroup<WikiSourceMode>
+                        id="chat-wiki-source-mode"
+                        legend={t("wiki.search.sourceMode")}
+                        // 狭い画面でも 2 つを横に並べる（縦に積むと入力欄の領域が高くなり、会話の領域が残らない）。
+                        className="max-sm:[&_[data-field-width-exempt]]:grid-cols-2"
+                        options={[
+                          // 狭い画面では 2 行に折り返すので、文節で折り返す（語の途中で切らない）。
+                          { value: "only", label: <MessageText text={t("wiki.search.sourceMode.only")} /> },
+                          { value: "mix", label: <MessageText text={t("wiki.search.sourceMode.mix")} /> },
+                        ]}
+                        value={wikiMode}
+                        disabled={answerInProgress || sending}
+                        onValueChange={(mode) => setWikiDraft(previous => previous && ({ ...previous, mode }))}
+                      />
+                    </div>
+                  ) : undefined}
                   textareaRef={composerRef}
                   value={composer}
                   onValueChange={setComposer}
@@ -1847,7 +1871,16 @@ export function ChatClient() {
             ) : !searchAnswerProfileId ? (
               <EmptyState title={t("chat.searchAnswerProfile.required")} />
             ) : turns.length === 0 && !liveTurn && !pendingChoice ? (
-              <EmptyState title={t("chat.messages.empty")} hint={t("chat.messages.emptyHint")} />
+              wikiItems.length ? (
+                // Wiki で選んだ原文の欄がある間は入力欄の領域が高く、会話の領域が狭い（375px では 1 行分）。空の案内は
+                // 文字だけにし（アイコンと上下の余白を持たない）、狭い画面では補足の行も出さず、途中から切れないようにする（#5981）。
+                <div className="grid gap-1 text-center sm:py-10" data-testid="chat-empty-compact">
+                  <p className="text-sm leading-relaxed text-fg">{t("chat.messages.empty")}</p>
+                  <p className="text-xs leading-relaxed text-fg-muted max-sm:hidden">{t("chat.messages.emptyHint")}</p>
+                </div>
+              ) : (
+                <EmptyState title={t("chat.messages.empty")} hint={t("chat.messages.emptyHint")} />
+              )
             ) : (
               <>
                 {turns.map((turn) => (

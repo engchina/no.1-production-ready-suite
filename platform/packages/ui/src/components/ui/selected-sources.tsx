@@ -13,6 +13,8 @@ export interface SelectedSource {
 interface Props {
   items: SelectedSource[];
   label: string;
+  /** 件数の表示（例:「30 件」）。見出しの後ろに出す。タグは 2 行までなので、多いときに総数が分かる。 */
+  count?: string;
   removeLabel: (name: string) => string;
   onRemove: (id: string) => void;
   focusAfterLast?: () => void;
@@ -24,6 +26,7 @@ interface Props {
 export function SelectedSources({
   items,
   label,
+  count,
   removeLabel,
   onRemove,
   focusAfterLast,
@@ -46,7 +49,10 @@ export function SelectedSources({
   }
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
-      <span className="text-xs font-medium text-fg-muted">{label}</span>
+      <span className="text-xs font-medium text-fg-muted">
+        {label}
+        {count ? <span className="tnum ml-1" data-testid="selected-sources-count">{count}</span> : null}
+      </span>
       <ul
         ref={list}
         aria-label={label}

@@ -111,7 +111,7 @@ function denseDocLinks() {
 function paged<T>(items: T[]) {
   return { items, total: items.length, offset: 0, limit: 50, has_next: false };
 }
-type Controls = { failRelations?: boolean; failSample?: boolean; dense?: boolean; calls: URL[] };
+type Controls = { failRelations?: boolean; failSample?: boolean; dense?: boolean; limit?: number; calls: URL[] };
 async function data(page: Page, controls: Controls = { calls: [] }) {
   const links = controls.dense ? denseDocLinks() : docLinks;
   await mockLocalAuth(page);
@@ -137,7 +137,8 @@ async function data(page: Page, controls: Controls = { calls: [] }) {
     const limit = Number(q.get("limit") ?? 25);
     const slice = <T>(items: T[]) => ({ items: items.slice(offset, offset + limit), total: items.length, offset });
     const finish = (v: unknown) => r.fulfill({ json: ok(v) });
-    if (end === "scope") return finish({ knowledge_bases: kbs });
+    // 一度に選べる原文の上限（backend の設定。既定 10。#5981）。
+    if (end === "scope") return finish({ knowledge_bases: kbs, selection_limit: controls.limit ?? 10 });
     if (end === "documents") return finish({ documents: files.slice(offset, offset + limit), status: "ok", has_more: offset + limit < files.length });
     if (end === "document-count") return finish({ total: files.length });
     if (end === "document-graph") {
@@ -217,9 +218,30 @@ const nodeList = (page: Page) => page.getByRole("region", { name: "図にある�
 function detail(page: Page, phone: boolean) {
   return phone ? page.getByRole("dialog", { name: "詳細" }) : page.getByRole("complementary", { name: "詳細" });
 }
-async function shot(page: Page, info: TestInfo, name: string) {
-  if (process.env.WIKI_GRAPH_SHOTS) await page.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-" + name + ".png" });
+async function shot(page: Page, info: TestInfo, name: string, prefix = "") {
+  if (process.env.WIKI_GRAPH_SHOTS) await page.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + prefix + info.project.name + "-" + name + ".png" });
 }
+/** 外観の選好（共有 UI の ui-store が保存する値）を読み込みの前に入れておく。 */
+async function setDarkTheme(page: Page) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: "dark" }, version: 0 }));
+  });
+}
+/** チャットの API（会話の作成と、中身の無い配信）。送った要求の本文は test が `waitForRequest` で読む。 */
+async function mockChatSend(page: Page) {
+  const conversation = { id: "conv-1", search_answer_profile_id: profiles[0].id, title: null, status: "ACTIVE", message_count: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", messages: [] };
+  await page.route("**/api/chat/conversations**", (r) => {
+    const path = new URL(r.request().url()).pathname;
+    if (path.endsWith("/messages/stream")) return r.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: "" });
+    if (path === "/api/chat/conversations" && r.request().method() !== "POST") return r.fulfill({ json: ok(paged([])) });
+    return r.fulfill({ json: ok(conversation) });
+  });
+}
+const results = (page: Page) => page.getByRole("region", { name: "検索結果の一覧" });
+const selectedList = (page: Page) => page.getByRole("list", { name: "Wiki で選んだ原文" });
+/** 検索結果の行のチェックボックス（名前は行の名前を含む）。 */
+const rowCheckbox = (page: Page, n: number) => results(page).getByRole("checkbox", { name: "合成の原文 " + n + "を選ぶ", exact: true });
+const relationCalls = (control: Controls) => control.calls.filter((u) => u.pathname.endsWith("/relations"));
 async function begin(page: Page) {
   await page.goto("/wiki-search");
   await selectSearchAnswerProfile(page, profiles[0].name);
@@ -235,59 +257,245 @@ async function openKnowledgeBaseGraph(page: Page) {
   return page.getByTestId("wiki-graph-disclosure");
 }
 
-test("Wiki 検索は結果で図を置き換え、結果の間の関係をつなぎ、一覧は図のノード、検索結果は 25 件ずつ読む", { tag: "@responsive" }, async ({ page }, info) => {
+test("Wiki 検索は検索結果の一覧から始まり、選んだ原文とその次の段だけを図にする", { tag: "@responsive" }, async ({ page }, info) => {
   const phone = info.project.name === "mobile";
   const control = await data(page);
   await begin(page);
-  const canvas = canvasOf(page);
-  await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
-  // 結果の原文 1 と 2 の間の関係（connections）を線にする。
-  await expect.poll(() => graphCount(canvas, "edges")).toBe(1);
-  expect(control.calls.some((u) => u.pathname.endsWith("/connections"))).toBe(true);
-  await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("原文 25");
-  // 開いた直後は名前を読める縮尺で、全体表示で図の全体が画布に収まる（#5953・#5973）。
-  await expectOpensReadable(page, canvas);
-  await page.getByRole("button", { name: "拡大", exact: true }).click();
-  await page.getByRole("button", { name: "拡大", exact: true }).click();
-  await page.getByRole("button", { name: "全体表示", exact: true }).click();
-  await expect.poll(() => graphContained(canvas)).toBe("true");
-  expect(await graphZoom(canvas)).toBeGreaterThanOrEqual(0.1);
-  await shot(page, info, "wiki-search-graph");
-  // 関係図・一覧・検索結果は Tabs（押下のボタンではない）。「一覧」はいま図にあるノード（#5953）。
-  // 狭い画面では種類と所属の文書を名前の下に出すので、名前は先頭で照合する。
-  await page.getByRole("tab", { name: "一覧" }).click();
-  await expect(page.getByText("全 25 件")).toBeVisible();
-  await expect(nodeList(page).getByRole("button", { name: /^合成の原文 1(?!\d)/ })).toBeVisible();
-  await shot(page, info, "wiki-search-list");
-  // 「検索結果」はサーバー側のページングの結果（全件数・順位・ナレッジベースの名前）。
-  await page.getByRole("tab", { name: "検索結果" }).click();
+  // 検索の後は「検索結果」のタブ（先頭）を開く。サーバー側のページングの結果（全件数・順位・ナレッジベースの名前）。
+  const tabs = page.getByRole("tablist", { name: "検索結果と関係" }).getByRole("tab");
+  await expect(tabs).toHaveText(["検索結果", "関係図", "一覧"]);
+  await expect(page.getByRole("tab", { name: "検索結果" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("全 60 件")).toBeVisible();
-  const list = page.getByRole("region", { name: "検索結果の一覧" });
+  const list = results(page);
   await expect(list.getByRole("button")).toHaveCount(25);
+  await expect(list.getByRole("checkbox")).toHaveCount(25);
+  await expect(list.getByRole("checkbox", { checked: true })).toHaveCount(0);
+  // チェックボックスの押せる範囲（行の左の欄）は、タッチの最小の幅（44px）以上。
+  const hitArea = await rowCheckbox(page, 1).locator("xpath=..").boundingBox();
+  expect(hitArea!.width).toBeGreaterThanOrEqual(44);
+  expect(hitArea!.height).toBeGreaterThanOrEqual(44);
+  await shot(page, info, "wiki-list");
+  // 1 件も選んでいないときは、図の場所に案内を出す（「一覧」も同じ）。
+  await page.getByRole("tab", { name: "関係図" }).click();
+  await expect(page.getByText("検索結果から原文を選ぶと、選んだ原文とその関係を図に表示します。")).toBeVisible();
+  await expect(canvasOf(page)).toHaveCount(0);
+  await shot(page, info, "wiki-graph-empty");
+  await page.getByRole("tab", { name: "一覧" }).click();
+  await expect(page.getByText("検索結果から原文を選ぶと、選んだ原文とその関係を図に表示します。")).toBeVisible();
+  await page.getByRole("button", { name: "検索結果を表示" }).click();
+  await expect(page.getByRole("tab", { name: "検索結果" })).toHaveAttribute("aria-selected", "true");
+  // 行のチェックボックスで選ぶ。ページを移っても選択は残る。
+  await rowCheckbox(page, 1).check();
+  await rowCheckbox(page, 2).check();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("2 / 10 件");
   const pager = page.getByRole("navigation", { name: "検索結果の一覧" });
   await pager.getByRole("button", { name: "次へ", exact: true }).click();
   await expect(list.getByRole("button", { name: /合成の原文 26/ })).toBeVisible();
-  // 新しいページの結果で図を置き換え、「一覧」も同じノードになる。
+  await rowCheckbox(page, 26).check();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("3 / 10 件");
+  await expect(selectedList(page).getByRole("listitem")).toHaveCount(3);
+  await pager.getByRole("button", { name: "前へ", exact: true }).click();
+  await expect(rowCheckbox(page, 1)).toBeChecked();
+  await expect(list.getByRole("checkbox", { checked: true })).toHaveCount(2);
+  await page.getByTestId("wiki-selected").scrollIntoViewIfNeeded();
+  await shot(page, info, "wiki-selected-3");
+  // 検索結果のタブにいる間は、関係（relations）も結果の間の関係（connections）も照会しない（#5966）。
+  expect(relationCalls(control)).toHaveLength(0);
+  expect(control.calls.some((u) => u.pathname.endsWith("/connections"))).toBe(false);
+  // 「関係図」は、選んだ原文 3 件（1・2・26）と、その次の段（原文 1 の関係 30 件のうち、図に無い最初の 10 件）と、
+  // 残りの「さらに展開」の点 1 つ。結果のページの 25 件は図にしない。
   await page.getByRole("tab", { name: "関係図" }).click();
-  await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
+  const canvas = canvasOf(page);
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(14);
+  await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("選んだ原文 3");
+  await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("原文 10");
+  // 凡例の「選んだ原文」と「原文」の印は違う色（塗り）。図では大きさと外側の輪でも区別する。
+  const swatch = (kind: string) => page.getByTestId("wiki-graph-kind-" + kind).locator("span[aria-hidden]").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(await swatch("picked")).not.toBe(await swatch("unit"));
+  // 関係は、選んだ原文ごとに 1 回だけ読む（取り切る。#5916）。
+  expect(relationCalls(control).map((u) => u.pathname.split("/").at(-2)).sort()).toEqual([hash(1), hash(2), hash(26)]);
+  expect(relationCalls(control).every((u) => u.searchParams.get("limit") === "500" && u.searchParams.get("offset") === "0")).toBe(true);
+  // 開いた直後は名前を読める縮尺で、全体表示で図の全体が画布に収まる（#5953・#5973）。
+  await expect.poll(() => graphZoom(canvas)).toBeGreaterThanOrEqual(0.65);
+  await canvas.scrollIntoViewIfNeeded();
+  await shot(page, info, "wiki-graph");
+  await expectOpensReadable(page, canvas);
+  await page.getByRole("button", { name: "全体表示", exact: true }).click();
+  await expect.poll(() => graphContained(canvas)).toBe("true");
+  // 「一覧」は図と同じノード（「さらに展開」の点は含まない）。選んだ原文は種類で分かる。
   await page.getByRole("tab", { name: "一覧" }).click();
-  await expect(page.getByText("全 25 件")).toBeVisible();
-  await expect(nodeList(page).getByRole("button", { name: /^合成の原文 1(?!\d)/ })).toHaveCount(0);
-  // 行を選ぶと、図と同じノードが選ばれて詳細が出る。
-  await nodeList(page).getByRole("button", { name: /^合成の原文 27/ }).click();
+  await expect(page.getByText("全 13 件")).toBeVisible();
+  await expect(nodeList(page).getByRole("row", { name: /合成の原文 1(?!\d)/ })).toContainText("選んだ原文");
+  await shot(page, info, "wiki-node-list");
+  // 次の段の節点を詳細から選択に足す（上限は同じ）。
+  await nodeList(page).getByRole("button", { name: /^合成の原文 3(?!\d)/ }).click();
   const panel = detail(page, phone);
-  await expect(panel.getByText("照合済みの合成原文 27。")).toBeVisible();
+  await expect(panel.getByText("照合済みの合成原文 3。")).toBeVisible();
   await panel.getByRole("button", { name: "質問に追加" }).click();
+  await expect(panel.getByRole("button", { name: "質問から外す" })).toBeVisible();
   if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("4 / 10 件");
+  await expect(nodeList(page).getByRole("row", { name: /合成の原文 3(?!\d)/ })).toContainText("選んだ原文");
+  // タグの × で 1 件外す。原文 1 を外すと、その次の段も図から外れる（選んだ原文でもある原文 2・3・26 は残る）。
+  await selectedList(page).getByRole("button", { name: /を外す$/ }).first().click();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("3 / 10 件");
+  await expect(page.getByText("全 3 件")).toBeVisible();
+  await page.getByRole("tab", { name: "関係図" }).click();
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(3);
+  // チャットへ渡す。戻るボタンは実際の戻り先（Wiki 検索）を示し、選択は残る。
   await page.getByRole("button", { name: "チャットで質問" }).click();
   await expect(page.locator("#chat-composer")).toHaveValue("資料の確認方法");
-  await expect(page.getByRole("list", { name: "Wiki で選んだ原文" }).getByRole("listitem")).toHaveCount(1);
-  // 戻るボタンは実際の戻り先（Wiki 検索）を示す。
+  await expect(selectedList(page).getByRole("listitem")).toHaveCount(3);
   await page.getByRole("button", { name: "Wiki 検索に戻る" }).click();
   await expect(page.locator("#wiki-question")).toHaveValue("資料の確認方法");
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("3 / 10 件");
+  // 「すべて外す」で選択を空にすると、選んだ原文の欄が消え、図は案内に戻る。
+  await page.getByRole("button", { name: "すべて外す" }).click();
+  await expect(page.getByTestId("wiki-selected")).toHaveCount(0);
+  await expect(results(page).getByRole("checkbox", { checked: true })).toHaveCount(0);
+  await page.getByRole("tab", { name: "関係図" }).click();
+  await expect(page.getByText("検索結果から原文を選ぶと、選んだ原文とその関係を図に表示します。")).toBeVisible();
   // 質問・結果・選んだ原文をまとめて消すボタンは持たない（#5967）。
   await expect(page.getByRole("button", { name: "新しい検索を開始" })).toHaveCount(0);
   await expectNoPageOverflow(page);
+});
+
+test("上限に達すると、選んでいない行のチェックボックスと詳細の「質問に追加」を押せなくして理由を出す", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  // 上限は backend が返す値（合成では 3 件）。
+  const control = await data(page, { calls: [], limit: 3 });
+  await begin(page);
+  const list = results(page);
+  for (const n of [1, 2, 3]) await rowCheckbox(page, n).check();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("3 / 3 件");
+  // 選んでいない行は押せない（自動で入れ替えない）。理由は一覧の上に常に出し、チェックボックスの説明にもなる。
+  await expect(list.getByRole("checkbox", { disabled: true })).toHaveCount(22);
+  const reason = page.getByTestId("wiki-selection-limit");
+  await expect(reason).toContainText("一度に選べる原文は 3 件までです。");
+  await expect(rowCheckbox(page, 4)).toBeDisabled();
+  await expect(rowCheckbox(page, 4)).toHaveAccessibleDescription(/一度に選べる原文は 3 件までです。/);
+  await expect(rowCheckbox(page, 1)).toBeEnabled();
+  await shot(page, info, "wiki-limit");
+  // 詳細の「質問に追加」も押せず、同じ理由を出す。
+  await list.getByRole("button", { name: /合成の原文 4 / }).click();
+  const panel = detail(page, phone);
+  await expect(panel.getByRole("button", { name: "質問に追加" })).toBeDisabled();
+  await expect(panel.getByText("一度に選べる原文は 3 件までです。")).toBeVisible();
+  await shot(page, info, "wiki-limit-detail");
+  if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+  // 1 件外すと、また選べる。
+  await rowCheckbox(page, 2).uncheck();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("2 / 3 件");
+  await expect(reason).toHaveCount(0);
+  await expect(list.getByRole("checkbox", { disabled: true })).toHaveCount(0);
+  await rowCheckbox(page, 4).check();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("3 / 3 件");
+  // 保存済みの選択が上限を超えていたら、先頭から上限までにする。
+  control.limit = 2;
+  await page.reload();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("2 / 2 件");
+  await expect(selectedList(page).getByRole("listitem")).toHaveCount(2);
+  await expectNoPageOverflow(page);
+});
+
+for (const mode of ["only", "mix"] as const) {
+  test(`チャットへ渡した原文は件数と使い方の選択を出し、要求に wiki_source_mode=${mode} を入れる`, { tag: "@responsive" }, async ({ page }, info) => {
+    const phone = info.project.name === "mobile";
+    await data(page);
+    await mockChatSend(page);
+    await begin(page);
+    for (const n of [1, 2, 3]) await rowCheckbox(page, n).check();
+    await page.getByRole("button", { name: "チャットで質問" }).click();
+    // 件数は見出しの後ろに出す（タグは 2 行までで、多いと総数が分からない。#5978）。
+    await expect(page.getByTestId("selected-sources-count")).toHaveText("3 / 10 件");
+    await expect(selectedList(page).getByRole("listitem")).toHaveCount(3);
+    // 既定は「選んだ原文だけで回答」。
+    const choice = page.getByRole("radiogroup", { name: "選んだ原文の使い方" });
+    await expect(choice.getByRole("radio", { name: "選んだ原文だけで回答" })).toBeChecked();
+    if (mode === "mix") {
+      await choice.getByRole("radio", { name: "選んだ原文に追加して探す" }).check();
+      await expect(choice.getByRole("radio", { name: "選んだ原文に追加して探す" })).toBeChecked();
+    }
+    // Wiki の原文の欄がある間、空の会話の案内は文字だけ（アイコンなし）で、会話の領域の中に収まる（375px でも切れない）。
+    const log = page.getByRole("log", { name: "会話" });
+    const hint = page.getByTestId("chat-empty-compact");
+    await expect(hint).toContainText("質問を入力して会話を始めます");
+    await expect(log.locator("svg")).toHaveCount(0);
+    const [logBox, hintBox] = [await log.boundingBox(), await hint.boundingBox()];
+    expect(hintBox!.y).toBeGreaterThanOrEqual(logBox!.y);
+    expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(logBox!.y + logBox!.height + 0.5);
+    // 「Wiki 検索に戻る」は、広い画面ではタグの右、狭い画面ではタグの下の行（タグが幅いっぱいを使い、名前を切らない）。
+    const [tagsBox, backBox] = [await selectedList(page).boundingBox(), await page.getByRole("button", { name: "Wiki 検索に戻る" }).boundingBox()];
+    if (phone) {
+      expect(backBox!.y).toBeGreaterThanOrEqual(tagsBox!.y + tagsBox!.height - 0.5);
+      await expect(selectedList(page).getByRole("listitem").first()).toContainText(files[0].name);
+      const name = selectedList(page).getByRole("listitem").first().getByText(files[0].name, { exact: true });
+      expect(await name.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    } else {
+      expect(backBox!.x).toBeGreaterThanOrEqual(tagsBox!.x + tagsBox!.width - 0.5);
+    }
+    if (mode === "only") {
+      await page.getByTestId("chat-wiki-sources").scrollIntoViewIfNeeded();
+      await shot(page, info, "chat-selected");
+    }
+    const sent = page.waitForRequest((request) => request.url().endsWith("/messages/stream") && request.method() === "POST");
+    await page.getByTestId("chat-run-stop").click();
+    const body = (await sent).postDataJSON() as { wiki_sources: { unit_id: string }[]; wiki_source_mode: string };
+    expect(body.wiki_source_mode).toBe(mode);
+    expect(body.wiki_sources.map((source) => source.unit_id)).toEqual([hash(1), hash(2), hash(3)]);
+  });
+}
+
+test("ダークテーマでも、選んだ原文の欄・図の選んだ原文の印・チャットの選択を読める", async ({ page }, info) => {
+  // 見た目は写し（WIKI_GRAPH_SHOTS）で確かめる。desktop だけ。
+  test.skip(info.project.name !== "desktop", "ダークテーマの写しは desktop だけ");
+  await setDarkTheme(page);
+  await data(page);
+  await mockChatSend(page);
+  await begin(page);
+  await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(true);
+  for (const n of [1, 2, 3]) await rowCheckbox(page, n).check();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("3 / 10 件");
+  await page.getByTestId("wiki-selected").scrollIntoViewIfNeeded();
+  await shot(page, info, "wiki-selected-3", "dark-");
+  await page.getByRole("tab", { name: "関係図" }).click();
+  const canvas = canvasOf(page);
+  // 選んだ原文 3 件（1・2・3）と、原文 1 の次の段の最初の 10 件（4〜13）と、「さらに展開」の点。
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(14);
+  await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("選んだ原文 3");
+  // 凡例の「選んだ原文」と「原文」の印は違う色（塗り）。
+  const swatch = (kind: string) => page.getByTestId("wiki-graph-kind-" + kind).locator("span[aria-hidden]").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(await swatch("picked")).not.toBe(await swatch("unit"));
+  await page.getByTestId("wiki-graph-node-kinds").scrollIntoViewIfNeeded();
+  await shot(page, info, "wiki-graph", "dark-");
+  await page.getByRole("button", { name: "チャットで質問" }).click();
+  await expect(page.getByRole("radiogroup", { name: "選んだ原文の使い方" }).getByRole("radio", { name: "選んだ原文だけで回答" })).toBeChecked();
+  await shot(page, info, "chat-selected", "dark-");
+});
+
+test("ナレッジベース詳細の図から選ぶ原文にも、上限と件数の表示が効く", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  const control = await data(page, { calls: [], limit: 1 });
+  await page.route("**/api/wiki-search/profiles-for-kb/**", (r) => r.fulfill({ json: ok([{ id: profiles[0].id, name: profiles[0].name }]) }));
+  const area = await openKnowledgeBaseGraph(page);
+  const canvas = canvasOf(page);
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
+  // 選ぶ操作を出す前に、範囲（上限）を読む。
+  expect(control.calls.some((u) => u.pathname.endsWith("/wiki/explore/scope"))).toBe(true);
+  await page.locator("#wiki-graph-find").fill("合成");
+  await expect(page.getByTestId("wiki-graph-find-nav")).toContainText("1 / 25");
+  const panel = detail(page, phone);
+  if (phone) await page.getByRole("button", { name: "詳細を開く" }).click();
+  await expect(panel.getByText("照合済みの合成原文 1。")).toBeVisible();
+  await panel.getByRole("button", { name: "質問に追加" }).click();
+  if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+  await expect(area.getByTestId("selected-sources-count")).toHaveText("1 / 1 件");
+  // 上限に達したら、ほかの原文の「質問に追加」は押せず、理由を出す。
+  await area.getByRole("button", { name: "次の一致へ" }).click();
+  if (phone) await page.getByRole("button", { name: "詳細を開く" }).click();
+  await expect(panel.getByText("照合済みの合成原文 2。")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "質問に追加" })).toBeDisabled();
+  await expect(panel.getByText("一度に選べる原文は 1 件までです。")).toBeVisible();
 });
 
 test("ナレッジベース詳細は参照の多い文書の見本で開き、キーボードで展開し、図内検索の当たりを足してクリアできる", { tag: "@responsive" }, async ({ page }, info) => {
@@ -400,36 +608,42 @@ test("関係の多い図は全体が画布に収まり、辺の文字は選ん�
   await expectNoPageOverflow(page);
 });
 
-test("原文の関係は 1 回で取り切り、25 件ずつ展開して「さらに展開」で続きを出す", { tag: "@responsive" }, async ({ page }, info) => {
+test("原文の関係は 1 回で取り切り、選んだ原文の次の段は 10 件、「さらに展開」で続きを 25 件ずつ出す", { tag: "@responsive" }, async ({ page }, info) => {
   const phone = info.project.name === "mobile";
   const control = await data(page);
   await begin(page);
-  await page.getByRole("tab", { name: "検索結果" }).click();
-  await page.getByRole("region", { name: "検索結果の一覧" }).getByRole("button", { name: /合成の原文 1 / }).click();
+  await results(page).getByRole("button", { name: /合成の原文 1 / }).click();
   const panel = detail(page, phone);
   // 関係は「関係」のタブを開くまで読まない（選ぶたびに読むと、原文・線の照会と重なる。#5966）。
   await expect(panel.getByRole("button", { name: "質問に追加" })).toBeVisible();
-  expect(control.calls.filter((u) => u.pathname.endsWith("/relations"))).toHaveLength(0);
+  expect(relationCalls(control)).toHaveLength(0);
+  // 図に無い原文からは展開しない（図は選んだ原文とその次の段だけ。選ぶと図に入る）。
+  await expect(panel.getByRole("button", { name: "関連を展開" })).toHaveCount(0);
   await panel.getByRole("tab", { name: "関係", exact: true }).click();
   // 関係の一覧は詳細の中でも共通のページング（25 件）。
   await expect(panel.getByRole("region", { name: "関係の一覧" }).getByRole("listitem")).toHaveCount(25);
-  await panel.getByRole("button", { name: "関連を展開" }).click();
+  await panel.getByRole("button", { name: "質問に追加" }).click();
+  if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+  await page.getByRole("tab", { name: "関係図" }).click();
   const canvas = canvasOf(page);
-  await expect(page.getByRole("tab", { name: "関係図" })).toHaveAttribute("aria-selected", "true");
-  // 25 件の結果に、図に無い隣接を 25 件まで足し、残りは「さらに展開」の点。
-  await expect.poll(() => graphCount(canvas, "nodes")).toBeGreaterThan(25);
-  const relationCalls = control.calls.filter((u) => u.pathname.endsWith("/relations"));
+  // 選んだ原文 1 件と、次の段の最初の 10 件と、残り（20 件）の「さらに展開」の点。
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(12);
   // 関係は 1 回の要求で取り切り、ページを繰り返して読まない（#5916）。
-  expect(relationCalls.length).toBeGreaterThan(0);
-  expect(relationCalls.every((u) => u.searchParams.get("limit") === "500" && u.searchParams.get("offset") === "0")).toBe(true);
+  expect(relationCalls(control).length).toBeGreaterThan(0);
+  expect(relationCalls(control).every((u) => u.searchParams.get("limit") === "500" && u.searchParams.get("offset") === "0")).toBe(true);
+  // 選んだ原文から「さらに展開」で残りを出す（既存の展開。1 回 25 件まで）。
+  await page.getByRole("tab", { name: "一覧" }).click();
+  await nodeList(page).getByRole("button", { name: /^合成の原文 1(?!\d)/ }).click();
+  await panel.getByRole("button", { name: "さらに展開" }).click();
+  await expect(page.getByRole("tab", { name: "関係図" })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(31);
   await expectNoPageOverflow(page);
 });
 
 test("関係の読み込みの失敗は詳細の同じ場所で再試行でき、Wiki 権限の無い利用者は開けない", async ({ page }, info) => {
   const control = await data(page, { calls: [], failRelations: true });
   await begin(page);
-  await page.getByRole("tab", { name: "検索結果" }).click();
-  await page.getByRole("region", { name: "検索結果の一覧" }).getByRole("button", { name: /合成の原文 1 / }).click();
+  await results(page).getByRole("button", { name: /合成の原文 1 / }).click();
   const panel = detail(page, info.project.name === "mobile");
   await panel.getByRole("tab", { name: "関係", exact: true }).click();
   const retry = panel.getByRole("button", { name: /再試行|再読み込み/ });

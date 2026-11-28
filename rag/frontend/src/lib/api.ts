@@ -1642,6 +1642,11 @@ export interface ConversationUpdateBody {
 
 export interface ChatMessageRequestBody {
   wiki_sources?: {unit_id: string; source_hash: string}[];
+  /**
+   * 選んだ原文の使い方（#5981）。only（既定）= 選んだ原文と、その文書の先頭の chunk だけを根拠にする（検索しない）。
+   * mix = 選んだ原文に通常の検索の結果を足す。`wiki_sources` があるときだけ送る。
+   */
+  wiki_source_mode?: "only" | "mix";
   content: string;
   question_context_token?: string;
   model_ids?: string[];

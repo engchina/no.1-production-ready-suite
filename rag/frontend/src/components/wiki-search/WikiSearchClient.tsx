@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { MessagesSquare, Search, SlidersHorizontal } from "lucide-react";
+import { MessagesSquare, Search, SlidersHorizontal, X } from "lucide-react";
 import {
   Button,
   Card,
@@ -37,6 +37,8 @@ import { WikiExplorer } from "./WikiExplorer";
 import {
   isWikiDraft,
   wikiApi,
+  wikiSelectionLimit,
+  type WikiDraft,
   type WikiKb,
   type WikiMethod,
   type WikiPick,
@@ -107,13 +109,27 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
     enabled: manual && !!profileId,
     retry: false,
   });
+  // 一度に選べる原文の上限（#5981）。Wiki 検索は範囲の応答、ナレッジベース詳細は選ぶ操作を出す前に範囲を読む。
+  const kbScope = useQuery({
+    queryKey: ["wiki-kb-scope", knowledgeBaseId],
+    queryFn: ({ signal }) => wikiApi.scope({ kind: "kb", id: knowledgeBaseId! }, signal),
+    enabled: !manual && canChat,
+    retry: false,
+  });
+  const limitKnown = manual ? available.isSuccess : kbScope.isFetched;
+  const selectionLimit = wikiSelectionLimit((manual ? available.data : kbScope.data)?.selection_limit);
+  // 保存済みの選択が上限を超えていたら、先頭から上限までにする（画面・保存・チャットへ渡す内容のすべて）。
+  const items = useMemo(
+    () => (limitKnown && state.items.length > selectionLimit ? state.items.slice(0, selectionLimit) : state.items),
+    [limitKnown, selectionLimit, state.items],
+  );
   const chatProfiles = useQuery({
     queryKey: ["wiki-chat-profiles", knowledgeBaseId],
     queryFn: ({ signal }) =>
       request<WikiKb[]>(`/api/wiki-search/profiles-for-kb/${encodeURIComponent(knowledgeBaseId!)}`, {
         signal,
       }),
-    enabled: !manual && canChat && state.items.length > 0,
+    enabled: !manual && canChat && items.length > 0,
     retry: false,
   });
   const isSearching = useIsFetching({ queryKey: ["wiki-explorer", scope, state.submitted ? "search" : "docs"] }) > 0;
@@ -123,8 +139,8 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
     ? profileId
     : (kbProfiles.find((p) => p.id === profileId)?.id ?? (kbProfiles.length === 1 ? kbProfiles[0].id : ""));
   useEffect(() => {
-    writeWorkspace("wiki.search", state, knowledgeBaseId);
-  }, [state, knowledgeBaseId]);
+    writeWorkspace("wiki.search", { ...state, items }, knowledgeBaseId);
+  }, [state, items, knowledgeBaseId]);
   useEffect(() => {
     // 検索を実行したときだけ、画面下に隠れた経過時間または結果の見出しへ移動する。
     const region = resultsRef.current;
@@ -143,14 +159,19 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
 
     setRun((r) => r + 1);
   };
+  // 選ぶ・外す。上限に達している間は足さない（自動で入れ替えない）。
   const pick = (p: WikiPick) =>
-    setState((s) => ({
-      ...s,
-      items: s.items.some((x) => x.id === p.id) ? s.items.filter((x) => x.id !== p.id) : [...s.items, p],
-    }));
+    setState((s) => {
+      const kept = s.items.slice(0, selectionLimit);
+      if (kept.some((x) => x.id === p.id)) return { ...s, items: kept.filter((x) => x.id !== p.id) };
+      return kept.length < selectionLimit ? { ...s, items: [...kept, p] } : s;
+    });
+  const unpick = (ids: readonly string[]) =>
+    setState((s) => ({ ...s, items: s.items.slice(0, selectionLimit).filter((x) => !ids.includes(x.id)) }));
   function chat() {
-    if (!canChat || !chatProfile || !state.items.length) return;
-    writeWorkspace("chat.wikiSources", { profileId: chatProfile, items: state.items, knowledgeBaseId });
+    if (!canChat || !chatProfile || !items.length) return;
+    const draft: WikiDraft = { profileId: chatProfile, items, knowledgeBaseId, selectionLimit };
+    writeWorkspace("chat.wikiSources", draft);
     writeWorkspace("chat.composer", state.submitted);
     for (const f of ["chat.conversationId", "chat.faqChoice", "chat.clarifyChoice"] as const)
       removeWorkspace(f);
@@ -282,14 +303,18 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
             method={appliedMethod}
             initialOffset={state.offset ?? 0}
             onOffset={(offset) => patch({ offset, root: "", selectedUnit: "" })}
-            picks={state.items}
-            toggle={canChat ? pick : undefined}
+            picks={items}
+            // Wiki 検索の図は選んだ原文から作るので、チャットの権限が無くても選べる（チャットへ渡す操作だけ出さない）。
+            // ナレッジベース詳細は、チャットへ渡すときだけ選ぶ（上限を読んでから操作を出す）。
+            toggle={manual ? pick : canChat && limitKnown ? pick : undefined}
+            unpick={unpick}
+            selectionLimit={selectionLimit}
             initialSelection={state.selectedUnit}
             onSelectUnit={(selectedUnit) => patch({ selectedUnit })}
             searchButtonBusy={isSearching}
           />
-          {canChat && state.items.length > 0 && (
-            <div className="space-y-2 rounded-md border border-border bg-surface p-3">
+          {(manual || canChat) && items.length > 0 && (
+            <div className="space-y-2 rounded-md border border-border bg-surface p-3" data-testid="wiki-selected">
               {!manual && chatProfiles.isPending && (
                 <TimedLoadingState label={t("wiki.search.loadingProfiles")} operationKey={knowledgeBaseId}><FieldSkeleton /></TimedLoadingState>
               )}
@@ -315,15 +340,34 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
                 <p className="text-sm text-fg-muted">{t("wiki.search.noChatProfile")}</p>
               )}
               <SelectedSources
-                items={state.items}
+                items={items}
                 label={t("wiki.search.selected")}
+                count={t("wiki.search.selectedCount", { count: items.length, limit: selectionLimit })}
                 removeLabel={(name) => t("fileReview.remove", { name })}
                 focusAfterLast={() => document.getElementById("wiki-question")?.focus()}
-                onRemove={(id) => patch({ items: state.items.filter((p) => p.id !== id) })}
+                onRemove={(id) => unpick([id])}
                 action={
-                  <Button icon={MessagesSquare} disabled={!chatProfile} onClick={chat}>
-                    {t("wiki.search.ask")}
-                  </Button>
+                  // 狭い画面では操作を 1 行にまとめてタグの下へ回す（タグの欄を全幅に使う）。
+                  <div className="flex flex-wrap items-center justify-end gap-2 max-sm:w-full">
+                    {/* 「すべて外す」は Wiki 検索だけ（ナレッジベース詳細の欄は、件数と上限のほかは変えない）。 */}
+                    {manual && (
+                      <Button
+                        variant="ghost"
+                        icon={X}
+                        onClick={() => {
+                          patch({ items: [] });
+                          document.getElementById("wiki-question")?.focus();
+                        }}
+                      >
+                        {t("wiki.search.removeAll")}
+                      </Button>
+                    )}
+                    {canChat && (
+                      <Button icon={MessagesSquare} disabled={!chatProfile} onClick={chat}>
+                        {t("wiki.search.ask")}
+                      </Button>
+                    )}
+                  </div>
                 }
               />
             </div>
