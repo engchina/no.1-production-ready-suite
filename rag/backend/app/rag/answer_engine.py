@@ -793,7 +793,10 @@ class AnswerEngine:
         # ⑦ 根拠の拡張をするか(#5332。``RagPipeline`` の経路が expanded のとき)。しないとき
         # (RAG 検索の経路)は切った起点からの検索拡張(参照の展開・目次からの章節の選択・実体)
         # を呼ばず、rag_engine の ``_expand_evidence`` も呼ばない。⑤⑥ と ⑧ は同じ。
-        self._expand = expand
+        # Wiki 検索で選んだ原文だけで答えるとき(#5981)は、検索・自動の Wiki 検索・検索拡張・根拠の
+        # 拡張をしない(根拠は選んだ原文そのものだけ)。
+        self._selected_only = wiki_handoff is not None and wiki_handoff.only
+        self._expand = expand and not self._selected_only
 
     async def run(
         self, request: SearchRequest, *, step_callback: StepCallback | None = None
@@ -1191,7 +1194,8 @@ class AnswerEngine:
         from rag_engine.retrieval.weighted_rrf import unique_queries
 
         queries = unique_queries(retrieval_queries)
-        if not queries:
+        if not queries or self._selected_only:
+            # 選んだ原文だけで答えるときは検索しない(#5981)。原文は ``additional_sources`` で足す。
             return HybridSearchResult(child_chunks=[], all_chunks=[])
         await self._ensure_search_filters(request, state)
         assert state.filters is not None

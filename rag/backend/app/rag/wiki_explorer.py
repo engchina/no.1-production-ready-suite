@@ -28,10 +28,21 @@ class WikiHandoff:
     profile_id: str
     refs: tuple[WikiSourceRef, ...]
     chunks: tuple[RetrievedChunk, ...]
+    # True = 選んだ原文だけを根拠にする（#5981）。検索・自動の Wiki 検索・検索拡張・根拠の拡張を
+    # しない。
+    only: bool = False
 
     async def recheck(self, oracle: OracleClient, filters: Mapping[str, str]) -> None:
         current = await WikiExplorer.for_profile(oracle, self.profile_id)
         await current.selected(self.refs, filters)
+
+
+def require_selection_within_limit(count: int, settings: Settings) -> None:
+    """選んだ原文の数が設定の上限（`RAG_WIKI_SELECTION_MAX_UNITS`）を超えていれば 422（#5981）。"""
+    if count > settings.rag_wiki_selection_max_units:
+        raise HTTPException(
+            422, f"一度に選べる原文は {settings.rag_wiki_selection_max_units} 件までです。"
+        )
 
 
 class WikiHandoffOptions(TypedDict, total=False):
