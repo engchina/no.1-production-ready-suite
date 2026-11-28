@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from app.clients.wiki_reference_index import (
     DocumentNames,
+    ReferenceTargets,
     _text_references,
     model_references,
     section_pages,
@@ -153,6 +154,30 @@ def test_section_pages_prefer_the_exact_heading() -> None:
     # 当たる見出しが無い・表記が無いときは並びを変えない。
     assert [page.name for page in section_pages(pages, "第 9 章")] == ["a1", "a3", "b1"]
     assert [page.name for page in section_pages(pages, "")] == ["a1", "a3", "b1"]
+
+
+def test_reference_targets_resolve_sections_with_keys_built_once_per_document() -> None:
+    """章節の表記つきの参照を何件照合しても、文書の見出しの比較形は作り直さない（#5966）。"""
+    rows = [
+        {
+            "document_id": "doc-a",
+            "unit_id": f"u{i}",
+            "target_path": json.dumps(["合成規程", f"第 {i} 条"]),
+        }
+        for i in range(1, 31)
+    ]
+    targets = ReferenceTargets(rows)
+    # 見出しの完全一致 → 見出しが表記を含む → 当たらなければ原文順の先頭。
+    assert targets.resolve("doc-a", "第 7 条") == "u7"
+    built = targets.parts["doc-a"]
+    assert [targets.resolve("doc-a", f"第{i}条") for i in range(1, 31)] == [
+        f"u{i}" for i in range(1, 31)
+    ]
+    assert targets.resolve("doc-a", "規程") == "u1"
+    assert targets.resolve("doc-a", "無い章節") == "u1"
+    assert targets.resolve("doc-a", "") == "u1"
+    assert targets.resolve("doc-none", "第 1 条") is None
+    assert targets.parts["doc-a"] is built
 
 
 def test_model_references_read_the_saved_json_objects() -> None:

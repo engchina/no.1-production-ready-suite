@@ -226,6 +226,8 @@ class ReferenceTargets:
     def __init__(self, rows: Sequence[dict[str, Any]]) -> None:
         self.by_document: dict[str, list[tuple[str, list[str]]]] = {}
         self.resolved: dict[tuple[str, str], str | None] = {}
+        # 文書ごとの、単位の章節の見出しの比較形。最初に照合するときに 1 回だけ作る。
+        self.parts: dict[str, list[tuple[str, list[str]]]] = {}
         for row in rows:
             self.by_document.setdefault(str(row["document_id"]), []).append(
                 (str(row["unit_id"]), _json_list(row["target_path"]))
@@ -235,16 +237,27 @@ class ReferenceTargets:
         key = (doc, section)
         if key not in self.resolved:
             wanted = title_key(section)
-            paths = self.by_document.get(doc, [])
-            first = min(paths, key=lambda item: _section_rank(item[1], wanted), default=None)
+            # 表記ごとに見出しを正規化し直すと、参照の数 × 文書の単位の数だけ正規化する（#5966）。
+            if doc not in self.parts:
+                self.parts[doc] = [
+                    (unit, [title_key(part) for part in path])
+                    for unit, path in self.by_document.get(doc, [])
+                ]
+            first = min(
+                self.parts[doc], key=lambda item: _parts_rank(item[1], wanted), default=None
+            )
             self.resolved[key] = first[0] if first else None
         return self.resolved[key]
 
 
 def _section_rank(path: Sequence[str], wanted: str) -> int:
+    return _parts_rank([title_key(part) for part in path], wanted)
+
+
+def _parts_rank(parts: Sequence[str], wanted: str) -> int:
+    """見出しの比較形（``title_key``）への表記の当たり方（完全一致 0・含む 1・無し 2）。"""
     if len(wanted) < 2:
         return 2
-    parts = [title_key(part) for part in path]
     if parts and parts[-1] == wanted:
         return 0
     return 1 if any(wanted in part for part in parts) else 2
