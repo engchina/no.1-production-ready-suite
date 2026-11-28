@@ -1550,7 +1550,9 @@ export function ProfileManagementPage() {
   const load = async (announce = false, origin: "header" | "notice" = "header") => {
     setLoading("load");
     setLoadOrigin(origin);
-    setRefreshError("");
+    // 失敗の案内の「再試行」では、取り直しの結果が出るまで案内を残し、押した「再試行」を回す（案内と一緒に
+    // ボタンが消えてスピナーがどこにも出なくなるのを防ぐ。#5955）。ヘッダーからの取り直しは案内を消してから読む。
+    if (origin === "header") setRefreshError("");
     const results = await Promise.allSettled([
       profilesQuery.refetch(),
       tableObjectsQuery.refetch(),
@@ -1562,9 +1564,8 @@ export function ProfileManagementPage() {
     const succeeded = results.every(
       (result) => result.status === "fulfilled" && !result.value.isError
     );
-    if (!succeeded) {
-      setRefreshError(t("profiles.error.load"));
-    } else if (announce) {
+    setRefreshError(succeeded ? "" : t("profiles.error.load"));
+    if (succeeded && announce) {
       toast.success(t("common.action.refreshed"));
     }
     setLoading("");
