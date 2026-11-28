@@ -92,7 +92,7 @@ class Product:
 
 
 PRODUCTS = {
-    "rag": Product("rag", "rag/frontend", "e2e", "e2e/fixtures/test.ts", 4, 2),
+    "rag": Product("rag", "rag/frontend", "e2e", "e2e/fixtures/test.ts", 4, 3),
     "nl2sql": Product(
         "nl2sql", "nl2sql/frontend", "tests/e2e", "tests/e2e/_helpers/test.ts", 8, 8, True
     ),
