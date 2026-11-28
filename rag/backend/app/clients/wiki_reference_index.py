@@ -228,10 +228,19 @@ class ReferenceTargets:
         self.resolved: dict[tuple[str, str], str | None] = {}
         # 文書ごとの、単位の章節の見出しの比較形。最初に照合するときに 1 回だけ作る。
         self.parts: dict[str, list[tuple[str, list[str]]]] = {}
+        self.extend(sorted({str(row["document_id"]) for row in rows}), rows)
+
+    def extend(self, documents: Sequence[str], rows: Sequence[dict[str, Any]]) -> None:
+        """読んだ文書の候補を足す（候補の無い文書も、読んだ文書として残す）。
+
+        既にある文書は足さない（同時の要求が同じ文書を読んでも、候補を重ねない）。
+        """
+        fresh = {doc for doc in documents if doc not in self.by_document}
+        for doc in fresh:
+            self.by_document[doc] = []
         for row in rows:
-            self.by_document.setdefault(str(row["document_id"]), []).append(
-                (str(row["unit_id"]), _json_list(row["target_path"]))
-            )
+            if (doc := str(row["document_id"])) in fresh:
+                self.by_document[doc].append((str(row["unit_id"]), _json_list(row["target_path"])))
 
     def resolve(self, doc: str, section: str) -> str | None:
         key = (doc, section)
