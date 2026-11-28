@@ -201,7 +201,11 @@ def test_tool_fails_outside_a_run_and_after_the_run_ended(run_id: str) -> None:
 def test_mcp_run_output_lists_the_file_without_its_content(run_id: str) -> None:
     assert _invoke(run_id).success
 
-    output = run_output(runtime_repository.get_run(run_id))
+    # ファイルを渡すのは完了した Run だけ（#5950）。
+    completed = runtime_repository.get_run(run_id).model_copy(
+        update={"status": RunStatus.COMPLETED}
+    )
+    output = run_output(completed)
 
     assert [item.model_dump() for item in output.files] == [
         {

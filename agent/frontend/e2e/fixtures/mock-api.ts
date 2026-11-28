@@ -1299,6 +1299,16 @@ function viewerDisplayName(state: MockApiState, uuid: unknown): string {
  * 見ている利用者から見た Run の事実（backend の `RunViewer`。#1954）。待ちの操作は Run を実行した人と system_admin だけ
  * （会話の持ち主でも、system_admin が実行した Run は操作しない。#1928）。
  */
+/**
+ * 外へ返す Run（backend の `runtime.delivered_run`。#5950）。ファイルの成果物（kind `file`）は完了した Run だけに渡す
+ * （実行中・待ち・失敗・取消の Run の応答には入れない。保存した Run は変えない）。
+ */
+function deliveredRun(run: Json): Json {
+  if (run.status === "completed") return run;
+  const artifacts = (run.artifacts as Json[] | undefined) ?? [];
+  return { ...run, artifacts: artifacts.filter((artifact) => artifact.kind !== "file") };
+}
+
 function runViewerOf(state: MockApiState, run: Json): Json {
   const executor = run.created_by_user_uuid ?? "local";
   const owner = run.thread_owner_user_uuid ?? executor;
@@ -2026,7 +2036,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       thread_id: second,
       agent_id: runs[0].agent_id,
       // 各 Run に見ている利用者から見た事実（実行者・待ちの操作の可否。#1954）を付ける。
-      runs: visible.map((run) => ({ ...run, ...runViewerOf(state, run) })),
+      runs: visible.map((run) => ({ ...deliveredRun(run), ...runViewerOf(state, run) })),
       owned: ["", "local", viewer?.user_uuid].includes(owner),
       actor_display_name: viewer?.is_system_admin ? (state.creatorDisplayNames[owner] ?? "") : "",
       // 持ち主以外（system_admin）が送った往復の、送った人の表示名（Run の ID → 表示名。#1928）。
@@ -2051,7 +2061,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
     }
     requireAgentAccess(state, run.agent_id);
     // 実行の詳細（実行履歴の詳細・行の判断の前の読み直しが読む。#1897）。
-    if (method === "GET" && at("runs", "*")) return { ...run, ...runViewerOf(state, run) };
+    if (method === "GET" && at("runs", "*")) return { ...deliveredRun(run), ...runViewerOf(state, run) };
     if (method === "GET" && at("runs", "*", "audit")) {
       // 実行の監査（backend の `GET /api/runs/{id}/audit`）。監査の記録のうち、この実行のものを返す（#2403）。
       return {
