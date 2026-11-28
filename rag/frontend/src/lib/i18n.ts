@@ -2218,6 +2218,8 @@ export const ja = {
   "wiki.search.openDetail": "詳細を表示",
   "wiki.search.guide": "Wiki の案内",
   "wiki.search.selected": "Wiki で選んだ原文",
+  "wiki.search.selectedCount": "{count} 件",
+  "wiki.search.added": "追加済み",
   "wiki.search.selectedOrigin": "選んだ原文",
   "wiki.search.additionalOrigin": "追加で検索",
   "wiki.search.add": "質問に追加",

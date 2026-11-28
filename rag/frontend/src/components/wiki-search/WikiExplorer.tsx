@@ -18,6 +18,7 @@ import {
   SearchField,
   SideSheet,
   Skeleton,
+  StatusBadge,
   TabPanel,
   Tabs,
   staleContentClass,
@@ -374,6 +375,8 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
                     <span className="flex min-w-0 gap-2">
                       <span className="text-xs tabular-nums text-fg-muted">{offset + index + 1}</span>
                       <strong className="min-w-0 text-sm [overflow-wrap:anywhere]">{row.label}</strong>
+                      {/* 質問に追加済みの行（選んだ原文が多いと、どれを選んだかが一覧で分からない。#5978）。 */}
+                      {picks?.some((pick) => pick.id === row.id) && <StatusBadge variant="success" label={t("wiki.search.added")} className="ml-auto shrink-0" />}
                     </span>
                     <span className="flex min-w-0 items-center gap-1 text-xs font-normal text-fg-muted">
                       <BookOpen size={14} className="shrink-0" aria-hidden />

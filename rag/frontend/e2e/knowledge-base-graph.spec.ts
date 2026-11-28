@@ -290,6 +290,33 @@ test("Wiki 検索は結果で図を置き換え、結果の間の関係をつな
   await expectNoPageOverflow(page);
 });
 
+test("選んだ原文は件数を出し、検索結果の追加済みの行に印を付ける", { tag: "@responsive" }, async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  await data(page);
+  await begin(page);
+  await page.getByRole("tab", { name: "検索結果" }).click();
+  const results = page.getByRole("region", { name: "検索結果の一覧" });
+  const panel = detail(page, phone);
+  for (const name of [/合成の原文 1 /, /合成の原文 2 /, /合成の原文 3 /]) {
+    await results.getByRole("button", { name }).click();
+    await panel.getByRole("button", { name: "質問に追加" }).click();
+    if (phone) await panel.getByRole("button", { name: "選択を解除" }).click();
+  }
+  // 件数は見出しの後ろに出す（タグは 2 行までで、多いと総数が分からない。#5978）。
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("3 件");
+  await expect(page.getByRole("list", { name: "Wiki で選んだ原文" }).getByRole("listitem")).toHaveCount(3);
+  // 検索結果の一覧は、質問に追加済みの行に印を出す。
+  await expect(results.getByText("追加済み", { exact: true })).toHaveCount(3);
+  await shot(page, info, "wiki-selected");
+  await page.getByRole("list", { name: "Wiki で選んだ原文" }).getByRole("button", { name: /を外す$/ }).first().click();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("2 件");
+  await expect(results.getByText("追加済み", { exact: true })).toHaveCount(2);
+  await page.getByRole("button", { name: "チャットで質問" }).click();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("2 件");
+  await shot(page, info, "chat-selected");
+  await expectNoPageOverflow(page);
+});
+
 test("ナレッジベース詳細は参照の多い文書の見本で開き、キーボードで展開し、図内検索の当たりを足してクリアできる", { tag: "@responsive" }, async ({ page }, info) => {
   const phone = info.project.name === "mobile";
   const control = await data(page, { calls: [], failSample: true });

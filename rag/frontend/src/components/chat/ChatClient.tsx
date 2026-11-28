@@ -1774,7 +1774,7 @@ export function ChatClient() {
                     会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
                 <ChatComposer
                   id="chat-composer"
-                  options={wikiItems.length ? <SelectedSources items={wikiItems} label={t("wiki.search.selected")}
+                  options={wikiItems.length ? <SelectedSources items={wikiItems} label={t("wiki.search.selected")} count={t("wiki.search.selectedCount", { count: wikiItems.length })}
                     removeLabel={(name) => t("fileReview.remove", {name})}
                     disabled={answerInProgress || sending}
                     focusAfterLast={() => composerRef.current?.focus()}
