@@ -6,7 +6,7 @@ fix の流れ）。モデルは呼ばない（保存した Run の事実だけ�
 
 シグナルの定義（Python の `fact_signals` と SQL の `SIGNAL_CONDITIONS` は同じ規則）:
 
-- `not_helpful`: 本人か管理者の評価が「役に立たなかった」。
+- `not_helpful`: 本人か管理者の評価が「解決しなかった」。
 - `ungrounded_answer`: 根拠を使わずに答えた（#5859）。根拠・データのツールを渡した業務 Agent が
   どれも呼ばずに作った回答を、注意を付けてそのまま出した（業務 Agent の設定が「そのまま出して
   注意を付ける」。回答の対応の basis が `ungrounded_answer`。判定はツールを呼んだかだけで、回答の

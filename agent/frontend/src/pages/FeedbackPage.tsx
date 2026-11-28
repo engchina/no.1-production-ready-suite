@@ -75,7 +75,7 @@ import { signalLabel, SignalsContent, SignalsSkeleton } from "@/pages/FeedbackSi
 // フィードバック（#774）。2 つの見方を `Tabs` で切り替える（#1822）。
 // - 確かめるべき実行（既定）: 評価の付いていない実行も、回答の対応・ツール・承認・実行の状態の
 //   暗黙のシグナルから集める（`FeedbackSignals.tsx`）。明示の評価は回答のごく一部にしか付かないため既定にする。
-// - 利用者の評価: チャットの回答への利用者の評価を集計し、役に立たなかった回答と理由を確かめる。
+// - 利用者の評価: チャットの回答への利用者の評価を集計し、解決しなかった回答と理由を確かめる。
 //   画面の形は RAG のフィードバック（集計 → 理由 → 一覧 → 詳細）にそろえる。
 // 期間・業務 Agent は 2 つの見方で共通。期間は 365 日まで。Oracle の構成は保存した Run の履歴を集計し、
 // 一覧はサーバー側でページングする（#794）。
@@ -709,7 +709,7 @@ function RatingBadge({ rating }: { rating: FeedbackRating }) {
   );
 }
 
-/** 役に立たなかった回答（本人の 👎 か管理者の評価）。評価ケースに追加できる（#810）。 */
+/** 解決しなかった回答（本人の 👎 か管理者の評価）。評価ケースに追加できる（#810）。 */
 function notHelpful(item: FeedbackItem): boolean {
   return item.feedback?.rating === "not_helpful" || item.admin_review?.rating === "not_helpful";
 }
@@ -753,7 +753,7 @@ function FeedbackDetail({ item, onReviewed }: { item: FeedbackItem; onReviewed: 
       {capabilities.admin ? (
         <AnswerFeedback runId={item.run_id} current={item.admin_review} mode="admin" onSaved={onReviewed} />
       ) : null}
-      {/* 役に立たなかった回答を品質評価の評価ケースにする（品質評価の権限。#810）。 */}
+      {/* 解決しなかった回答を品質評価の評価ケースにする（品質評価の権限。#810）。 */}
       {canAddCase && notHelpful(item) ? (
         <AddToEvaluationCase key={item.run_id} runId={item.run_id} testId="feedback-add-case" />
       ) : null}

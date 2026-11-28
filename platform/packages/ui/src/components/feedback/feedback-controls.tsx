@@ -17,7 +17,7 @@ export interface FeedbackControlsValue<R extends string = string> {
   correctedAnswer?: string | null;
 }
 
-/** 保存する評価。コメント・修正した回答は前後の空白を除き、空なら null。「役に立った」は理由・コメントを持たない。 */
+/** 保存する評価。コメント・修正した回答は前後の空白を除き、空なら null。「解決した」は理由・コメントを持たない。 */
 export interface FeedbackControlsSubmission<R extends string = string> {
   rating: FeedbackRating;
   reason: R | null;
@@ -33,9 +33,11 @@ export interface FeedbackReasonOption<R extends string = string> {
 
 /** 文言（すべて翻訳済み。製品の i18n から渡す）。 */
 export interface FeedbackControlsLabels {
-  /** 問い（例:「この回答は役に立ちましたか？」）。ボタンの組の名前にもなる。 */
+  /** 問い（例:「この回答で質問は解決しましたか？」）。ボタンの組の名前にもなる。 */
   question: string;
+  /** 👍 のボタンの文字（例:「解決した」）。`compact` では読み上げの名前と Tooltip。 */
   helpful: string;
+  /** 👎 のボタンの文字（例:「解決しなかった」）。`compact` では読み上げの名前と Tooltip。 */
   notHelpful: string;
   /** 保存済みの表示（例:「保存済み・変更できます」）。`compact` では出さない。 */
   savedInline: string;
@@ -57,7 +59,7 @@ export interface FeedbackControlsLabels {
 export interface FeedbackControlsProps<R extends string = string> {
   /** 保存済みの評価。無ければ null。 */
   value: FeedbackControlsValue<R> | null | undefined;
-  /** 「役に立たなかった」の理由の選択肢（並び順のまま出す）。 */
+  /** 「解決しなかった」の理由の選択肢（並び順のまま出す）。 */
   reasons: readonly FeedbackReasonOption<R>[];
   /**
    * 保存する。解決したら理由の欄を閉じる（成功の Toast・保存した値の反映は製品が行う）。
@@ -73,7 +75,7 @@ export interface FeedbackControlsProps<R extends string = string> {
   correctedAnswer?: boolean;
   /** 修正した回答の最大文字数（既定 20000）。 */
   correctedAnswerMaxLength?: number;
-  /** 引用のカードの中などの小さな形。問いは読み上げだけ、右寄せ、保存済みの表示なし、上の区切り線なし。 */
+  /** 引用のカードの中などの小さな形。問いは読み上げだけ、ボタンはアイコンだけ、右寄せ、保存済みの表示なし。 */
   compact?: boolean;
   /** 操作できない（保存済みの評価の読み込み中など）。 */
   disabled?: boolean;
@@ -108,7 +110,10 @@ export function isSameFeedback<R extends string>(
 /**
  * 回答・引用への評価（#805。RAG の `FeedbackControls` と Agent の `AnswerFeedback`（#774）を 1 つにした）。
  *
- * - 「役に立った」はすぐ保存する。「役に立たなかった」は理由（必須）・コメント（任意）・修正した回答（任意）をその場で開いて保存する。
+ * - 問いを 1 行、その下に文字つきの 2 つのボタン（👍 `labels.helpful` / 👎 `labels.notHelpful`）を出す。資料を選び直す評価
+ *   （`AnswerFileReview`）と同じ並びと見た目にする（#5969）。`compact` だけアイコンだけのボタンにする。
+ *   上の区切り線は部品が持たない（前の内容と区切る場所では、製品が `className` で付ける）。
+ * - 「解決した」はすぐ保存する。「解決しなかった」は理由（必須）・コメント（任意）・修正した回答（任意）をその場で開いて保存する。
  *   付け直すと上書きする。保存済みと同じ内容なら送り直さず閉じる。
  * - 保存中は押したボタンだけが `loading`（アイコンがスピナー）になり、ほかは押せない。
  * - 失敗は部品の下に `role="alert"` の文言と「再試行」を出す（次の保存まで残す）。成功の Toast は製品が出す（messaging §4.2）。
@@ -169,45 +174,65 @@ export function FeedbackControls<R extends string = string>({
 
   const savedReason = value?.reason ? reasons.find((item) => item.value === value.reason)?.label : undefined;
 
+  // 評価のボタン。既定は資料を選び直す評価（`AnswerFileReview`）と同じ文字つきの `secondary`、`compact` はアイコンだけ。
+  const ratingButton = (rating: FeedbackRating) => {
+    const helpful = rating === "helpful";
+    const label = helpful ? labels.helpful : labels.notHelpful;
+    const pressed = rated(rating);
+    return (
+      <Button
+        type="button"
+        size="sm"
+        icon={helpful ? ThumbsUp : ThumbsDown}
+        aria-pressed={pressed}
+        aria-expanded={helpful || readOnly ? undefined : showReasons}
+        disabled={locked}
+        loading={helpful ? pending === "helpful" : undefined}
+        onClick={
+          helpful
+            ? () => submit({ rating: "helpful", reason: null, comment: null, correctedAnswer: null })
+            : toggleReasons
+        }
+        {...(compact
+          ? {
+              variant: pressed ? ("secondary" as const) : ("ghost" as const),
+              iconOnly: true,
+              "aria-label": label,
+              className: pressed ? (helpful ? "text-success-fg" : "text-danger-fg") : undefined,
+            }
+          : { variant: "secondary" as const, children: label })}
+      />
+    );
+  };
+  const ratingGroup = (
+    <div className={cn("flex", compact ? "gap-1" : "flex-wrap gap-2")} role="group" aria-label={labels.question}>
+      {ratingButton("helpful")}
+      {ratingButton("not_helpful")}
+    </div>
+  );
+
   return (
-    <div className={cn("min-w-0", !compact && "border-t border-border pt-3", className)} data-testid={testId}>
-      <div className={cn("flex gap-2", compact ? "items-center justify-end" : "flex-wrap items-center")}>
-        <span className={compact ? "sr-only" : "mr-1 text-sm font-medium text-fg"}>{labels.question}</span>
-        <div className="flex gap-1" role="group" aria-label={labels.question}>
-          <Button
-            type="button"
-            variant={rated("helpful") ? "secondary" : "ghost"}
-            size="sm"
-            iconOnly
-            icon={ThumbsUp}
-            className={rated("helpful") ? "text-success-fg" : undefined}
-            aria-label={labels.helpful}
-            aria-pressed={rated("helpful")}
-            disabled={locked}
-            loading={pending === "helpful"}
-            onClick={() => submit({ rating: "helpful", reason: null, comment: null, correctedAnswer: null })}
-          />
-          <Button
-            type="button"
-            variant={rated("not_helpful") ? "secondary" : "ghost"}
-            size="sm"
-            iconOnly
-            icon={ThumbsDown}
-            className={rated("not_helpful") ? "text-danger-fg" : undefined}
-            aria-label={labels.notHelpful}
-            aria-pressed={rated("not_helpful")}
-            aria-expanded={readOnly ? undefined : showReasons}
-            disabled={locked}
-            onClick={toggleReasons}
-          />
+    <div className={cn("min-w-0", className)} data-testid={testId}>
+      {compact ? (
+        <div className="flex items-center justify-end gap-2">
+          <span className="sr-only">{labels.question}</span>
+          {ratingGroup}
         </div>
-        {value && !compact && !readOnly ? (
-          <span className="inline-flex items-center gap-1 text-xs text-fg-muted" role="status">
-            <CheckCircle2 size={14} className="text-success-fg" aria-hidden />
-            {labels.savedInline}
-          </span>
-        ) : null}
-      </div>
+      ) : (
+        // 問いを 1 行、その下に文字つきのボタン（`AnswerFileReview` と同じ並び）。保存済みの表示はボタンの後ろ。
+        <div className="space-y-1.5">
+          <p className="text-sm">{labels.question}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {ratingGroup}
+            {value && !readOnly ? (
+              <span className="inline-flex items-center gap-1 text-xs text-fg-muted" role="status">
+                <CheckCircle2 size={14} className="text-success-fg" aria-hidden />
+                {labels.savedInline}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      )}
 
       {readOnly && value?.rating === "not_helpful" && (savedReason || normalizeText(value.comment)) ? (
         <div className="mt-2 space-y-1 text-sm text-fg-muted">
@@ -290,7 +315,7 @@ export interface FeedbackDetailsFormProps<R extends string = string> {
 }
 
 /**
- * 「役に立たなかった」の理由（必須）・コメント（任意）・修正した回答（任意）の入力（#531・#5906）。
+ * 「解決しなかった」の理由（必須）・コメント（任意）・修正した回答（任意）の入力（#531・#5906）。
  * `FeedbackControls` の 👎 と、資料を選び直す評価（`AnswerFileReview`）の「解決しなかった」の後で同じものを使う。
  * 修正した回答は品質評価のケースと登録済み Q&A の元になる。
  */
@@ -315,7 +340,7 @@ export function FeedbackDetailsForm<R extends string = string>({
   const [correctedAnswer, setCorrectedAnswer] = useState(value?.correctedAnswer ?? "");
   return (
     <fieldset className={cn("rounded-md border border-border bg-surface-sunken p-3", className)}>
-      {/* 役に立たなかった理由は必須（未選択では保存できない）。コメントと修正した回答は任意なので何も付けない（#531）。 */}
+      {/* 解決しなかった理由は必須（未選択では保存できない）。コメントと修正した回答は任意なので何も付けない（#531）。 */}
       <FieldLegend required className="px-1 text-xs font-medium">
         {labels.reasonLegend}
       </FieldLegend>

@@ -3183,7 +3183,7 @@ export function isRepeatedActivationKey(event: { key: string; repeat?: boolean }
 
 ## FeedbackControls — **新規**（#805）
 
-回答・引用への評価（役に立った / 役に立たなかった）の部品。RAG の回答・引用の評価と、Agent のチャットの回答の評価・管理者の評価（#774）が同じ部品を使う。保存の API・payload・権限は製品が `onSubmit` で持ち、部品は業務の文言を持たない（`labels`）。
+回答への評価（解決した / 解決しなかった）の部品。Agent のチャットの RAG を使わない回答の評価と、管理者の評価（フィードバックの詳細・実行の詳細。#774）が使う（RAG の回答と Agent の RAG を使った回答の評価は、資料を選び直す評価の `AnswerFileReview`。見た目は同じにそろえる。#5969）。保存の API・payload・権限は製品が `onSubmit` で持ち、部品は業務の文言を持たない（`labels`）。
 
 ```tsx
 import { FeedbackControls, toast } from "@production-ready/ui";
@@ -3204,7 +3204,8 @@ import { FeedbackControls, toast } from "@production-ready/ui";
     toast.success(t("…saved"));        // 成功の Toast は製品が出す
   }}
   correctedAnswer                      // 任意:「修正した回答」の欄（RAG の回答の評価）
-  compact                              // 任意: 引用のカードの中の小さな形
+  compact                              // 任意: 引用のカードの中の小さな形（アイコンだけのボタン）
+  className="border-t border-border pt-3" // 任意: 上の内容と線で区切る場所だけ（部品は区切り線を持たない）
   disabled={loadingCurrent}            // 任意
   readOnly                             // 任意: 保存済みの評価を見せるだけ
   commentId="feedback-comment-answer"  // 任意: 欄の id（e2e で使うとき）
@@ -3244,16 +3245,17 @@ export function isSameFeedback(value, submission): boolean; // 空白を除い�
 
 | 決めたこと | 理由 |
 |---|---|
-| 「役に立った」はすぐ保存、「役に立たなかった」は理由（必須。`FieldLegend required`）・コメント（任意）・修正した回答（任意）をその場で開く | 良い評価は 1 回の操作で済ませ、悪い評価は改善に使える理由を必ず残す |
-| ボタンは `ghost` / 評価済みは `secondary` + `aria-pressed`、`iconOnly`（Tooltip は `aria-label` と同じ文言）。評価済みの 👍 は `text-success-fg`、👎 は `text-danger-fg` | 色だけに頼らず押された状態を `aria-pressed` と枠で示す |
+| 「解決した」はすぐ保存、「解決しなかった」は理由（必須。`FieldLegend required`）・コメント（任意）・修正した回答（任意）をその場で開く | 良い評価は 1 回の操作で済ませ、悪い評価は改善に使える理由を必ず残す |
+| ボタンは `secondary`・`sm` のアイコン（👍 / 👎）+ 文字（`labels.helpful` / `labels.notHelpful`）。評価済みは `aria-pressed`（accent の枠と地）で示す（#5969） | `AnswerFileReview` の評価のボタンと同じ見た目にし、評価の語を画面に文字で出す。色だけに頼らず押された状態を `aria-pressed` と枠で示す |
 | 保存済みと同じ内容は送り直さず閉じる | 二重の保存・Toast を出さない |
 | 保存中は押したボタンだけ `loading`（ほかは `disabled`） | 動くスピナーは操作 1 つに 1 つ（messaging §3.7） |
 | 失敗は部品の下に `role="alert"` の文言と「再試行」（同じ内容を送り直す）。次の保存まで残す | 結果は起点の操作の直下に出す（messaging §10）。成功は Toast（製品） |
-| 問い・ボタン・保存済みの表示は 1 行。`compact` は問いを読み上げだけにし、右寄せ・保存済みの表示なし・上の区切り線なし | 引用のカードの中に収める |
+| 問いを 1 行、その下にボタン、保存済みの表示はボタンの後ろ（#5969）。上の区切り線は部品が持たない（区切る場所では製品が `className` で付ける） | `AnswerFileReview` と同じ並び。回答の末尾（`AnswerFooter`）では前の内容との間隔だけで区切る |
+| `compact` は問いを読み上げだけにし、ボタンは `iconOnly`（`ghost` / 評価済みは `secondary`。Tooltip は `aria-label` と同じ文言。評価済みの 👍 は `text-success-fg`、👎 は `text-danger-fg`）、右寄せ・保存済みの表示なし | 引用のカードの中に収める（今は使っている製品が無い） |
 
-- 単体テストは `packages/ui/tests/feedback-controls.test.tsx`（すぐ保存・理由の必須・コメントの整形・修正した回答・同じ評価・失敗と再試行・保存中・`compact`・`readOnly`）。
-- 実ブラウザは RAG `e2e/chat.spec.ts` / `e2e/search-review.spec.ts` / `e2e/feedback.spec.ts` / `e2e/citation-variant-badge.spec.ts`、Agent `e2e/feedback.spec.ts`（チャットの回答の評価・管理者の評価。既存の spec のまま）。
-- 製品の置き換え: RAG の `components/feedback/FeedbackControls.tsx` と Agent の `components/chat/AnswerFeedback.tsx` は、API と文言をつなぐ薄いラッパーになった（見た目・振る舞いは変えない）。
+- 単体テストは `packages/ui/tests/feedback-controls.test.tsx`（文字つきのボタン・すぐ保存・理由の必須・コメントの整形・修正した回答・同じ評価・失敗と再試行・保存中・`compact`・`readOnly`）。
+- 実ブラウザは Agent `e2e/feedback.spec.ts`（チャットの回答の評価・管理者の評価）。
+- 製品の置き換え: Agent の `components/chat/AnswerFeedback.tsx` は、API と文言をつなぐ薄いラッパー（管理者の評価だけ `className` で上の区切り線を付ける）。RAG の `components/feedback/FeedbackControls.tsx` は同じ名前の別の部品で、`AnswerFileReview` のラッパー。
 
 ## useActionPending — **新規**（#819）
 

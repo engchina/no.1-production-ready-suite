@@ -779,7 +779,7 @@ dispatcher の claim）は `runtime.load_snapshot_tolerant` で、snapshot を J
   `fact_signals` と SQL の `SIGNAL_CONDITIONS` は同じ規則で、テストが SQLite で突き合わせる）。
   | シグナル | 定義（Run の事実の列） |
   |---|---|
-  | `not_helpful` 役に立たなかった | 本人か管理者の評価が `not_helpful`（`FEEDBACK_RATING` / `ADMIN_RATING`） |
+  | `not_helpful` 解決しなかった | 本人か管理者の評価が `not_helpful`（`FEEDBACK_RATING` / `ADMIN_RATING`） |
   | `ungrounded_answer` 根拠を使わずに答えた | 回答の対応の basis が `ungrounded_answer`（`ANSWER_BASIS`。#5859）。根拠・データのツールを渡した業務 Agent がどれも呼ばずに作った回答を、注意を付けてそのまま出した Run（設定が `annotate`）。拒答に置き換えた Run（設定が `refuse`）は `unanswered` に数える |
   | `unanswered` 答えられなかった | 回答の対応（#1305）が `insufficient_evidence` / `needs_human`（`ANSWER_OUTCOME`） |
   | `approval_rejected` 承認の却下 | 承認が `rejected`（`APPROVALS_REJECTED > 0`。終了で無効にした承認は数えない） |

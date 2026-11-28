@@ -15,7 +15,7 @@ export const FEEDBACK_COMMENT_MAX_CHARS = 1000;
 /**
  * 回答への評価（#774）。見た目と操作は共有の `FeedbackControls`（#805。RAG の回答の評価と同じ部品）で、
  * ここは Run の評価の API と文言をつなぐだけ。
- * 👍 はすぐ保存、👎 は理由（必須）とコメント（任意）をその場で開いて保存する。付け直すと上書きする。
+ * 「解決した」はすぐ保存、「解決しなかった」は理由（必須）とコメント（任意）をその場で開いて保存する。付け直すと上書きする。
  *
  * - `owner`: 会話をした本人の評価（チャットの回答の下）。
  * - `admin`: 管理者の評価（Agent 管理の権限。フィードバック・Run の詳細。本人の評価とは別に残す）。
@@ -45,6 +45,9 @@ export function AnswerFeedback({
   return (
     <FeedbackControls<FeedbackReason>
       data-testid={`${prefix}-${runId}`}
+      // チャットの回答の下は、RAG を使った回答の評価（`AnswerFileReview`）と同じく区切り線なし（#5969）。
+      // 管理者の評価は、上の内容（保存済みの評価の表示・節の見出し）と線で区切る。
+      className={admin ? "border-t border-border pt-3" : undefined}
       commentId={`${prefix}-comment-${runId}`}
       value={current}
       reasons={FEEDBACK_REASONS.map((reason) => ({

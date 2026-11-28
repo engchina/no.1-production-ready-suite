@@ -51,7 +51,7 @@ test.describe("業務 Agent が使えない会話（#3356）", { tag: "@responsi
     const agentSelect = page.locator("#chat-agent");
     await expect(agentSelect).toContainText("業務 Agent を選択");
     // 閲覧だけの会話なので、回答の評価は出さない（#3244）。
-    await expect(page.getByRole("group", { name: "この回答は役に立ちましたか？" })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "この回答で質問は解決しましたか？" })).toHaveCount(0);
     await expectNoPageHorizontalOverflow(page);
     await page.screenshot({ path: testInfo.outputPath("chat-agent-unavailable.png"), fullPage: true });
 

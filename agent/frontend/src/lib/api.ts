@@ -1450,7 +1450,7 @@ export type ClarificationKind = "nl2sql" | "rag";
 /** 回答の評価（RAG と同じ値。#774）。 */
 export type FeedbackRating = "helpful" | "not_helpful";
 
-/** 役に立たなかった理由（表示の順。#774）。 */
+/** 解決しなかった理由（表示の順。#774）。 */
 export const FEEDBACK_REASONS = [
   "incorrect",
   "incomplete",
@@ -1488,7 +1488,7 @@ export interface FeedbackSummary {
   /** 評価が 0 件のときは null。 */
   helpful_rate: number | null;
   reason_counts: { reason: FeedbackReason; count: number }[];
-  /** 管理者の評価の件数と、そのうち役に立たなかった件数。 */
+  /** 管理者の評価の件数と、そのうち解決しなかった件数。 */
   admin_reviewed: number;
   admin_not_helpful: number;
 }
@@ -1537,7 +1537,7 @@ export interface FeedbackFilters {
 
 /**
  * 確かめるべき実行のシグナルの種類（表示の順。#1822）。定義は backend の `run_signals.py`。
- * - not_helpful: 本人か管理者の評価が「役に立たなかった」
+ * - not_helpful: 本人か管理者の評価が「解決しなかった」
  * - ungrounded_answer: 資料・業務データのツールを呼ばずに作った回答を、注意を付けてそのまま出した（#5859）
  * - unanswered: 回答の対応が「根拠不足」か「人への引き継ぎ」
  * - approval_rejected / tool_failed / run_failed: 承認の却下・ツールの失敗・実行の失敗と取り消し

@@ -10,7 +10,7 @@ export interface AnswerFooterProps {
   noticeLabel?: string;
   /** 回答の根拠の塊（「AI に渡した N 件 ／ 回答で引用 M 件」の `AnswerEvidence` など。製品が描く）。 */
   evidence?: ReactNode;
-  /** 回答の評価（「この回答は役に立ちましたか？」の `FeedbackControls` など。製品が描く）。 */
+  /** 回答の評価（「この回答で質問は解決しましたか？」の `FeedbackControls` など。製品が描く）。 */
   feedback?: ReactNode;
   className?: string;
   testId?: string;

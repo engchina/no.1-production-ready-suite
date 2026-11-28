@@ -14,11 +14,11 @@ import {
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const labels: FeedbackControlsLabels = {
-  question: "この回答は役に立ちましたか？",
-  helpful: "役に立った",
-  notHelpful: "役に立たなかった",
+  question: "この回答で質問は解決しましたか？",
+  helpful: "解決した",
+  notHelpful: "解決しなかった",
   savedInline: "保存済み・変更できます",
-  reasonLegend: "役に立たなかった理由",
+  reasonLegend: "解決しなかった理由",
   commentLabel: "コメント",
   commentCount: (count, max) => `${count}/${max}文字`,
   correctedAnswerLabel: "修正した回答",
@@ -88,16 +88,24 @@ async function type(target: HTMLTextAreaElement, value: string) {
 }
 
 describe("FeedbackControls（#805）", () => {
-  it("問いとボタンの組を出し、保存済みでなければ「保存済み」を出さない", () => {
+  it("問いの下に文字つきのボタンの組を出し、保存済みでなければ「保存済み」を出さない", () => {
     render();
     const group = host.querySelector("[role=group]");
     expect(group?.getAttribute("aria-label")).toBe(labels.question);
+    // 問いは見える文で、ボタンは文字を持つ（アイコンだけにしない。資料を選び直す評価と同じ。#5969）。
+    expect(host.querySelector("p")?.textContent).toBe(labels.question);
+    expect(Array.from(group!.querySelectorAll("button")).map((item) => item.textContent?.trim())).toEqual([
+      labels.helpful,
+      labels.notHelpful,
+    ]);
+    expect(button(labels.helpful).hasAttribute("aria-label")).toBe(false);
     expect(button(labels.helpful).getAttribute("aria-pressed")).toBe("false");
     expect(host.textContent).not.toContain(labels.savedInline);
-    expect(host.querySelector("[data-testid=feedback]")?.className).toContain("border-t");
+    // 上の区切り線は部品が持たない（資料を選び直す評価と同じ。区切る場所では製品が className で付ける）。
+    expect(host.querySelector("[data-testid=feedback]")?.className).not.toContain("border-t");
   });
 
-  it("「役に立った」はすぐ保存し、理由・コメントを持たない", async () => {
+  it("「解決した」はすぐ保存し、理由・コメントを持たない", async () => {
     const { onSubmit } = render();
     await click(button(labels.helpful));
     expect(onSubmit).toHaveBeenCalledWith({
@@ -111,13 +119,13 @@ describe("FeedbackControls（#805）", () => {
   it("保存済みの評価は押された状態と「保存済み」で出し、同じ評価は送り直さない", async () => {
     const { onSubmit } = render({ value: { rating: "helpful", comment: "" } });
     expect(button(labels.helpful).getAttribute("aria-pressed")).toBe("true");
-    expect(button(labels.helpful).className).toContain("text-success-fg");
+    expect(button(labels.notHelpful).getAttribute("aria-pressed")).toBe("false");
     expect(host.textContent).toContain(labels.savedInline);
     await click(button(labels.helpful));
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("「役に立たなかった」は理由（必須）を選んでから、整えたコメントと一緒に保存し、閉じる", async () => {
+  it("「解決しなかった」は理由（必須）を選んでから、整えたコメントと一緒に保存し、閉じる", async () => {
     const { onSubmit } = render({ commentId: "fb-comment" });
     await click(button(labels.notHelpful));
     expect(button(labels.notHelpful).getAttribute("aria-expanded")).toBe("true");
@@ -178,11 +186,14 @@ describe("FeedbackControls（#805）", () => {
     expect(button(labels.notHelpful).disabled).toBe(false);
   });
 
-  it("compact は問いを読み上げだけにし、保存済みの表示と区切り線を出さない", () => {
+  it("compact は問いを読み上げだけ・ボタンをアイコンだけにし、保存済みの表示を出さない", () => {
     render({ compact: true, value: { rating: "not_helpful", reason: "incorrect" } });
     expect(host.querySelector(".sr-only")?.textContent).toBe(labels.question);
+    expect(button(labels.notHelpful).getAttribute("aria-label")).toBe(labels.notHelpful);
+    expect(button(labels.notHelpful).textContent?.trim()).toBe("");
+    expect(button(labels.notHelpful).getAttribute("aria-pressed")).toBe("true");
+    expect(button(labels.notHelpful).className).toContain("text-danger-fg");
     expect(host.textContent).not.toContain(labels.savedInline);
-    expect(host.querySelector("[data-testid=feedback]")?.className).not.toContain("border-t");
   });
 
   it("readOnly は押せず、保存済みの理由とコメントを文で出す", async () => {
