@@ -18,14 +18,15 @@ import type { WikiScope } from "./wiki-api";
 
 /**
  * 種類 = 塗りと大きさ（C 案。文書 44・章節 36・原文 28）。枠は同じ系統の濃い色。
- * 「選んだ原文」は Wiki 検索の図だけの種類（#5981）: 原文と同じ系統の色で大きく（40）、外側の輪（`matched`）も付ける。
- * 凡例に件数つきで出て、押すと選んだ原文をすべて選ぶ。図の選択（太い枠）とは別の印で、色だけに頼らない。
+ * 「選んだ原文」は Wiki 検索の図だけの種類（#5981）: 原文の系統の濃い色（原文の枠の色）で塗り、大きく（40）、外側の
+ * 輪（`matched`）も付ける。原文（淡い塗り）と凡例の印で見分けられ、文書・章節・「さらに展開」の色とも重ならない。
+ * 凡例に件数つきで出て、押すと選んだ原文をすべて選ぶ。図の選択（太い枠）とは別の印で、色だけに頼らない（大きさと輪）。
  */
 const PICKED_KIND = "picked";
 const NODE_KINDS: GraphExplorerNodeKind[] = [
   { id: "document", label: t("wiki.graph.kind.document"), color: "--color-graph-entity", lineColor: "--color-graph-entity-line", size: 44 },
   { id: "section", label: t("wiki.graph.kind.section"), color: "--color-graph-metric", lineColor: "--color-graph-metric-line", size: 36 },
-  { id: PICKED_KIND, label: t("wiki.graph.kind.picked"), color: "--color-graph-term", lineColor: "--color-graph-term-line", size: 40 },
+  { id: PICKED_KIND, label: t("wiki.graph.kind.picked"), color: "--color-graph-term-line", lineColor: "--color-graph-term-line", size: 40 },
   { id: "unit", label: t("wiki.graph.kind.unit"), color: "--color-graph-term", lineColor: "--color-graph-term-line", size: 28 },
   { id: "more", label: t("wiki.graph.kind.more"), color: "--color-graph-default", lineColor: "--color-graph-default-line", size: 26, shape: "round-rectangle", dashed: true, legendHidden: true },
 ];

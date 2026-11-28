@@ -75,7 +75,7 @@ export interface WikiUnitConnection {
 export const WIKI_RELATIONS_LIMIT = 500;
 /** `connections` が 1 回で受け付ける単位の数（backend の上限）。 */
 export const WIKI_CONNECTIONS_LIMIT = 200;
-/** 選んだ原文だけで回答する（only。既定）か、通常の検索の結果に足す（mix）か（#5981）。 */
+/** 選んだ原文（とその文書の先頭の chunk）だけを根拠にする（only。既定）か、通常の検索の結果に足す（mix）か（#5981）。 */
 export type WikiSourceMode = "only" | "mix";
 export interface WikiDraft {
   knowledgeBaseId?: string;

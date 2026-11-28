@@ -218,8 +218,24 @@ const nodeList = (page: Page) => page.getByRole("region", { name: "図にある�
 function detail(page: Page, phone: boolean) {
   return phone ? page.getByRole("dialog", { name: "詳細" }) : page.getByRole("complementary", { name: "詳細" });
 }
-async function shot(page: Page, info: TestInfo, name: string) {
-  if (process.env.WIKI_GRAPH_SHOTS) await page.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + info.project.name + "-" + name + ".png" });
+async function shot(page: Page, info: TestInfo, name: string, prefix = "") {
+  if (process.env.WIKI_GRAPH_SHOTS) await page.screenshot({ path: process.env.WIKI_GRAPH_SHOTS + "/" + prefix + info.project.name + "-" + name + ".png" });
+}
+/** 外観の選好（共有 UI の ui-store が保存する値）を読み込みの前に入れておく。 */
+async function setDarkTheme(page: Page) {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("production-ready-rag.ui", JSON.stringify({ state: { theme: "dark" }, version: 0 }));
+  });
+}
+/** チャットの API（会話の作成と、中身の無い配信）。送った要求の本文は test が `waitForRequest` で読む。 */
+async function mockChatSend(page: Page) {
+  const conversation = { id: "conv-1", search_answer_profile_id: profiles[0].id, title: null, status: "ACTIVE", message_count: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", messages: [] };
+  await page.route("**/api/chat/conversations**", (r) => {
+    const path = new URL(r.request().url()).pathname;
+    if (path.endsWith("/messages/stream")) return r.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: "" });
+    if (path === "/api/chat/conversations" && r.request().method() !== "POST") return r.fulfill({ json: ok(paged([])) });
+    return r.fulfill({ json: ok(conversation) });
+  });
 }
 const results = (page: Page) => page.getByRole("region", { name: "検索結果の一覧" });
 const selectedList = (page: Page) => page.getByRole("list", { name: "Wiki で選んだ原文" });
@@ -293,6 +309,9 @@ test("Wiki 検索は検索結果の一覧から始まり、選んだ原文とそ
   await expect.poll(() => graphCount(canvas, "nodes")).toBe(14);
   await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("選んだ原文 3");
   await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("原文 10");
+  // 凡例の「選んだ原文」と「原文」の印は違う色（塗り）。図では大きさと外側の輪でも区別する。
+  const swatch = (kind: string) => page.getByTestId("wiki-graph-kind-" + kind).locator("span[aria-hidden]").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(await swatch("picked")).not.toBe(await swatch("unit"));
   // 関係は、選んだ原文ごとに 1 回だけ読む（取り切る。#5916）。
   expect(relationCalls(control).map((u) => u.pathname.split("/").at(-2)).sort()).toEqual([hash(1), hash(2), hash(26)]);
   expect(relationCalls(control).every((u) => u.searchParams.get("limit") === "500" && u.searchParams.get("offset") === "0")).toBe(true);
@@ -381,14 +400,9 @@ test("上限に達すると、選んでいない行のチェックボックス�
 
 for (const mode of ["only", "mix"] as const) {
   test(`チャットへ渡した原文は件数と使い方の選択を出し、要求に wiki_source_mode=${mode} を入れる`, { tag: "@responsive" }, async ({ page }, info) => {
+    const phone = info.project.name === "mobile";
     await data(page);
-    const conversation = { id: "conv-1", search_answer_profile_id: profiles[0].id, title: null, status: "ACTIVE", message_count: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", messages: [] };
-    await page.route("**/api/chat/conversations**", (r) => {
-      const path = new URL(r.request().url()).pathname;
-      if (path.endsWith("/messages/stream")) return r.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: "" });
-      if (path === "/api/chat/conversations" && r.request().method() !== "POST") return r.fulfill({ json: ok(paged([])) });
-      return r.fulfill({ json: ok(conversation) });
-    });
+    await mockChatSend(page);
     await begin(page);
     for (const n of [1, 2, 3]) await rowCheckbox(page, n).check();
     await page.getByRole("button", { name: "チャットで質問" }).click();
@@ -402,6 +416,24 @@ for (const mode of ["only", "mix"] as const) {
       await choice.getByRole("radio", { name: "選んだ原文に追加して探す" }).check();
       await expect(choice.getByRole("radio", { name: "選んだ原文に追加して探す" })).toBeChecked();
     }
+    // Wiki の原文の欄がある間、空の会話の案内は文字だけ（アイコンなし）で、会話の領域の中に収まる（375px でも切れない）。
+    const log = page.getByRole("log", { name: "会話" });
+    const hint = page.getByTestId("chat-empty-compact");
+    await expect(hint).toContainText("質問を入力して会話を始めます");
+    await expect(log.locator("svg")).toHaveCount(0);
+    const [logBox, hintBox] = [await log.boundingBox(), await hint.boundingBox()];
+    expect(hintBox!.y).toBeGreaterThanOrEqual(logBox!.y);
+    expect(hintBox!.y + hintBox!.height).toBeLessThanOrEqual(logBox!.y + logBox!.height + 0.5);
+    // 「Wiki 検索に戻る」は、広い画面ではタグの右、狭い画面ではタグの下の行（タグが幅いっぱいを使い、名前を切らない）。
+    const [tagsBox, backBox] = [await selectedList(page).boundingBox(), await page.getByRole("button", { name: "Wiki 検索に戻る" }).boundingBox()];
+    if (phone) {
+      expect(backBox!.y).toBeGreaterThanOrEqual(tagsBox!.y + tagsBox!.height - 0.5);
+      await expect(selectedList(page).getByRole("listitem").first()).toContainText(files[0].name);
+      const name = selectedList(page).getByRole("listitem").first().getByText(files[0].name, { exact: true });
+      expect(await name.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+    } else {
+      expect(backBox!.x).toBeGreaterThanOrEqual(tagsBox!.x + tagsBox!.width - 0.5);
+    }
     if (mode === "only") {
       await page.getByTestId("chat-wiki-sources").scrollIntoViewIfNeeded();
       await shot(page, info, "chat-selected");
@@ -413,6 +445,33 @@ for (const mode of ["only", "mix"] as const) {
     expect(body.wiki_sources.map((source) => source.unit_id)).toEqual([hash(1), hash(2), hash(3)]);
   });
 }
+
+test("ダークテーマでも、選んだ原文の欄・図の選んだ原文の印・チャットの選択を読める", async ({ page }, info) => {
+  // 見た目は写し（WIKI_GRAPH_SHOTS）で確かめる。desktop だけ。
+  test.skip(info.project.name !== "desktop", "ダークテーマの写しは desktop だけ");
+  await setDarkTheme(page);
+  await data(page);
+  await mockChatSend(page);
+  await begin(page);
+  await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("dark"))).toBe(true);
+  for (const n of [1, 2, 3]) await rowCheckbox(page, n).check();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("3 / 10 件");
+  await page.getByTestId("wiki-selected").scrollIntoViewIfNeeded();
+  await shot(page, info, "wiki-selected-3", "dark-");
+  await page.getByRole("tab", { name: "関係図" }).click();
+  const canvas = canvasOf(page);
+  // 選んだ原文 3 件（1・2・3）と、原文 1 の次の段の最初の 10 件（4〜13）と、「さらに展開」の点。
+  await expect.poll(() => graphCount(canvas, "nodes")).toBe(14);
+  await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("選んだ原文 3");
+  // 凡例の「選んだ原文」と「原文」の印は違う色（塗り）。
+  const swatch = (kind: string) => page.getByTestId("wiki-graph-kind-" + kind).locator("span[aria-hidden]").first().evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(await swatch("picked")).not.toBe(await swatch("unit"));
+  await page.getByTestId("wiki-graph-node-kinds").scrollIntoViewIfNeeded();
+  await shot(page, info, "wiki-graph", "dark-");
+  await page.getByRole("button", { name: "チャットで質問" }).click();
+  await expect(page.getByRole("radiogroup", { name: "選んだ原文の使い方" }).getByRole("radio", { name: "選んだ原文だけで回答" })).toBeChecked();
+  await shot(page, info, "chat-selected", "dark-");
+});
 
 test("ナレッジベース詳細の図から選ぶ原文にも、上限と件数の表示が効く", { tag: "@responsive" }, async ({ page }, info) => {
   const phone = info.project.name === "mobile";
