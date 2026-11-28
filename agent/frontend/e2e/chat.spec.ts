@@ -16,7 +16,7 @@ async function useTheme(page: Page, theme: "light" | "dark") {
   }, theme);
 }
 
-import { firstAnswer, nextAnswer, originalHits, reviewQuestion, reviewSnapshots } from "../../../platform/packages/ui/e2e/file-review-scenario";
+import { firstAnswer, limitFileNames, limitSnapshot, nextAnswer, originalHits, reviewQuestion, reviewSnapshots } from "../../../platform/packages/ui/e2e/file-review-scenario";
 
 const THREAD_ID = `thread_${"a".repeat(32)}`;
 
@@ -974,6 +974,79 @@ for (const tool of ["rag_chat","rag_search"]) {
     if(process.env.AGENT_E2E_SCREENSHOT_DIR) await page.screenshot({path:process.env.AGENT_E2E_SCREENSHOT_DIR+"/"+tool+"-answer-"+testInfo.project.name+".png"});
   });
 }
+
+test("Agent の RAG の回答の資料の選び直しは、RAG が返した上限まで選べる", { tag: "@responsive" }, async ({ page, mockApi }, testInfo) => {
+  // 上限は RAG の設定の値を backend が状態の応答（selection_limit）で渡す（#5981）。
+  const name = "rag__rag_chat", id = "run-chat-seed", task = "task-a";
+  const { state, citations } = limitSnapshot(id, task, 7);
+  const names = limitFileNames(7);
+  seedThread(mockApi, {
+    steps: [{ id: task, run_id: id, kind: "tool", status: "completed",
+      tool_call: { name, arguments: { query: reviewQuestion } },
+      tool_result: { name, success: true, output: { trace_id: "first", answer: firstAnswer, evidence: citations } } }],
+    artifacts: [{ id: "first", kind: "answer", name: "回答", content: { text: firstAnswer } }],
+  });
+  await page.route("**/api/runs/" + id + "/feedback**", (route) => {
+    const run = mockApi.state.runs.find((r) => r.id === id);
+    return route.fulfill({ json: { data: { ...run, feedback: { ...route.request().postDataJSON(), user_uuid: "local" } }, error_messages: [], warning_messages: [] } });
+  });
+  const commands: Record<string, unknown>[] = [];
+  await page.route("**/api/runs/" + id + "/review", (route) => {
+    if (route.request().method() === "POST") {
+      commands.push(route.request().postDataJSON());
+      // backend の検証の失敗（422）。
+      return route.fulfill({ status: 422, json: { data: null, error_messages: ["一度に選べる資料は 3 件までです。"], warning_messages: [] } });
+    }
+    return route.fulfill({ json: { data: state, error_messages: [], warning_messages: [] } });
+  });
+  const shot = async (label: string) => {
+    if (process.env.AGENT_E2E_SCREENSHOT_DIR) await page.screenshot({ animations: "disabled", path: process.env.AGENT_E2E_SCREENSHOT_DIR + "/agent-chat-file-review-" + label + "-" + testInfo.project.name + ".png" });
+  };
+  // 写しは desktop を 1440 にそろえる（project の既定は 1280）。
+  if (process.env.AGENT_E2E_SCREENSHOT_DIR && testInfo.project.name === "desktop") await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/chat");
+  await openSeedThread(page);
+  await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
+  await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
+  const sheet = page.getByRole("dialog");
+  const status = sheet.getByRole("status");
+  const notice = sheet.getByTestId("file-review-limit");
+  const box = (index: number) => sheet.getByRole("checkbox", { name: names[index], exact: true });
+
+  // 「選んだ資料に追加して探す」も上限まで。達したら選んでいない資料は選べず、理由が見える。
+  await sheet.getByRole("radio", { name: "選んだ資料に追加して探す" }).check();
+  for (const index of [0, 1, 2, 3, 4]) await box(index).check();
+  await expect(status).toContainText("全 7 件・選択 5 / 5 件");
+  await expect(notice).toHaveText("一度に選べる資料は 5 件までです。");
+  await expect(notice).toBeInViewport();
+  for (const index of [5, 6]) await expect(box(index)).toBeDisabled();
+  await expectNoPageHorizontalOverflow(page);
+  await box(5).scrollIntoViewIfNeeded();
+  await shot("at-limit");
+
+  // 「別の資料を探す」には掛けない。
+  await sheet.getByRole("radio", { name: "別の資料を探す" }).check();
+  for (const index of [0, 1, 2, 3, 4, 5]) await box(index).check();
+  await expect(status).toContainText("全 7 件・選択 6 件");
+  await expect(notice).toHaveCount(0);
+  await expect(box(6)).toBeEnabled();
+
+  // 方法を戻すと、超えた選択は外さずに主ボタンを止める。
+  const find = sheet.getByRole("button", { name: "候補を探す", exact: true });
+  await sheet.getByRole("radio", { name: "選んだ資料に追加して探す" }).check();
+  await expect(notice).toHaveText("一度に選べる資料は 5 件までです。1 件外してください。");
+  await expect(find).toBeDisabled();
+  await sheet.getByRole("button", { name: names[5] + "を外す", exact: true }).click();
+  await expect(find).toBeEnabled();
+
+  // backend が 422 を返したら、面を閉じずに理由を出す。
+  await find.click();
+  await expect(sheet.getByText("一度に選べる資料は 3 件までです。", { exact: true })).toBeVisible();
+  expect(commands).toEqual([
+    { task, action: "discover", revision: 0, method: "mix", selected: ["doc-1", "doc-2", "doc-3", "doc-4", "doc-5"] },
+  ]);
+  await expect(status).toContainText("選択 5 / 5 件");
+});
 
 test("同じ質問を使った二つの RAG タスクを選び分ける", async ({ page, mockApi }) => {
   const id = "run-chat-seed";

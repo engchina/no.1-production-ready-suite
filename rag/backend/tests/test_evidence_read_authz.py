@@ -736,10 +736,10 @@ def test_mcp_reading_tools_read_within_the_callers_current_scope(
 def test_readable_documents_tool_is_not_listed_for_models() -> None:
     """保存した根拠の確かめ直しは Agent の画面だけが名前で呼ぶ内部のツール（一覧に出さない）。"""
     server = mcp_tools.build_rag_mcp_server(None)  # type: ignore[arg-type]
-    assert server.tools["rag_readable_documents"].listed is False
-    assert all(
-        tool.listed for name, tool in server.tools.items() if name != "rag_readable_documents"
-    )
+    # 内部のツールは、保存した根拠の確かめ直しと、資料を選び直す面の上限（#5981）だけ。
+    internal = {"rag_readable_documents", "rag_file_review_limits"}
+    assert all(server.tools[name].listed is False for name in internal)
+    assert all(tool.listed for name, tool in server.tools.items() if name not in internal)
 
 
 # ---------------------------------------------------------------------------

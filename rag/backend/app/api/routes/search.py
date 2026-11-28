@@ -11,7 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pr_backend_core.api import DEFAULT_PAGE_LIMIT, OffsetParams, offset_params, paginate
-from pr_backend_core.file_review import FileReview, ReviewAction
+from pr_backend_core.file_review import FileReviewView, ReviewAction
 from pr_backend_core.mcp import report_tool_progress
 from pr_backend_core.observability.trace_bodies import BodyPage
 from pr_backend_core.observability.trace_body_reader import CallBodySlot
@@ -1407,17 +1407,17 @@ async def get_saved_answer(trace_id: str) -> ApiResponse[AnswerRecordDetail]:
     )
 
 
-@router.get("/answers/{trace_id}/review", response_model=ApiResponse[FileReview])
-async def get_answer_review(trace_id: str, request: Request) -> ApiResponse[FileReview]:
+@router.get("/answers/{trace_id}/review", response_model=ApiResponse[FileReviewView])
+async def get_answer_review(trace_id: str, request: Request) -> ApiResponse[FileReviewView]:
     from app.rag.file_review import review_answer
 
     return ApiResponse(data=await review_answer(request, trace_id))
 
 
-@router.post("/answers/{trace_id}/review", response_model=ApiResponse[FileReview])
+@router.post("/answers/{trace_id}/review", response_model=ApiResponse[FileReviewView])
 async def change_answer_review(
     trace_id: str, request: Request, action: ReviewAction
-) -> ApiResponse[FileReview]:
+) -> ApiResponse[FileReviewView]:
     from app.rag.file_review import review_answer
 
     enforce_rate_limit("search", request)

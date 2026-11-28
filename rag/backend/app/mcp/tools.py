@@ -1042,6 +1042,20 @@ class ReadableDocumentsOutput(VersionedOutput):
     )
 
 
+class FileReviewLimitsInput(BaseModel):
+    """資料を選び直す面の上限を読む条件（引数は無い）。"""
+
+    # Agent の画面の「資料を選んで再検索」が、RAG の設定の上限を読む（#5981）。
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class FileReviewLimitsOutput(VersionedOutput):
+    selection_limit: int = Field(
+        ge=1, description="資料を選び直す面で一度に選べる資料（ファイル）の数の上限。"
+    )
+
+
 class OutlineSection(BaseModel):
     """文書の 1 つの章節（章節ナビゲーションの章節）。"""
 
@@ -2977,6 +2991,17 @@ async def readable_documents(arguments: ReadableDocumentsInput) -> ReadableDocum
     )
 
 
+async def file_review_limits(arguments: FileReviewLimitsInput) -> FileReviewLimitsOutput:
+    """資料を選び直す面で一度に選べる資料の数の上限（#5981）。
+
+    上限は RAG の設定（``RAG_FILE_REVIEW_MAX_FILES``）1 つで、Agent は自分の設定を持たない。
+    Agent の画面の同じ面が、状態を読む・変えるたびにこの値を読んで画面へ渡し、選択の数を確かめる
+    （内部のツール。``tools/list`` に出さない）。
+    """
+    del arguments
+    return FileReviewLimitsOutput(selection_limit=get_settings().rag_file_review_max_files)
+
+
 async def outline_document(arguments: OutlineInput) -> OutlineOutput:
     """文書の章節の構成を、章節ナビゲーションの章節から返す（#1332 / #1438）。
 
@@ -4460,6 +4485,18 @@ def build_rag_mcp_server(http_request: Request) -> McpServer:
                 input_model=ReadableDocumentsInput,
                 handler=scoped(readable_documents),
                 output_model=ReadableDocumentsOutput,
+                permissions=(ANSWER_READ_PERMISSIONS,),
+                listed=False,
+            ),
+            McpTool(
+                name="rag_file_review_limits",
+                title="資料の選び直しの上限",
+                # Agent の画面の「資料を選んで再検索」だけが名前で呼ぶ内部のツール（#5981）。
+                # モデル・外部の MCP クライアントには見せない。
+                description="資料を選び直す面で一度に選べる資料の数の上限を返します。",
+                input_model=FileReviewLimitsInput,
+                handler=file_review_limits,
+                output_model=FileReviewLimitsOutput,
                 permissions=(ANSWER_READ_PERMISSIONS,),
                 listed=False,
             ),

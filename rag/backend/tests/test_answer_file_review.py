@@ -198,6 +198,139 @@ async def test_unsaved_review_answer_is_marked_on_its_run(
     ]
 
 
+def _limited_review(
+    monkeypatch: pytest.MonkeyPatch, documents: str, limit: int
+) -> tuple[Request, AsyncMock, list[SearchRequest]]:
+    """上限 ``limit`` 件の設定で、``documents`` の資料を根拠に持つ回答を用意する。"""
+    db = AsyncMock()
+    db.get_file_review.return_value = {
+        "user_id_hash": "owner",
+        "review_state": None,
+        "review_request": {"flow": "basic", "request": {"query": "元の質問"}},
+    }
+    db.get_answer_record.return_value = {
+        "trace_id": "first",
+        "question": "元の質問",
+        "answer": "初回の回答",
+        "answer_engine": "grounded",
+        "surface": "search",
+        "created_at": datetime.now(UTC),
+        "citations_json": [hit(d).model_dump() for d in documents],
+    }
+    db.file_review_ratings.return_value = {}
+    db.accessible_document_ids.side_effect = lambda ids: set(ids)
+    monkeypatch.setattr(file_review, "OracleClient", lambda: db)
+    monkeypatch.setattr(file_review, "caller_owns", lambda owner: owner == "owner")
+    monkeypatch.setattr(
+        file_review, "get_settings", lambda: Settings(rag_file_review_max_files=limit)
+    )
+    request = Request({"type": "http"})
+    request.state.principal = Mock()
+    request.state.principal.has_permission.return_value = True
+    calls: list[SearchRequest] = []
+
+    async def search_again(req: SearchRequest, **kwargs: object) -> Mock:
+        calls.append(req)
+        if req.generate_answer:
+            staged = kwargs["staged_answer"]
+            assert isinstance(staged, dict)
+            staged.update(trace_id="second")
+            included = json.loads(req.filters["include_document_ids"])
+            return Mock(
+                trace_id="second",
+                citations=[hit(d) for d in included],
+                answer="再回答",
+                notice=None,
+                storage_failures=[],
+            )
+        return Mock(
+            trace_id="candidates", citations=[hit("Z")], answer="", notice=None, storage_failures=[]
+        )
+
+    monkeypatch.setattr(search, "_run_search_with_timeout", search_again)
+    return request, db, calls
+
+
+@pytest.mark.parametrize(
+    ("action", "method"),
+    [("answer", "only"), ("discover", "mix"), ("answer", None), ("discover", None)],
+    ids=["only", "mix", "candidates-answer", "candidates-more"],
+)
+@pytest.mark.anyio
+async def test_selection_over_the_limit_is_rejected_with_422(
+    action: str, method: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """選んだ資料だけで回答・選んだ資料に追加して探すは、上限を超える選択を 422 にする（#5981）。"""
+    request, db, calls = _limited_review(monkeypatch, "ABCD", limit=3)
+    first = await file_review.review_answer(request, "first")
+    assert first.selection_limit == 3
+    command = ReviewAction.model_validate(
+        {
+            "revision": 0,
+            "task": "question",
+            "action": action,
+            "selected": list("ABCD"),
+            "method": method,
+        }
+    )
+    with pytest.raises(HTTPException) as error:
+        await file_review.review_answer(request, "first", command)
+    assert error.value.status_code == 422
+    assert error.value.detail == "一度に選べる資料は 3 件までです。"
+    # 検索・生成も保存もしない。
+    assert calls == []
+    db.save_file_review.assert_not_awaited()
+    # 上限ちょうどの選択は通り、応答は今の設定の上限を返す。
+    accepted = await file_review.review_answer(
+        request, "first", command.model_copy(update={"selected": list("ABC")})
+    )
+    assert accepted.selection_limit == 3
+    assert accepted.kept["question"] == ["A", "B", "C"]
+
+
+@pytest.mark.anyio
+async def test_replace_is_not_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    """「別の資料を探す」は選んだ資料の数を確かめない（#5981）。"""
+    request, db, calls = _limited_review(monkeypatch, "ABCD", limit=3)
+    found = await file_review.review_answer(
+        request,
+        "first",
+        ReviewAction(
+            revision=0, task="question", action="discover", selected=list("ABCD"), method="replace"
+        ),
+    )
+    assert found.selection_limit == 3
+    assert found.kept["question"] == ["A", "B", "C", "D"]
+    assert len(calls) == 1 and not calls[0].generate_answer
+    db.save_file_review.assert_awaited_once()
+
+
+def test_file_review_limit_setting_has_a_default_and_a_range() -> None:
+    """上限は RAG の設定 RAG_FILE_REVIEW_MAX_FILES（既定 5、1〜50。#5981）。"""
+    from pr_backend_core.config import settings_env_names
+    from pydantic import ValidationError
+
+    assert settings_env_names(Settings)["rag_file_review_max_files"] == "RAG_FILE_REVIEW_MAX_FILES"
+    assert Settings().rag_file_review_max_files == 5
+    for value in (0, 51):
+        with pytest.raises(ValidationError):
+            Settings(rag_file_review_max_files=value)
+
+
+@pytest.mark.anyio
+async def test_mcp_internal_tool_returns_the_configured_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agent の同じ面は、MCP の内部のツールで RAG の設定の上限を読む（#5981）。"""
+    from app.mcp import tools as mcp_tools
+
+    monkeypatch.setattr(mcp_tools, "get_settings", lambda: Settings(rag_file_review_max_files=7))
+    output = await mcp_tools.file_review_limits(mcp_tools.FileReviewLimitsInput())
+    assert output.selection_limit == 7
+    tool = mcp_tools.build_rag_mcp_server(None).tools["rag_file_review_limits"]  # type: ignore[arg-type]
+    assert tool.listed is False and tool.read_only
+
+
 @pytest.mark.anyio
 async def test_chat_history_uses_latest_reviewed_answer() -> None:
     """資料を選び直して回答し直した回答は、続きの質問の履歴に最新の版を使う（#5914）。"""

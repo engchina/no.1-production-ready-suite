@@ -26,7 +26,7 @@ import {
   selectSearchAnswerProfile,
 } from "./_helpers";
 
-import { firstAnswer, nextAnswer, originalHits, reviewQuestion, reviewSnapshots } from "../../../platform/packages/ui/e2e/file-review-scenario";
+import { firstAnswer, limitFileNames, limitSnapshot, nextAnswer, originalHits, reviewQuestion, reviewSnapshots } from "../../../platform/packages/ui/e2e/file-review-scenario";
 
 const searchAnswerProfile = {
   id: "bv-1",
@@ -872,6 +872,101 @@ test("解決しなかったを直ちに保存し、戻った後に選んだ資�
   await expect(page.getByText(firstAnswer, {exact:true})).toBeVisible();
   await expect(drawer).toHaveCount(0);
   if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ animations: "disabled", path:process.env.RAG_E2E_SCREENSHOT_DIR+"/rag-chat-history-"+testInfo.project.name+".png" });
+});
+
+test("資料を選び直す面は選べる資料を上限までにし、別の資料を探すには掛けない", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  // 上限は状態の応答（selection_limit）の値。7 件の資料から 5 件まで選べる（#5981）。
+  const { state: opened, citations } = limitSnapshot("t1", "question", 7);
+  let state = opened;
+  const names = limitFileNames(7);
+  await openPersistedConversation(page, page.viewportSize()!.width, [
+    { ...userMessage, content: reviewQuestion },
+    { ...assistantMessage, content: firstAnswer, citations },
+  ]);
+  const commands: Record<string, unknown>[] = [];
+  await page.route("**/api/search/answers/t1/review", (route) => {
+    if (route.request().method() === "POST") {
+      commands.push(route.request().postDataJSON());
+      // 画面を開いた後に設定の上限が下がったときの、backend の検証の失敗（422）。読み直すと今の上限が返る。
+      state = { ...opened, selection_limit: 3 };
+      return route.fulfill({ status: 422, json: {
+        data: null, error_messages: ["一度に選べる資料は 3 件までです。"], warning_messages: [],
+      } });
+    }
+    return route.fulfill({ json: { data: state, error_messages: [], warning_messages: [] } });
+  });
+  const shot = async (name: string) => {
+    if (process.env.RAG_E2E_SCREENSHOT_DIR) await page.screenshot({ animations: "disabled", path: process.env.RAG_E2E_SCREENSHOT_DIR + "/rag-chat-file-review-" + name + "-" + testInfo.project.name + ".png" });
+  };
+  await page.getByRole("button", { name: "解決しなかった", exact: true }).click();
+  await page.getByRole("button", { name: "資料を選んで再検索", exact: true }).click();
+  const drawer = page.getByRole("dialog");
+  const status = drawer.getByRole("status");
+  const notice = drawer.getByTestId("file-review-limit");
+  const box = (index: number) => drawer.getByRole("checkbox", { name: names[index], exact: true });
+  const answer = drawer.getByRole("button", { name: "選んだ資料で再回答", exact: true });
+
+  await drawer.getByRole("radio", { name: "選んだ資料だけで回答" }).check();
+  for (const index of [0, 1, 2]) await box(index).check();
+  await expect(status).toContainText("全 7 件・選択 3 / 5 件");
+  await expect(notice).toHaveCount(0);
+  await shot("3-selected");
+
+  // 上限に達したら、選んでいない資料は選べず、理由が見える。選んだ資料は外せる。
+  for (const index of [3, 4]) await box(index).check();
+  await expect(status).toContainText("全 7 件・選択 5 / 5 件");
+  await expect(notice).toHaveText("一度に選べる資料は 5 件までです。");
+  await expect(notice).toBeInViewport();
+  for (const index of [5, 6]) {
+    await expect(box(index)).toBeDisabled();
+    await expect(box(index)).toHaveAccessibleDescription("一度に選べる資料は 5 件までです。");
+  }
+  await expect(box(0)).toBeEnabled();
+  await expect(answer).toBeEnabled();
+  await expectNoPageOverflow(page);
+  await box(5).scrollIntoViewIfNeeded();
+  await shot("at-limit");
+
+  // 「別の資料を探す」には上限を掛けない。
+  await drawer.getByRole("radio", { name: "別の資料を探す" }).check();
+  for (const index of [0, 1, 2, 3, 4, 5]) await box(index).check();
+  await expect(status).toContainText("全 7 件・選択 6 件");
+  await expect(notice).toHaveCount(0);
+  await expect(box(6)).toBeEnabled();
+  await expect(drawer.getByRole("button", { name: "候補を探す", exact: true })).toBeEnabled();
+  await shot("replace");
+
+  // 方法を戻したときに超えていたら、勝手に外さずに主ボタンを止めて理由を出す。
+  await drawer.getByRole("radio", { name: "選んだ資料だけで回答" }).check();
+  await expect(status).toContainText("選択 6 / 5 件");
+  await expect(notice).toHaveText("一度に選べる資料は 5 件までです。1 件外してください。");
+  await expect(answer).toBeDisabled();
+  await expect(answer).toHaveAccessibleDescription("一度に選べる資料は 5 件までです。1 件外してください。");
+  await shot("over-limit");
+  if (process.env.RAG_E2E_SCREENSHOT_DIR) {
+    // 写しのときだけ、ダークの見え方も残す。
+    await page.evaluate(() => { document.documentElement.dataset.theme = "dark"; });
+    await shot("over-limit-dark");
+    await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+  }
+  await drawer.getByRole("button", { name: names[5] + "を外す", exact: true }).click();
+  await expect(status).toContainText("選択 5 / 5 件");
+  await expect(answer).toBeEnabled();
+
+  // backend が 422 を返したら、面を閉じずに理由を出し、選択を残す。
+  await answer.click();
+  await expect(drawer.getByText("一度に選べる資料は 3 件までです。", { exact: true })).toBeVisible();
+  expect(commands).toEqual([
+    { task: "question", action: "answer", revision: 0, method: "only", selected: ["doc-1", "doc-2", "doc-3", "doc-4", "doc-5"] },
+  ]);
+  await expect(status).toContainText("選択 5 / 5 件");
+  await expectNoPageOverflow(page);
+  await shot("rejected");
+  // 「再試行」は状態を読み直し、今の上限で選択を数え直す（選択は外さない）。
+  await drawer.getByRole("button", { name: "再試行", exact: true }).click();
+  await expect(status).toContainText("選択 5 / 3 件");
+  await expect(notice).toHaveText("一度に選べる資料は 3 件までです。2 件外してください。");
+  await expect(answer).toBeDisabled();
 });
 
 test("3モデルはカード幅を維持して次の行へ折り返す", async ({ page }) => {

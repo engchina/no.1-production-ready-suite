@@ -1,4 +1,4 @@
-import { BookOpen, CheckCircle2, ListPlus, MessageSquareText, PencilLine, RotateCcw, Search, ThumbsDown, ThumbsUp } from "lucide-react";
+import { BookOpen, CheckCircle2, Info, ListPlus, MessageSquareText, PencilLine, RotateCcw, Search, ThumbsDown, ThumbsUp, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { ListSkeleton, Skeleton } from "../ui/skeleton";
@@ -25,14 +25,17 @@ import {
   page,
   passagePageLabel,
   position,
+  selectionLimit,
+  selectionLimited,
   type AnswerRating,
   type FileReviewAction,
+  type FileReviewMethod,
   type FileReviewState,
   type ReviewText,
   type ReviewVersion,
 } from "./file-review-model";
 
-type Mode = "only" | "mix" | "replace";
+type Mode = FileReviewMethod;
 type Activity = FileReviewAction["action"] | "more" | "open" | "reload" | "original" | "vote" | "details";
 
 /**
@@ -168,6 +171,12 @@ export function AnswerFileReview({
   const total = new Set([...Object.keys(excluded), ...dropping.map((f) => f.id)]).size;
   const selectedFile = groups.find((f) => f.id === preview);
   const carried = state?.kept[task] ?? [];
+  // 選べる資料の数の上限（#5981）。「別の資料を探す」の間は掛けない。上限に達したら選んでいない資料を
+  // 選べなくし、超えている選択（方法を戻した・前の再回答から引き継いだ）は勝手に外さずに主ボタンを止める。
+  const limit = selectionLimit(state);
+  const limited = selectionLimited(mode, pending);
+  const atLimit = limited && checked.length >= limit;
+  const overLimit = limited && checked.length > limit;
   function choose(s: FileReviewState, key: string) {
     setTask(key);
     setQuery("");
@@ -272,7 +281,9 @@ export function AnswerFileReview({
   function submit(action: FileReviewAction["action"], selected = checked, kind: Activity = action) {
     if (!state) return;
     void operation(kind, async () => {
-      const s = await change({ task, action, selected, revision: state.revision });
+      // 方法を選んで行う操作だけに方法を付ける（候補の確認の面は方法を選ばない）。
+      const method = (action === "answer" || action === "discover") && !pending && mode ? mode : undefined;
+      const s = await change({ task, action, selected, revision: state.revision, ...(method ? { method } : {}) });
       if (!active.current) return;
       setState(s);
       choose(s, task);
@@ -468,9 +479,10 @@ export function AnswerFileReview({
               {task && !replaceBody && !selectedFile && !manage && !reset && (
                 <p className="flex flex-col text-xs text-fg-muted tnum sm:flex-row sm:flex-wrap sm:gap-x-3" role="status" aria-atomic="true">
                   <span>
-                    {t("fileReview.selectionCount", {
+                    {t(limited ? "fileReview.selectionCountLimited" : "fileReview.selectionCount", {
                       scope: t(query ? "fileReview.showing" : "fileReview.all", { shown: matching.length, total: groups.length }),
                       keep: checked.length,
+                      limit,
                     })}
                   </span>{" "}
                   <span>
@@ -478,6 +490,25 @@ export function AnswerFileReview({
                       remove: dropping.length, total, hidden,
                     })}
                   </span>
+                  {atLimit && (
+                    // 選べない理由。件数と同じ読み上げの領域に置き、選べないチェックボックスからも参照する。
+                    <span
+                      id={selectionId + "-limit"}
+                      data-testid="file-review-limit"
+                      className={"flex basis-full items-start gap-1 " + (overLimit ? "text-fg" : "")}
+                    >
+                      {overLimit ? (
+                        <TriangleAlert size={14} className="mt-0.5 shrink-0 text-warning-fg" aria-hidden />
+                      ) : (
+                        <Info size={14} className="mt-0.5 shrink-0" aria-hidden />
+                      )}
+                      <span>
+                        {overLimit
+                          ? t("fileReview.selectionOver", { limit, over: checked.length - limit })
+                          : t("fileReview.selectionLimit", { limit })}
+                      </span>
+                    </span>
+                  )}
                 </p>
               )}
               {task && !replaceBody && !selectedFile && !manage && !reset && (
@@ -497,14 +528,16 @@ export function AnswerFileReview({
                       icon={answering ? MessageSquareText : Search}
                       loading={activity === "discover" || activity === "answer"}
                       disabled={
-                        busy || (!pending && !mode) || (!checked.length && (pending || mode !== "replace"))
+                        busy || overLimit || (!pending && !mode) || (!checked.length && (pending || mode !== "replace"))
                       }
+                      aria-describedby={overLimit ? selectionId + "-limit" : undefined}
                       onClick={() => submit(pending || mode === "only" ? "answer" : "discover")}
                     >
                       {actionTitle}
                     </Button>
                     {pending && (
-                      <Button icon={ListPlus} variant="secondary" loading={activity === "more"} disabled={busy} onClick={() => submit("discover", checked, "more")}>
+                      <Button icon={ListPlus} variant="secondary" loading={activity === "more"} disabled={busy || overLimit}
+                        aria-describedby={overLimit ? selectionId + "-limit" : undefined} onClick={() => submit("discover", checked, "more")}>
                         {t("fileReview.more")}
                       </Button>
                     )}
@@ -593,6 +626,8 @@ export function AnswerFileReview({
                 {matching.map((f) => {
                   const selected = checked.includes(f.id);
                   const count = f.hits.filter(cited).length;
+                  // 上限に達したら、選んでいない資料は選べない（選んだ資料は外せる）。
+                  const blocked = atLimit && !selected;
                   return (
                     <div
                       key={f.id}
@@ -602,11 +637,14 @@ export function AnswerFileReview({
                       }
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <label className="flex min-w-0 items-baseline gap-2 text-sm font-medium">
+                        <label
+                          className={"flex min-w-0 items-baseline gap-2 text-sm font-medium " + (blocked ? "cursor-not-allowed text-fg-muted" : "")}
+                        >
                           <input
                             type="checkbox"
                             checked={selected}
-                            disabled={busy}
+                            disabled={busy || blocked}
+                            aria-describedby={blocked ? selectionId + "-limit" : undefined}
                             onChange={() => {
                               setChecked((old) => (selected ? old.filter((id) => id !== f.id) : [...old, f.id]));
                               if (!mode && !pending) setMode("mix");
