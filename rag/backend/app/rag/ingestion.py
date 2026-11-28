@@ -147,6 +147,7 @@ from app.rag.layer_fingerprint import (
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
     field_schema_hash,
 )
+from app.rag.loop_calls import submit_to_loop
 from app.rag.navigation import (
     build_navigation_tree,
     navigation_summary_elements,
@@ -3076,7 +3077,7 @@ class IngestionPipeline:
             if stop is not None and stop.is_set():
                 raise IngestionCancelledError("図・表の説明の先読みを止めました。")
             if cancel_checker is not None:
-                asyncio.run_coroutine_threadsafe(_raise_if_cancelled(cancel_checker), loop).result()
+                submit_to_loop(lambda: _raise_if_cancelled(cancel_checker), loop).result()
 
         # 図・表の説明の段の件数を job の進捗へ写す(#1999)。対象の検出(ページの描画)の間も
         # 段を出し、Vision モデルの応答を待っている対象(ページ・種類)を画面に示す。段ごとの

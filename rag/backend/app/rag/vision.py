@@ -81,6 +81,7 @@ from rag_parser_core.vision_text_map import (
 )
 from rag_pipeline_core.chunking import table_vision_supplement
 
+from app.rag.loop_calls import submit_to_loop
 from app.schemas.extraction import (
     DocumentElement,
     ExtractionAsset,
@@ -188,7 +189,7 @@ class EnterpriseAiPictureDescriber:
     """rag_engine の ``PictureDescriber`` を OCI Enterprise AI の既定の Vision モデルで実装する。
 
     rag_engine の読み取りは同期処理(thread)で動くので、非同期の client は取込の event loop へ
-    ``run_coroutine_threadsafe`` で投げる。``caller``(上限つきの並行の実行器。#2002)を渡すと、
+    ``submit_to_loop`` で投げる。``caller``(上限つきの並行の実行器。#2002)を渡すと、
     ``submit`` で複数の図を同時に呼び(上限は ``max_concurrency``)、エラーの種類ごとの再試行・
     全体の待ち・circuit breaker を実行器に任せる(SDK の再試行は切る)。再試行を使い切った図は、
     ほかの呼び出しがすべて終わってから最後にもう一度呼ぶ。
@@ -263,9 +264,7 @@ class EnterpriseAiPictureDescriber:
         images.extend(Path(path).read_bytes() for path in context_image_paths)
         page = metadata.get("page") if isinstance(metadata, Mapping) else None
         label = f"p.{page} {metadata.get('record_id', '')}".strip() if page else ""
-        return asyncio.run_coroutine_threadsafe(
-            self._describe(images, rendered_prompt, label), self._loop
-        )
+        return submit_to_loop(lambda: self._describe(images, rendered_prompt, label), self._loop)
 
     async def _describe(self, images: list[bytes], prompt: str, label: str) -> dict[str, Any]:
         caller = self._caller
