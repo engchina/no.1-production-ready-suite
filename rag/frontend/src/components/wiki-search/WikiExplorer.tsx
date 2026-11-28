@@ -138,13 +138,14 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, unpi
     retry: false,
   });
 
-  // Wiki 検索の図は、選んだ原文とその次の段（#5981）。図（関係図・一覧）を開いている間だけそろえ、検索結果の
+  // Wiki 検索の図は、選んだ原文とその次の段（#5981）。図（関係図・一覧）を開いている間だけ足し、検索結果の
   // タブにいる間は関係を照会しない（選ぶたびに読むと、原文の照合と重なって DB の読み取りの上限に当たる。#5966）。
+  // 選択から外した原文は、どのタブにいてもすぐ図から外す。
   const placed = useRef("");
   const { replace, add, place, run, reveal, syncPicked } = graph;
   const figureOpen = view !== "results";
   useEffect(() => {
-    if (searchMode && figureOpen) syncPicked((picks ?? []).map(pickNode));
+    if (searchMode) syncPicked((picks ?? []).map(pickNode), figureOpen);
   }, [figureOpen, picks, searchMode, syncPicked]);
   // ナレッジベース詳細は、参照の多い文書の見本とその間の参照で開く。
   useEffect(() => {

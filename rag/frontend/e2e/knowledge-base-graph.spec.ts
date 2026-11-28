@@ -254,6 +254,10 @@ test("Wiki 検索は検索結果の一覧から始まり、選んだ原文とそ
   await expect(list.getByRole("button")).toHaveCount(25);
   await expect(list.getByRole("checkbox")).toHaveCount(25);
   await expect(list.getByRole("checkbox", { checked: true })).toHaveCount(0);
+  // チェックボックスの押せる範囲（行の左の欄）は、タッチの最小の幅（44px）以上。
+  const hitArea = await rowCheckbox(page, 1).locator("xpath=..").boundingBox();
+  expect(hitArea!.width).toBeGreaterThanOrEqual(44);
+  expect(hitArea!.height).toBeGreaterThanOrEqual(44);
   await shot(page, info, "wiki-list");
   // 1 件も選んでいないときは、図の場所に案内を出す（「一覧」も同じ）。
   await page.getByRole("tab", { name: "関係図" }).click();

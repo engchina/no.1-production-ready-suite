@@ -349,16 +349,19 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
                 action={
                   // 狭い画面では操作を 1 行にまとめてタグの下へ回す（タグの欄を全幅に使う）。
                   <div className="flex flex-wrap items-center justify-end gap-2 max-sm:w-full">
-                    <Button
-                      variant="ghost"
-                      icon={X}
-                      onClick={() => {
-                        patch({ items: [] });
-                        document.getElementById("wiki-question")?.focus();
-                      }}
-                    >
-                      {t("wiki.search.removeAll")}
-                    </Button>
+                    {/* 「すべて外す」は Wiki 検索だけ（ナレッジベース詳細の欄は、件数と上限のほかは変えない）。 */}
+                    {manual && (
+                      <Button
+                        variant="ghost"
+                        icon={X}
+                        onClick={() => {
+                          patch({ items: [] });
+                          document.getElementById("wiki-question")?.focus();
+                        }}
+                      >
+                        {t("wiki.search.removeAll")}
+                      </Button>
+                    )}
                     {canChat && (
                       <Button icon={MessagesSquare} disabled={!chatProfile} onClick={chat}>
                         {t("wiki.search.ask")}

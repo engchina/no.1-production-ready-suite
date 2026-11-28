@@ -102,20 +102,21 @@ export function useWikiGraph(scope: WikiScope) {
    * Wiki 検索の図を、選んだ原文とその次の段にそろえる（#5981）。選んだ原文は強調（`matched`）して図に置き、外した
    * 原文はその次の段と一緒に外す。次の段（関係の出る向き・入る向き）は、選んだ原文ごとに最初の
    * `selectedNeighbors` 件を出し、残りは「さらに展開」の点にする。関係は 1 件ずつ順に読み、読み終えてからまとめて
-   * 図に足す（読み取りを重ねない。#5966）。呼ぶのは図を見ている間だけ（呼び出し側が決める）。
+   * 図に足す（読み取りを重ねない。#5966）。足すのと関係を読むのは、図を見ている間（`open`）だけ。選択から外した
+   * 原文は、図を見ていなくてもすぐ外す（照会は要らない。詳細が、外した原文を図にあるものとして扱わない）。
    * 図に無かった原文を選んだときは、次の段を足すときに配置を最初からやり直す（選んだ原文だけを先に詰めて置いた
    * 位置のまま次の段を足すと、選んだ原文どうしが近すぎる）。図にある節点（次の段）を選んだときは動かさない。
    */
   const firstHop = useRef(new Set<string>());
-  const syncPicked = useCallback((picked: readonly WikiGraphNode[]) => {
+  const syncPicked = useCallback((picked: readonly WikiGraphNode[], open: boolean) => {
     const wanted = new Set(picked.map((node) => node.id));
     const dropped = [...current.current.matched].filter((id) => !wanted.has(id));
+    for (const id of dropped) firstHop.current.delete(id);
+    if (dropped.length) update((old) => dropped.reduce(unpickWikiNode, old));
+    if (!open) return;
     const added = picked.filter((node) => !current.current.matched.has(node.id));
     const relayout = added.some((node) => !current.current.nodes.has(node.id));
-    for (const id of dropped) firstHop.current.delete(id);
-    if (dropped.length || added.length) {
-      update((old) => addToWikiGraph(dropped.reduce(unpickWikiNode, old), added, [], { matched: added.map((node) => node.id) }));
-    }
+    if (added.length) update((old) => addToWikiGraph(old, added, [], { matched: added.map((node) => node.id) }));
     const waiting = picked.map((node) => node.id).filter((id) => !firstHop.current.has(id));
     if (!waiting.length) return;
     for (const id of waiting) firstHop.current.add(id);
