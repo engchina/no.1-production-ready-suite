@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from rag_parser_core.extraction import StructuredExtraction
+from rag_parser_core.input_errors import is_invalid_input_error
 
 if TYPE_CHECKING:
     from rag_parser_core.source import SourceProfile
@@ -108,7 +109,12 @@ def service_failure_warning(backend: str, exc: BaseException) -> str:
     そのメッセージを上流へ届け、利用者が container ログを開かずに原因を直せるようにする。
     それ以外は情報漏えいを避けて例外型名だけを返す。warning は backend の
     `_selected_parser_failure_message` で `エラーコード:` として表示される。
+
+    入力のファイル自体の不正(破損した PDF など)は、サービスの障害ではなく
+    ``<backend>_adapter_invalid_input``(adapter の実行と同じ code)にする(#3217)。
     """
+    if is_invalid_input_error(exc):
+        return f"{backend}_adapter_invalid_input"
     if getattr(exc, "safe_for_user", False):
         detail = " ".join(str(exc).split())[:400]
     else:

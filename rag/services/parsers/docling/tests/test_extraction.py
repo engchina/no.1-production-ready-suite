@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pypdfium2 as pdfium
 from fastapi.testclient import TestClient
 from rag_engine.models.layout import LayoutRecord, PageImage
 from rag_parser_core.extraction import StructuredExtraction
@@ -178,6 +179,41 @@ def test_parse_endpoint_ignores_legacy_vision_options() -> None:
     assert captured["file_name"] == "manual.pdf"
     assert "vision_enabled" not in captured
     assert "image_retrieval_prompt" not in captured
+
+
+def _parse_failing(error: Exception | None) -> dict[str, object]:
+    def fake_analyze(source_bytes: bytes, **kwargs: object) -> StructuredExtraction:
+        _ = kwargs
+        if error is not None:
+            raise error
+        # 実際の pypdfium2 で、先頭だけ PDF の壊れたファイルを開く(PdfiumError)。
+        pdfium.PdfDocument(source_bytes)
+        return StructuredExtraction(raw_text="unreachable")
+
+    with patch("app.main.analyze_source", side_effect=fake_analyze):
+        response = TestClient(app).post(
+            "/parse",
+            files={"file": ("broken.pdf", b"%PDF-1.7\n\x00\x13garbage" * 64, "application/pdf")},
+            data={"content_type": "application/pdf"},
+        )
+    assert response.status_code == 200
+    payload: dict[str, object] = response.json()
+    return payload
+
+
+def test_parse_reports_broken_pdf_as_invalid_input() -> None:
+    """壊れた PDF はサービスの障害(docling_unavailable)ではなく入力の不正にする(#3217)。"""
+    payload = _parse_failing(None)
+
+    assert payload["extraction"] is None
+    assert payload["warnings"] == ["docling_adapter_invalid_input"]
+
+
+def test_parse_keeps_service_side_errors_as_unavailable() -> None:
+    """依存の不足などサービス側の例外は、今までどおりサービスの失敗として返す。"""
+    payload = _parse_failing(ImportError("synthetic missing dependency"))
+
+    assert payload["warnings"] == ["docling_unavailable: ImportError"]
 
 
 def test_layout_artifact_has_no_service_vision_summary() -> None:
