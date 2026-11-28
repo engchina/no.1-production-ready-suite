@@ -30,14 +30,14 @@
     }
   ],
   "lines": [
-    "参照した検索一覧 1: q / Oracle 内部融合（WRRF）  / 出所: 原質問 / 重み 1 / 1 件 / 検索時の状態: 完了",
+    "参照した検索一覧 1: q / Oracle 内部融合（WRRF）  / ベクトルの読み方: 原生索引の近似検索 / 範囲のベクトル 1 件（距離順に読む上限 0 件）/ 要求 1 件 / 範囲から返せる数 1 件 / 取得 1 件 / 出所: 原質問 / 重み 1 / 1 件 / 検索時の状態: 完了",
     "synthetic-id: 一覧 1・引継元の一覧内順位 1 / 引継元の寄与 0.016 / 引き継いだ融合スコア 0.016"
   ],
   "code": [
     {
       "label": "原質問の検索から引き継いだ融合記録",
       "language": "json",
-      "text": "{\n  \"fusion_execution\": \"native_only\",\n  \"oracle_internal_fusion\": true,\n  \"method_ratio\": [\n    7,\n    3\n  ],\n  \"source_ratio\": [\n    7,\n    3\n  ],\n  \"rank_constant\": 60,\n  \"expressions\": [\n    {\n      \"query\": \"q\",\n      \"weight\": 1.0,\n      \"original\": true\n    }\n  ],\n  \"lists\": [\n    {\n      \"query\": \"q\",\n      \"channel\": \"hybrid\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"原質問\"\n      ],\n      \"text_query\": \"\",\n      \"weight\": 1.0,\n      \"count\": 1,\n      \"raw_count\": 1,\n      \"status\": \"completed\",\n      \"error\": \"\",\n      \"score_source\": \"oracle_wrrf\",\n      \"native_scores\": [\n        0.016\n      ]\n    }\n  ],\n  \"contributions\": [\n    {\n      \"chunk_id\": \"synthetic-id\",\n      \"list_index\": 0,\n      \"rank\": 1,\n      \"contribution\": 0.016,\n      \"fused_score\": 0.016\n    }\n  ],\n  \"raw_count\": 1,\n  \"unique_count\": 1,\n  \"candidate_count\": 1\n}"
+      "text": "{\n  \"fusion_execution\": \"native_only\",\n  \"oracle_internal_fusion\": true,\n  \"method_ratio\": [\n    7,\n    3\n  ],\n  \"source_ratio\": [\n    7,\n    3\n  ],\n  \"rank_constant\": 60,\n  \"expressions\": [\n    {\n      \"query\": \"q\",\n      \"weight\": 1.0,\n      \"original\": true\n    }\n  ],\n  \"lists\": [\n    {\n      \"query\": \"q\",\n      \"channel\": \"hybrid\",\n      \"variant\": \"\",\n      \"sources\": [\n        \"原質問\"\n      ],\n      \"text_query\": \"\",\n      \"weight\": 1.0,\n      \"count\": 1,\n      \"raw_count\": 1,\n      \"status\": \"completed\",\n      \"error\": \"\",\n      \"score_source\": \"oracle_wrrf\",\n      \"native_scores\": [\n        0.016\n      ],\n      \"vector_retrieval\": {\n        \"method\": \"native_index\",\n        \"scope_vector_chunks\": 1,\n        \"exact_max_chunks\": 0,\n        \"requested\": 1,\n        \"expected\": 1,\n        \"returned\": 1,\n        \"shortage\": false\n      }\n    }\n  ],\n  \"contributions\": [\n    {\n      \"chunk_id\": \"synthetic-id\",\n      \"list_index\": 0,\n      \"rank\": 1,\n      \"contribution\": 0.016,\n      \"fused_score\": 0.016\n    }\n  ],\n  \"raw_count\": 1,\n  \"unique_count\": 1,\n  \"candidate_count\": 1\n}"
     }
   ],
   "rrf": {
@@ -76,7 +76,16 @@
         "score_source": "oracle_wrrf",
         "native_scores": [
           0.016
-        ]
+        ],
+        "vector_retrieval": {
+          "method": "native_index",
+          "scope_vector_chunks": 1,
+          "exact_max_chunks": 0,
+          "requested": 1,
+          "expected": 1,
+          "returned": 1,
+          "shortage": false
+        }
       }
     ],
     "contributions": [

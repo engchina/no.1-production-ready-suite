@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 from rag_engine.retrieval.weighted_rrf import RankedList, RrfWeights, fuse_rankings, source_weights
 
+from app.clients.oracle import SearchHits
 from app.config import Settings
 from app.rag.answer_engine import AnswerEngine, _SearchState
 from app.schemas.search import RetrievedChunk, SearchMode, SearchRequest
@@ -26,9 +27,19 @@ async def test_every_query_uses_native_hybrid_whatever_words_were_added() -> Non
             filters: dict[str, str] | None = None,
         ) -> list[RetrievedChunk]:
             calls.append((query, mode, embedding))
-            hits = await super().hybrid_search(query, embedding, top_k, mode, filters)
+            hits = SearchHits(await super().hybrid_search(query, embedding, top_k, mode, filters))
             if mode == SearchMode.HYBRID:
                 hits[0].metadata["native_rrf_contribution"] = 1 / 61
+                # 原生索引で読んだ混合検索（Oracle の融合。#4198）。
+                hits.vector_retrieval = {
+                    "method": "native_index",
+                    "scope_vector_chunks": 3,
+                    "exact_max_chunks": 0,
+                    "requested": top_k,
+                    "expected": 3,
+                    "returned": 3,
+                    "shortage": False,
+                }
             return hits
 
     class Embedding:

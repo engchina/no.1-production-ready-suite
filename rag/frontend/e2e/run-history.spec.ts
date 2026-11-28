@@ -2002,6 +2002,8 @@ test("Oracle内部で統合済みの場合だけ追加の統合をスキップ�
   await expect(inspector.locator("dt").getByText("結果", {exact: true})).toHaveCount(0);
   await expect(inspector).toContainText("重複除去前 1 件 / 重複除去後 1 件 / 正の寄与がある候補 1 件");
   await expect(inspector).toContainText("引継元の一覧内順位 1 / 引継元の寄与 0.016 / 引き継いだ融合スコア 0.016");
+  // 混合検索の一覧のベクトルの実際の読み方（#4198）。
+  await expect(inspector).toContainText("ベクトルの読み方: 原生索引の近似検索");
   await expect(inspector).toContainText("この段で追加の統合は行っていません");
   const inheritedRecord = inspector.locator('pre[aria-label="原質問の検索から引き継いだ融合記録"]');
   await expect(inheritedRecord).toHaveText(nativeOnlyRrfDetails.code[0].text);

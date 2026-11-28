@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rag_engine.retrieval.query_identity import dedupe_queries, dedupe_query_key
+from rag_engine.retrieval.search_diagnostics import vector_retrieval_text
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,29 @@ class RankedList:
     ranks: tuple[int, ...] = ()
     # 全文検索に使った文（検索文に語を足したときだけ。主検索の全文検索。#5159）。重みと同一性は query で決める。
     text: str = ""
+    # ベクトルの分岐の実際の読み方と不足（検索の adapter の記録。``method`` は ``native_index`` /
+    # ``native_index_retry`` / ``exact_scope``。#4198）。ベクトルを読まない一覧は空。
+    vector_retrieval: Mapping[str, object] = field(default_factory=dict)
+
+    @property
+    def oracle_fusion(self) -> bool:
+        """一覧が Oracle の原生混合検索（原生索引の WRRF）の結果か（#4198）。
+
+        範囲の行を距離順に読んだ経路（``exact_scope``）は、ベクトルと全文の結果を方式ごとの順位で合わせるだけで、
+        Oracle の融合を通らない。読み方の記録が無い一覧も Oracle の融合とはみなさない。
+        """
+        return bool(self.native_scores) and str(self.vector_retrieval.get("method", "")).startswith("native_index")
+
+    @property
+    def score_source(self) -> str:
+        """一覧の寄与の出所（#4198）。
+
+        ``oracle_wrrf`` は Oracle の原生混合検索の融合、``method_ranks`` は Oracle の融合を通らない混合検索の行の
+        方式ごとの順位、``rank`` は一覧の中の順位。
+        """
+        if self.oracle_fusion:
+            return "oracle_wrrf"
+        return "method_ranks" if self.native_scores else "rank"
 
     def __post_init__(self) -> None:
         if self.ranks and (len(self.ranks) != len(self.chunk_ids) or any(type(rank) is not int or rank < 1 for rank in self.ranks)):
@@ -119,7 +143,7 @@ class FusionResult:
     def diagnostics(self, weights: RrfWeights, sources: Mapping[str, float], k: float) -> dict[str, object]:
         return {
             "fusion_execution": self.execution(sources),
-            "oracle_internal_fusion": any(entry.status == "completed" and bool(entry.ranking.native_scores) for entry in self.lists),
+            "oracle_internal_fusion": any(entry.status == "completed" and entry.ranking.oracle_fusion for entry in self.lists),
             "method_ratio": [weights.vector, weights.keyword],
             "source_ratio": [weights.original, weights.additional],
             "rank_constant": k,
@@ -136,8 +160,9 @@ class FusionResult:
                     "raw_count": len(e.ranking.chunk_ids),
                     "status": e.status,
                     "error": e.ranking.error,
-                    "score_source": "oracle_wrrf" if e.ranking.native_scores else "rank",
+                    "score_source": e.ranking.score_source,
                     "native_scores": list(e.ranking.native_scores),
+                    **({"vector_retrieval": dict(e.ranking.vector_retrieval)} if e.ranking.vector_retrieval else {}),
                 }
                 for e in self.lists
             ],
@@ -220,11 +245,12 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
         channel_label = {
             "vector": "ベクトル検索",
             "keyword": "全文検索",
-            "hybrid": "Oracle 内部融合（WRRF）" if r.native_scores else "混合検索のランキング",
+            "hybrid": "Oracle 内部融合（WRRF）" if r.oracle_fusion else "混合検索のランキング",
         }[r.channel]
         lines.append(
             f"{'参照した検索一覧' if inherited else '一覧'} {i}: {r.query} / {channel_label} {r.variant} / "
             + (f"全文検索の文: {r.text} / " if r.text else "")
+            + (f"ベクトルの読み方: {vector_retrieval_text(r.vector_retrieval)} / " if r.vector_retrieval else "")
             + f"出所: {'・'.join(r.sources) or '追加検索文'} / 重み {entry.weight:.9g} / "
             f"{len(dict.fromkeys(r.chunk_ids))} 件 / {'検索時の状態: ' if inherited else ''}{state}" + (f"（{r.error}）" if r.error else "")
         )
@@ -241,7 +267,7 @@ def fusion_details(result: FusionResult, weights: RrfWeights, sources: Mapping[s
                 "value": "原質問の検索内で統合済みです。追加の検索結果統合は不要です。"
                 if inherited
                 else "原質問の Oracle WRRF と追加検索の順位寄与を出所の比重で合算します。融合済み順位への再 RRF は行いません。"
-                if any(r.status == "completed" and r.ranking.native_scores for r in result.lists)
+                if any(r.status == "completed" and r.ranking.oracle_fusion for r in result.lists)
                 else "各ランキングの順位と設定した比重を使い、一度の RRF で検索結果を統合します。",
             },
             {

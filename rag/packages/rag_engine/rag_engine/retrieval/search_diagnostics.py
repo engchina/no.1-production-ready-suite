@@ -35,7 +35,8 @@ _SCOPE_KEYS = frozenset(
 )
 
 
-def _vector_retrieval_text(retrieval: Mapping[str, Any]) -> str:
+def vector_retrieval_text(retrieval: Mapping[str, Any]) -> str:
+    """ベクトルの分岐の読み方と件数・不足の表示（検索の段と検索結果の統合の段。#4134・#4198）。"""
     method = {
         "exact_scope": "範囲の行を距離順に読む",
         # 不足のときだけ候補を広げて読み直す(#4097)。
@@ -95,7 +96,7 @@ def search_diagnostics(
         fields.append({"label": f"検索 {index} の入力", "value": input_value})
         retrieval = branch.get("vector_retrieval")
         if isinstance(retrieval, Mapping) and retrieval:
-            fields.append({"label": f"ベクトルの読み方 {index}", "value": _vector_retrieval_text(retrieval)})
+            fields.append({"label": f"ベクトルの読み方 {index}", "value": vector_retrieval_text(retrieval)})
         if int(branch.get("filter_batches", 1)) > 1:
             fields.append(
                 {

@@ -1349,6 +1349,7 @@ class AnswerEngine:
                         )
                     ),
                     text=searched_text if searched_text != query else "",
+                    vector_retrieval=dict(getattr(hits, "vector_retrieval", None) or {}),
                 )
             )
             for hit in hits:
