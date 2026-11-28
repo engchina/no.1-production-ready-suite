@@ -3916,13 +3916,11 @@ class AnswerEngine:
         rows = await selected_document_backgrounds(
             self._oracle, state, _effective_search_filters(request, state), spans
         )
-        # 選んだ原文だけで答えるとき(#5981)は、文書の先頭の chunk を根拠に足さない(文書の背景の
-        # 補助情報は渡す)。
         return [
             {
                 **row,
                 "first_chunk": _stored_child(row["first_chunk"], rrf_score=0.0)
-                if row["first_chunk"] is not None and not self._selected_only
+                if row["first_chunk"] is not None
                 else None,
             }
             for row in rows
