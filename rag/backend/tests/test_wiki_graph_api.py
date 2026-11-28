@@ -6,6 +6,7 @@ SQL は実 Oracle のテスト（test_wiki_graph_store_oracle.py）で確かめ�
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import json
 import sys
@@ -512,8 +513,9 @@ async def test_graph_reads_reuse_the_scope_until_the_database_changes() -> None:
     await again.document_graph(KB, offset=0, limit=25)
     assert _scope_loads(oracle) == 0
     assert not [sql for sql, _ in oracle.statements if "SELECT DISTINCT p.document_id" in sql]
-    # 参照先の章節も、読んだ文書は読み直さない。
+    # 参照先の章節・単位の見出しも、読んだ文書・案内は読み直さない。
     assert not [sql for sql, _ in oracle.statements if "AS target_path" in sql]
+    assert not [sql for sql, _ in oracle.statements if "'$.unit.title') AS title" in sql]
     # 文書 B の公開を取り消すと版が変わり、B への参照は開けない参照になる。
     oracle.visible.discard("b1")
     oracle.version = next(_VERSIONS)
@@ -521,6 +523,18 @@ async def test_graph_reads_reuse_the_scope_until_the_database_changes() -> None:
     assert _scope_loads(oracle) == 1
     cross = [item for item in changed["items"] if item["scope"] == "cross_document"]
     assert [(item["unit"], item["target_name"]) for item in cross] == [(None, "synthetic-b.pdf")]
+
+
+async def test_concurrent_graph_reads_share_one_scope_load() -> None:
+    """変更の直後に同時に来た要求（線 1 本と関係数件）は、範囲を 1 回だけ照合する。"""
+    oracle = FakeOracle()
+    store = WikiGraphStore(oracle)  # type: ignore[arg-type]
+    results = await asyncio.gather(
+        store.connections(KB, [U["a1"], U["a2"], U["b1"]]),
+        *(store.relations(KB, U[name], 0, 25, grouped=True) for name in ("a1", "a2", "a3")),
+    )
+    assert _scope_loads(oracle) == 1
+    assert results[1] == await store.relations(KB, U["a1"], 0, 25, grouped=True)
 
 
 async def test_graph_scope_cache_is_separate_per_access_scope() -> None:
