@@ -1,6 +1,7 @@
 """ドキュメント API。アップロード・一覧・取込(抽出→索引)。"""
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -44,6 +45,7 @@ from app.api.errors import (
     DocumentRecipeConfigInvalidError,
     SourceVersionStaleError,
 )
+from app.clients.ai_calls import ai_call_attempt_gate
 from app.clients.document_cleanup_store import DocumentCleanupStore, DocumentCleanupTargets
 from app.clients.document_summary_store import DocumentSummaryStore
 from app.clients.extraction_revision_store import max_extraction_revisions
@@ -5750,7 +5752,11 @@ async def _run_pinned_ingestion_job(
     # レシピ経路で、job を SUCCEEDED にできた後に記録する成功の監査・metric(#514)。
     recipe_success_outcome: IngestionSuccessOutcome | None = None
     try:
-        with attempt_receipt_scope(write_attempt_receipt):
+        # job の中で作る AI の実行器は、各試行の送信の前に取消・lease を確かめる(#5696)。
+        with (
+            attempt_receipt_scope(write_attempt_receipt),
+            ai_call_attempt_gate(functools.partial(_raise_if_job_cancelled, is_cancelled)),
+        ):
             async with track_ingestion_progress(write_progress):
                 if job.recipe_id is not None:
                     await _raise_if_job_cancelled(is_cancelled)

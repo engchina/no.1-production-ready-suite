@@ -4,6 +4,8 @@
 件の失敗の扱い）と、RAG の client の例外の分類を渡す。取込の job の中では、実行器の
 event（待ち・再試行・並行の数・成功）を job の進捗（``progress_json`` の ``calls``）へ写す。
 待っている間も heartbeat の間隔で進捗が変わるため、#2003 の停滞の検出が待ちを停滞と誤らない。
+取込の job の中（``ai_call_attempt_gate``）で作る実行器は、各試行の送信の前に job の取消・lease を
+確かめ、取り消された job から次の要求をモデルへ送らない（#5696）。
 
 SDK の再試行との分担: この実行器を通す呼び出しは SDK の再試行を切る（OCI Enterprise AI の
 openai SDK は ``sdk_retries_disabled``、OCI Generative AI の SDK は ``NoneRetryStrategy``）。
@@ -15,10 +17,12 @@ import asyncio
 import contextlib
 import random
 from collections.abc import Callable, Iterator
+from contextvars import ContextVar
 from typing import Literal
 
 from pr_anthropic_messages import anthropic_failure_hint
 from pr_backend_core.bounded_calls import (
+    AttemptGate,
     BoundedCaller,
     BoundedCallPolicy,
     CallEvent,
@@ -170,10 +174,31 @@ def _random() -> float:
     return random.random()  # nosec B311 - backoff の jitter で、暗号の用途ではない
 
 
+_ATTEMPT_GATE: ContextVar[AttemptGate | None] = ContextVar("rag_ai_call_attempt_gate", default=None)
+
+
+@contextlib.contextmanager
+def ai_call_attempt_gate(gate: AttemptGate) -> Iterator[None]:
+    """この範囲で作る実行器は、各試行（再試行・最後の再試行を含む）の送信の前に ``gate`` を待つ。
+
+    取込の job が、取消・lease の喪失で例外を出す検査を渡す（#5696）。段ごと・単位ごとに検査を
+    渡さなくても、job の中で作るすべての実行器（Vision・項目抽出・章節の要約・Embedding など）が
+    取り消された後の要求を送らない。
+    """
+    token = _ATTEMPT_GATE.set(gate)
+    try:
+        yield
+    finally:
+        _ATTEMPT_GATE.reset(token)
+
+
 def make_ai_caller(
     settings: object, stage: str, *, max_concurrency: int | None = None
 ) -> BoundedCaller:
-    """段の実行器を作る（1 回の段・1 つの job ごと）。``max_concurrency`` は上限の上書き。"""
+    """段の実行器を作る（1 回の段・1 つの job ごと）。``max_concurrency`` は上限の上書き。
+
+    取込の job の中（``ai_call_attempt_gate``）なら、その job の検査を各試行の前に待つ。
+    """
     policy = ai_call_policy(settings, stage)
     if max_concurrency is not None:
         policy = policy_with_concurrency(policy, max_concurrency)
@@ -184,6 +209,7 @@ def make_ai_caller(
         classifier=chain_classifiers(rag_error_kind, hint=anthropic_failure_hint),
         sleep=lambda seconds: _sleep(seconds),
         random=lambda: _random(),
+        before_attempt=_ATTEMPT_GATE.get(),
     )
 
 

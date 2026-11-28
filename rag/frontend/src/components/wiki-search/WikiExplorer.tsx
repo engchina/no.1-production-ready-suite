@@ -95,7 +95,8 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, unpi
   const [inspected, setInspected] = useState<WikiGraphNode | null>(null);
   // チェックボックスで選ぶ途中（原文を照合している）の行と、その失敗。
   const [picking, setPicking] = useState<readonly string[]>([]);
-  const [pickFailure, setPickFailure] = useState<{ error: unknown; retry: () => void } | null>(null);
+  // 失敗は行ごと（`id`）に持ち、その行の再試行の間は失敗の表示を残して「再試行」を回す（#5955）。
+  const [pickFailure, setPickFailure] = useState<{ id: string; error: unknown; retry: () => void } | null>(null);
   const limitId = useId();
   const client = useQueryClient();
   const graph = useWikiGraph(scope);
@@ -223,12 +224,16 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, unpi
     const chosen = picks?.find((item) => item.id === row.id);
     if (chosen) return toggle(chosen);
     if (selectionFull || picking.includes(row.id)) return;
-    setPickFailure(null);
+    // ほかの行を選ぶときは前の行の失敗を消す。同じ行の再試行では照合が終わるまで残す。
+    setPickFailure((old) => (old?.id === row.id ? old : null));
     setPicking((old) => [...old, row.id]);
     client.fetchQuery({ queryKey: ["wiki-explorer", scope, "original", row.id], queryFn: ({ signal }) => wikiApi.original(scope, row.id, signal), staleTime: 60_000 })
       .then(
-        (original) => { if (!latestPicked.current.has(row.id)) toggle(sourcePick(original)); },
-        (error: unknown) => setPickFailure({ error, retry: () => togglePick(row) }),
+        (original) => {
+          setPickFailure((old) => (old?.id === row.id ? null : old));
+          if (!latestPicked.current.has(row.id)) toggle(sourcePick(original));
+        },
+        (error: unknown) => setPickFailure({ id: row.id, error, retry: () => togglePick(row) }),
       )
       .finally(() => setPicking((old) => old.filter((id) => id !== row.id)));
   }
@@ -435,7 +440,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, unpi
           <span>{t("wiki.search.selectionLimit", { count: selectionLimit })}{t("wiki.search.selectionLimitHint")}</span>
         </p>
       )}
-      {pickFailure && <DataLoadFailure error={pickFailure.error} fallback={t("wiki.graph.sourceError")} onRetry={pickFailure.retry} />}
+      {pickFailure && <DataLoadFailure error={pickFailure.error} fallback={t("wiki.graph.sourceError")} onRetry={pickFailure.retry} retrying={picking.includes(pickFailure.id)} />}
       <ListScrollRegion label={t("wiki.search.resultsList")} testId="wiki-result-list">
         <ul className="divide-y divide-border">
           {hitRows.map((row, index) => {
