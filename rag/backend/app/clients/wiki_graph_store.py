@@ -532,13 +532,13 @@ class WikiGraphStore:
             return []
         by_page = {str(row["page_id"]): row for row in selected}
         documents = {str(row["unit_id"]): str(row["document_id"]) for row in selected}
+        # 範囲の照合は上の 1 回だけ。依存と参照は、範囲にあると確かめた案内の ID で引く（#5966）。
+        # 線の相手は選んだ単位（範囲の中）だけを採るので、相手の側を範囲で照合し直さない。
         page_clause, page_binds = _oracle_in_predicate("e.page_id", "graph_conn_p", list(by_page))
         deps = await self.oracle._fetch_all(
-            f"""WITH {cte}
-            SELECT e.page_id,other.unit_id AS target_id,e.relation
-            FROM rag_wiki_graph_deps e JOIN visible other ON other.unit_id=e.target_unit_id
-            WHERE {page_clause}""",
-            {**binds, **page_binds},
+            f"""SELECT e.page_id,e.target_unit_id AS target_id,e.relation
+            FROM rag_wiki_graph_deps e WHERE {page_clause}""",
+            page_binds,
         )
         found: dict[tuple[str, str, str], str] = {}
         for row in deps:
@@ -547,14 +547,21 @@ class WikiGraphStore:
             # 案内の依存は同じ文書の中だけ（別の文書は下の参照で解く）。
             if target != source and documents.get(target) == documents[source]:
                 found[(source, target, str(row["relation"]))] = "same_document"
-        source_clause, source_binds = _oracle_in_predicate("s.unit_id", "graph_conn_s", ids)
-        references = await self.oracle._fetch_all(
-            f"""WITH {cte}
-            SELECT s.unit_id AS source_id,s.document_id,r.target_name,r.target_section,r.relation
-            FROM rag_wiki_references r JOIN visible s ON s.page_id=r.page_id
-            WHERE {source_clause}""",
-            {**binds, **source_binds},
+        source_clause, source_binds = _oracle_in_predicate(
+            "r.page_id", "graph_conn_s", list(by_page)
         )
+        references = [
+            {
+                **row,
+                "source_id": by_page[str(row["page_id"])]["unit_id"],
+                "document_id": by_page[str(row["page_id"])]["document_id"],
+            }
+            for row in await self.oracle._fetch_all(
+                f"""SELECT r.page_id,r.target_name,r.target_section,r.relation
+                FROM rag_wiki_references r WHERE {source_clause}""",
+                source_binds,
+            )
+        ]
         if references:
             names = await self._document_names(kb_id)
             resolved = [
@@ -585,12 +592,19 @@ class WikiGraphStore:
         ]
 
     async def _document_names(self, kb_id: str) -> DocumentNames:
-        """図の範囲の文書の名前の照合（ファイル名と先頭の見出し）。"""
+        """図の範囲の文書の名前の照合（ファイル名と先頭の見出し）。
+
+        先頭の見出しは、図の索引の最上位の節点（先頭の見出しごとに 1 件と、章節の無い単位）の
+        案内だけから読む。範囲の案内を全件読むと、要求ごとに案内の数だけ JSON を開く（#5966）。
+        """
         where, binds = graph_scope(kb_id)
         rows = await self.oracle._fetch_all(
             f"""SELECT DISTINCT p.document_id,d.file_name,
             JSON_VALUE(p.page_json,'$.unit.section_path[0]') AS heading
-            {WIKI_PAGE_FROM} WHERE {where}""",
+            {WIKI_PAGE_FROM}
+            JOIN rag_wiki_graph_nodes n ON n.page_id=p.page_id
+                AND n.document_id=p.document_id AND n.parent_id=n.document_id
+            WHERE {where}""",
             binds,
         )
         catalog: dict[str, dict[str, str]] = {}
