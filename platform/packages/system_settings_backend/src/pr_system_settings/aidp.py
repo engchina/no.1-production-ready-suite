@@ -144,7 +144,7 @@ async def load_aidp_integration(
     """AIDP の連携の情報を作る。未設定なら `configured=False` だけを返す（DB に触らない）。"""
     if not aidp_configured(settings):
         return AidpIntegrationData(configured=False)
-    dsn = _text(settings, "oracle_dsn")
+    db_name = adb_name_from_dsn(_text(settings, "oracle_dsn"))
     # 引用符なしで作る DB ユーザーの名前は大文字で保存される（stack・`suite-db-user.py` と同じ）。
     user_name = _text(settings, "aidp_db_user").upper()
     return AidpIntegrationData(
@@ -152,8 +152,10 @@ async def load_aidp_integration(
         url=_https_url(_text(settings, "aidp_url")),
         ocid=_text(settings, "aidp_ocid"),
         region=_text(settings, "aidp_region"),
-        adb_db_name=adb_name_from_dsn(dsn),
-        adb_service_name=dsn,
+        adb_db_name=db_name,
+        # External Catalog は Wallet の別名で登録し、少数の重い分析の読み取りなので HIGH の
+        # サービスにする（3 製品の接続先の TP とは分ける。#6018）。DB 名が読めなければ空。
+        adb_service_name=f"{db_name}_high" if db_name else "",
         db_user=user_name,
         db_user_status=await _db_user_status(
             settings,

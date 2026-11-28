@@ -103,7 +103,7 @@ database values into `platform/.env`:
 
 - `PLATFORM_ORACLE_USER`
 - `PLATFORM_ORACLE_PASSWORD`
-- `PLATFORM_ORACLE_DSN` (`existing_oracle_dsn`, or `<selected ADB db_name lowercased>_high`
+- `PLATFORM_ORACLE_DSN` (`existing_oracle_dsn`, or `<selected ADB db_name lowercased>_tp`
   when left blank)
 - `PLATFORM_ORACLE_CONNECTION_SECURITY` (`wallet_mtls` when mTLS is required,
   otherwise `walletless_tls`)

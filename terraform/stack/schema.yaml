@@ -342,7 +342,7 @@ variables:
     required: false
     visible: true
     title: "Existing DB DSN"
-    description: "Optional. Value written to PLATFORM_ORACLE_DSN in platform/.env (the shared settings file). Leave blank to use <selected ADB db_name>_high, for example SUITEADB -> suiteadb_high."
+    description: "Optional. Value written to PLATFORM_ORACLE_DSN in platform/.env (the shared settings file). Leave blank to use <selected ADB db_name>_tp, for example SUITEADB -> suiteadb_tp."
 
   existing_oracle_wallet_password:
     type: password
@@ -1180,9 +1180,9 @@ outputs:
     type: copyableString
     visible: true
 
-  autonomous_database_high_connection_string:
-    title: "Autonomous AI Database HIGH connection string"
-    displayText: "Autonomous AI Database HIGH connection string"
+  autonomous_database_service:
+    title: "Autonomous AI Database service (PLATFORM_ORACLE_DSN)"
+    displayText: "Autonomous AI Database service (PLATFORM_ORACLE_DSN)"
     type: copyableString
     visible: true
 

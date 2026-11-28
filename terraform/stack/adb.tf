@@ -78,13 +78,16 @@ locals {
   adb_whitelisted_ips = local.adb_secure_acl_enabled ? concat(local.adb_acl_vcn_entries, local.adb_acl_cidr_entries) : null
 
   existing_adb_db_name = try(data.oci_database_autonomous_database.selected_existing_adb[0].db_name, "")
+  # 3 製品は短い照会を多数並行に投げるので、既定の接続先は TP のサービスにする（#6018）。HIGH は同時に
+  # 実行できる文が 3（自動拡張ありで 9）で、Lakehouse では照会を並列に実行する。Lakehouse も
+  # 2025-10-07 から TP / TPURGENT のサービスを使える（Wallet の tnsnames.ora に入る）。
   effective_existing_oracle_dsn = trimspace(var.existing_oracle_dsn) != "" ? trimspace(var.existing_oracle_dsn) : (
-    trimspace(local.existing_adb_db_name) != "" ? "${lower(local.existing_adb_db_name)}_high" : ""
+    trimspace(local.existing_adb_db_name) != "" ? "${lower(local.existing_adb_db_name)}_tp" : ""
   )
 
   effective_adb_ocid   = local.create_new_adb ? oci_database_autonomous_database.generated_database_autonomous_database[0].id : var.existing_adb_ocid
   effective_adb_name   = local.create_new_adb ? var.adb_name : local.existing_adb_db_name
-  effective_oracle_dsn = local.create_new_adb ? "${lower(var.adb_name)}_high" : local.effective_existing_oracle_dsn
+  effective_oracle_dsn = local.create_new_adb ? "${lower(var.adb_name)}_tp" : local.effective_existing_oracle_dsn
 
   # アプリ用の DB ユーザー（#1668）。有効なら 3 製品はこのユーザーで接続し、システムの表もこのユーザーの schema に作る。
   # ユーザーの作成と grant は Compute の上で行う（cloud-init → platform/deploy/suite-init.sh が製品の配備の前に、
