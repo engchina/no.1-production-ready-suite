@@ -10,7 +10,7 @@ import {
 } from "@production-ready/ui";
 
 import { usePersistedListPaging, type ListPagingKey } from "../lists/listPaging";
-import type { apiKeysTranslator } from "./messages";
+import { orderedApiKeyProducts, type apiKeysTranslator } from "./messages";
 import type { ApiKey } from "./types";
 
 type Translate = ReturnType<typeof apiKeysTranslator>;
@@ -91,7 +91,7 @@ export function ApiKeysTable({
       className: "whitespace-nowrap text-xs text-fg",
       // 対象を絞った製品は件数を添える（#1874。例: 「Agent（2 件に限定）」）。
       render: (key) =>
-        key.products
+        orderedApiKeyProducts(key.products)
           .map((product) => {
             const label = t(`apiKeys.product.${product}`);
             const scope = key.resource_scopes?.[product];

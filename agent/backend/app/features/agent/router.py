@@ -303,6 +303,8 @@ from app.features.agent.runtime import (
     ThreadView,
     agent_unavailable_reason,
     builtin_resume_pending,
+    delivered_artifacts,
+    delivered_run,
     max_published_versions,
     reserved_run_metadata_keys,
     run_cancel_record,
@@ -2099,7 +2101,7 @@ async def create_run(
                 owner_user_uuid=run.thread_owner_user_uuid or run.created_by_user_uuid or "",
             )
         _schedule_builtin_run(run)
-        return ApiResponse(data=run)
+        return ApiResponse(data=delivered_run(run))
     except AgentNotPublishedError as exc:
         raise HTTPException(
             status_code=409,
@@ -2419,7 +2421,7 @@ async def put_run_feedback(
             version_id or run.id,
             RunFeedback(rating=feedback.rating, user_uuid=user_uuid),
         )
-        return ApiResponse(data=updated)
+        return ApiResponse(data=delivered_run(updated))
     elif version_id:
         raise HTTPException(404, "回答の版が見つかりません。")
     elif feedback.rating == "not_helpful" and feedback.reason is None:
@@ -2439,7 +2441,7 @@ async def put_run_feedback(
         raise HTTPException(
             status_code=409, detail="回答が出た Run にだけフィードバックを付けられます。"
         ) from exc
-    return ApiResponse(data=updated)
+    return ApiResponse(data=delivered_run(updated))
 
 
 @router.put("/runs/{run_id}/admin-review", response_model=ApiResponse[RunState])
@@ -2473,7 +2475,7 @@ async def put_run_admin_review(
         raise HTTPException(
             status_code=409, detail="回答が出た Run にだけ評価を付けられます。"
         ) from exc
-    return ApiResponse(data=updated)
+    return ApiResponse(data=delivered_run(updated))
 
 
 # 一覧のページング（`limit` / `offset`。上限を超えると 422。#1266）。
@@ -3346,7 +3348,11 @@ async def list_run_artifacts(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     unreadable = await _unreadable_evidence(request, [run], artifacts)
-    return ApiResponse(data=ArtifactsData(artifacts=withhold_artifacts(artifacts, unreadable)))
+    return ApiResponse(
+        data=ArtifactsData(
+            artifacts=withhold_artifacts(delivered_artifacts(run.status, artifacts), unreadable)
+        )
+    )
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_id}", response_model=ApiResponse[Artifact])
@@ -3361,6 +3367,8 @@ async def get_run_artifact(
         artifact = await run_in_threadpool(runtime_repository.get_artifact, run_id, artifact_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="成果物が見つかりません。") from exc
+    if not delivered_artifacts(run.status, [artifact]):
+        _raise_file_not_delivered()
     artifacts = (
         await run_in_threadpool(runtime_repository.list_artifacts, run_id)
         if artifact.kind == "answer"
@@ -3383,9 +3391,13 @@ async def download_run_artifact(
     """成果物のファイル（ツールが作った .xlsx / .docx / .pptx / .md。#5837・#5867）のダウンロード。
 
     Run の詳細・成果物と同じ判定（`_readable_run`）を通った利用者だけに返す。ファイルの成果物で
-    ない ID・無い ID・中身が無い（保存しない構成での再起動の後など）は 404。
+    ない ID・無い ID・中身が無い（保存しない構成での再起動の後など）は 404。完了していない Run の
+    ファイルは 409（`files_delivered`。#5950）。
     """
-    _readable_run(request, run_id)
+    run = _readable_run(request, run_id)
+    held = next((item for item in run.artifacts if item.id == artifact_id), None)
+    if held is not None and not delivered_artifacts(run.status, [held]):
+        _raise_file_not_delivered()
     try:
         file = await run_in_threadpool(runtime_repository.read_artifact_file, run_id, artifact_id)
     except KeyError as exc:
@@ -3562,7 +3574,7 @@ async def _evidence_checked_views(
         viewer = _run_viewer(request, run, names)
         viewer.withheld_evidence_count = withheld_count(run, unreadable, loaded[run.id])
         viewer.cancellation = cancellations.get(run.id)
-        views.append(RunView.of(withhold_run(run, unreadable), viewer))
+        views.append(RunView.of(withhold_run(delivered_run(run), unreadable), viewer))
     return views
 
 
@@ -3752,7 +3764,7 @@ async def cancel_run(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
     _schedule_nl2sql_job_cancel(run.status, cancelled)
-    return ApiResponse(data=cancelled)
+    return ApiResponse(data=delivered_run(cancelled))
 
 
 @router.post(
@@ -3844,7 +3856,14 @@ async def decide_confirmation(
         )
         _builtin_tasks.add(task)
         task.add_done_callback(_builtin_tasks.discard)
-    return ApiResponse(data=outcome)
+    return ApiResponse(
+        data=outcome.model_copy(
+            update={
+                "run": delivered_run(outcome.run),
+                "next_run": outcome.next_run and delivered_run(outcome.next_run),
+            }
+        )
+    )
 
 
 @router.post("/runs/{run_id}/resume", response_model=ApiResponse[RunState])
@@ -3876,7 +3895,7 @@ async def resume_run(
             extra={"run_id": run.id, "requested_by": _actor_login_id(request)},
         )
         _schedule_builtin_run(run)
-        return ApiResponse(data=run)
+        return ApiResponse(data=delivered_run(run))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=RUN_NOT_FOUND_MESSAGE) from exc
 
@@ -3954,7 +3973,7 @@ async def replay_run(
             },
         ) from exc
     _schedule_builtin_run(replayed)
-    return ApiResponse(data=replayed)
+    return ApiResponse(data=delivered_run(replayed))
 
 
 @router.post("/approvals/{approval_id}/decision", response_model=ApiResponse[RunState])
@@ -3995,7 +4014,7 @@ async def decide_approval(
                 runtime_repository.decide_approval, approval_id, request
             )
         _schedule_builtin_run(decided)
-        return ApiResponse(data=decided)
+        return ApiResponse(data=delivered_run(decided))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=APPROVAL_NOT_FOUND_MESSAGE) from exc
 
@@ -5210,6 +5229,17 @@ def _raise_others_content_forbidden() -> NoReturn:
     """他の利用者の会話・Run に内容を足そうとした（system_admin。#3244）。"""
     raise HTTPException(
         status_code=OTHERS_CONTENT_FORBIDDEN_STATUS, detail=OTHERS_CONTENT_FORBIDDEN_MESSAGE
+    )
+
+
+def _raise_file_not_delivered() -> NoReturn:
+    """完了していない Run のファイルの成果物を求められた（`files_delivered`。#5950）。"""
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "artifact_not_delivered",
+            "message": "回答が完成してからダウンロードできます。",
+        },
     )
 
 

@@ -192,10 +192,10 @@ fi
 
 # 偽の backend: 受け取った method・URI（エンコードのまま）・header を JSON で返す。SSE の path は 2 回に分けて送る。
 cat > "${task_dir}/backend.py" <<'PY'
-import json, sys, time
+import json, os, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-name, port = sys.argv[1], int(sys.argv[2])
+name, port_file = sys.argv[1], sys.argv[2]
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -233,17 +233,43 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
     do_GET = do_POST = do_PUT = do_DELETE = _reply
 
-ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+# port 0 で待ち受けてから、OS が割り当てた port を知らせる（空きの port を先に調べて閉じてから bind すると、
+# その間にほかの process に取られる。#4401）。書きかけを読まれないよう、別名で書いてから rename する。
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+with open(port_file + ".tmp", "w") as handle:
+    handle.write(str(server.server_address[1]))
+os.replace(port_file + ".tmp", port_file)
+server.serve_forever()
 PY
 
-export SUITE_RAG_BACKEND_PORT SUITE_NL2SQL_BACKEND_PORT SUITE_AGENT_BACKEND_PORT
-read -r SUITE_RAG_BACKEND_PORT SUITE_NL2SQL_BACKEND_PORT SUITE_AGENT_BACKEND_PORT < <(free_ports 3)
-python3 "${task_dir}/backend.py" rag "${SUITE_RAG_BACKEND_PORT}" &
-backend_pids+=("$!")
-python3 "${task_dir}/backend.py" nl2sql "${SUITE_NL2SQL_BACKEND_PORT}" &
-backend_pids+=("$!")
-python3 "${task_dir}/backend.py" agent "${SUITE_AGENT_BACKEND_PORT}" &
-backend_pids+=("$!")
+# 偽の backend を起動し、待ち受けた port を受け取る。起動に失敗した backend があれば、別の製品の応答で
+# 検査を続けずに止める（#4401）。
+start_backend() {
+  local name="$1" var="$2" pid port_file="${task_dir}/port-$1"
+  python3 "${task_dir}/backend.py" "${name}" "${port_file}" &
+  pid="$!"
+  backend_pids+=("${pid}")
+  for _ in $(seq 100); do
+    [ -s "${port_file}" ] && break
+    kill -0 "${pid}" 2>/dev/null || fail "偽の backend（${name}）が起動しなかった"
+    sleep 0.1
+  done
+  [ -s "${port_file}" ] || fail "偽の backend（${name}）が 10 秒以内に待ち受けなかった"
+  printf -v "${var}" '%s' "$(cat "${port_file}")"
+  export "${var?}"
+}
+start_backend rag SUITE_RAG_BACKEND_PORT
+start_backend nl2sql SUITE_NL2SQL_BACKEND_PORT
+start_backend agent SUITE_AGENT_BACKEND_PORT
+# 各 port が、その製品の backend の応答を返すことを確かめてから Nginx を起動する。
+python3 - "${SUITE_RAG_BACKEND_PORT}" "${SUITE_NL2SQL_BACKEND_PORT}" "${SUITE_AGENT_BACKEND_PORT}" <<'PY'
+import http.client, json, sys
+for name, port in zip(("rag", "nl2sql", "agent"), sys.argv[1:]):
+    conn = http.client.HTTPConnection("127.0.0.1", int(port), timeout=5)
+    conn.request("GET", "/ready")
+    reply = json.loads(conn.getresponse().read())
+    assert reply["backend"] == name, (name, port, reply)
+PY
 
 # 偽の frontend の dist。
 for product in rag nl2sql agent; do
@@ -262,14 +288,17 @@ suite_tls_ensure "${task_dir}/ssl" "" 127.0.0.1 false 2>/dev/null
 
 run_case() {
   local https_enabled="$1"
-  local http_port https_port
-  read -r http_port https_port < <(free_ports 2)
+  local http_port https_port attempt
   export SUITE_LISTEN_ADDRESS=127.0.0.1
   export SUITE_NGINX_LOG_DIR="${task_dir}/logs-${https_enabled}"
   mkdir -p "${SUITE_NGINX_LOG_DIR}"
-  suite_nginx_site "${https_enabled}" "${task_dir}/suite" "${task_dir}/ssl" "${http_port}" "${https_port}" \
-    rag nl2sql agent > "${task_dir}/site.conf"
-  cat > "${task_dir}/nginx.conf" <<CONF
+  # Nginx の port は Nginx 自身が bind するので、空きの port を調べてから渡す。調べてから bind するまでに
+  # ほかの process に取られたら（Address already in use）、別の port でやり直す（#4401）。
+  for attempt in 1 2 3; do
+    read -r http_port https_port < <(free_ports 2)
+    suite_nginx_site "${https_enabled}" "${task_dir}/suite" "${task_dir}/ssl" "${http_port}" "${https_port}" \
+      rag nl2sql agent > "${task_dir}/site.conf"
+    cat > "${task_dir}/nginx.conf" <<CONF
 pid ${task_dir}/nginx.pid;
 error_log ${task_dir}/error.log warn;
 events {}
@@ -288,8 +317,15 @@ http {
   include ${task_dir}/site.conf;
 }
 CONF
-  "${nginx_bin}" -t -q -c "${task_dir}/nginx.conf" -p "${task_dir}"
-  "${nginx_bin}" -c "${task_dir}/nginx.conf" -p "${task_dir}"
+    "${nginx_bin}" -t -q -c "${task_dir}/nginx.conf" -p "${task_dir}"
+    : > "${task_dir}/error.log"
+    if "${nginx_bin}" -c "${task_dir}/nginx.conf" -p "${task_dir}" 2> "${task_dir}/nginx-start.log"; then
+      break
+    fi
+    grep -q "Address already in use" "${task_dir}/nginx-start.log" "${task_dir}/error.log" \
+      || { cat "${task_dir}/nginx-start.log" >&2; fail "Nginx が起動しなかった"; }
+    [ "${attempt}" -lt 3 ] || fail "Nginx の port が 3 回とも使用中だった"
+  done
   python3 - "${https_enabled}" "${http_port}" "${https_port}" "${task_dir}" <<'PY'
 import http.client, json, ssl, sys, time
 https_enabled, http_port, https_port, task_dir = sys.argv[1] == "true", int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
