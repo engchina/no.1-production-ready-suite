@@ -130,18 +130,18 @@ class FakeOracle:
             ]
         if any(key.startswith("graph_conn_p") for key in binds):
             wanted_pages = {v for k, v in binds.items() if k.startswith("graph_conn_p")}
+            # 依存は確かめた案内の ID で引く（相手が範囲にあるかは照合しない。#5966）。
             return [
                 {"page_id": src, "target_id": dep.unit_id, "relation": dep.relation}
                 for src, page in by_id.items()
                 for dep in page.navigation.dependencies
-                if src in wanted_pages and dep.unit_id in by_id
+                if src in wanted_pages
             ]
-        if "SELECT s.unit_id AS source_id,s.document_id,r.target_name" in statement:
+        if "FROM rag_wiki_references r WHERE r.page_id IN" in statement:
             sources = {v for k, v in binds.items() if k.startswith("graph_conn_s")}
             return [
                 {
-                    "source_id": source,
-                    "document_id": by_id[source].unit.document_id,
+                    "page_id": source,
                     "target_name": name,
                     "target_section": section,
                     "relation": relation,
@@ -439,9 +439,11 @@ async def test_relations_resolve_document_names_once_per_request() -> None:
     store = WikiGraphStore(oracle)  # type: ignore[arg-type]
     everything = await store.relations(KB, U["a1"], 0, 500, grouped=True)
     assert not everything["has_more"] and len(everything["items"]) == everything["total"] == 3
-    # 文書の名前の照合（範囲の全案内を読む）は 1 回の要求で 1 回だけ（#5916）。
+    # 文書の名前の照合は 1 回の要求で 1 回だけ（#5916）。図の索引の最上位の節点の案内だけを
+    # 読み、範囲の案内を全件は読まない（#5966）。
     names = [sql for sql, _ in oracle.statements if "SELECT DISTINCT p.document_id" in sql]
     assert len(names) == 1
+    assert "n.parent_id=n.document_id" in names[0]
 
 
 async def test_document_graph_ranks_documents_by_references_and_links_them() -> None:
@@ -466,8 +468,11 @@ async def test_document_graph_ranks_documents_by_references_and_links_them() -> 
 
 
 async def test_connections_return_relations_between_selected_units_only() -> None:
-    store = WikiGraphStore(FakeOracle())  # type: ignore[arg-type]
+    oracle = FakeOracle()
+    store = WikiGraphStore(oracle)  # type: ignore[arg-type]
     found = await store.connections(KB, [U["a1"], U["a2"], U["a3"], U["b1"], U["c1"]])
+    # 範囲の照合（案内・文書・chunk を結ぶ CTE）は、選んだ単位を確かめる 1 回だけ（#5966）。
+    assert len([sql for sql, _ in oracle.statements if "WITH visible AS" in sql]) == 1
     assert {(c["source_id"], c["target_id"], c["relation"], c["scope"]) for c in found} == {
         (U["a1"], U["a2"], "exception", "same_document"),
         (U["a3"], U["a1"], "prerequisite", "same_document"),
