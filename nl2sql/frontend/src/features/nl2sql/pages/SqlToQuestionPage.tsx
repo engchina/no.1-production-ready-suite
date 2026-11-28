@@ -430,20 +430,22 @@ export function SqlToQuestionPage() {
         ]}
       />
       <PageBody wide className="grid gap-4">
+        {/* 「再試行」は押したときだけ回す（ヘッダーの「最新情報を取得」・業務プロファイルの切り替えの読込では
+            回さない。同じ処理のスピナーは 1 つ。components-reference「再試行の loading は押したときだけ」、#5955）。 */}
         {loadError ? (
           loadUpdatedAt > 0 ? (
             <DataLoadStaleNotice
               error={loadError}
               dataUpdatedAt={loadUpdatedAt}
               onRetry={() => void loadReferenceData("notice")}
-              retrying={loading}
+              retrying={loading && refreshOrigin === "notice"}
             />
           ) : (
             <DataLoadFailure
               error={loadError}
               fallback={t("sqlToQuestion.error.load")}
               onRetry={() => void loadReferenceData("notice")}
-              retrying={loading}
+              retrying={loading && refreshOrigin === "notice"}
               testId="page-data-load-failed"
             />
           )

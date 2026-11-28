@@ -257,11 +257,17 @@ function HistoryList({
   const narrowed = isHistoryListNarrowed(filters);
   // 期間だけで絞り、その中に実行が無くそれより前にはある（期間を広げる操作を出す。#3386）。
   const periodOnlyEmpty = !hasActiveNonPeriodHistoryFilters(filters) && filters.period !== "all" && unfilteredTotal > 0;
+  // 失敗の表示の「再試行」で始めた取り直し。取り直しの間も失敗の表示を残し、押した「再試行」だけを回す
+  // （利用者が押した再試行は `<Button loading>`。messaging.md §4.2、#5955）。
+  const retrying = loading && loadOrigin === "retry";
   // スケルトンで覆うのは、まだ 1 度も一覧を取得できていない初回の読み込みだけ。条件の変更後は前の一覧と
-  // 絞り込みの欄を出したまま処理中を示す（入力中の検索欄のフォーカスを失わせない。#739）。
-  const initialLoading = loading && !loadedRequest;
+  // 絞り込みの欄を出したまま処理中を示す（入力中の検索欄のフォーカスを失わせない。#739）。初回の失敗の後の
+  // 再試行は失敗の表示を残すので覆わない。
+  const initialLoading = loading && !loadedRequest && !retrying;
+  // 失敗の表示を出すか（再試行の取り直しの間も出したまま。条件の変更・「最新情報を取得」では取り直しの間は隠す）。
+  const failureShown = error !== null && (!loading || retrying);
   // 今の条件の結果をまだ取得できていない失敗（前の条件の一覧を今の条件の結果として出さない。#912）。
-  const listUnavailable = !loading && error !== null && loadedRequest !== requestSignature;
+  const listUnavailable = failureShown && loadedRequest !== requestSignature;
   // 既定で隠している品質評価の実行だけがあるときは「まだ実行がありません」にしない（絞り込みで出せるよう、
   // ツールバーを出したまま表の空の状態で隠していることを伝える。#1986）。
   const evaluationOnly = !filtered && hiddenEvaluationTotal > 0;
@@ -384,18 +390,20 @@ function HistoryList({
                     operationKey="history-refresh"
                     placement="workspace"
                     testId="history-workspace-processing"
-                    // 条件の変更による取り直しはボタンが回らないため、この表示がスピナーを出す（#819）。
+                    // 「最新情報を取得」・失敗の表示の「再試行」は押したボタンが回る。条件の変更による取り直しは
+                    // ボタンが回らないため、この表示がスピナーを出す（#819・#5955）。
                     activityIcon={loadOrigin ? "none" : "spinner"}
                   />
                 ) : null}
                 {/* 読み取りの失敗は領域の失敗の表示（「詳細」は閉じる）。今の条件の一覧を出しているときは残し、
                     いつの内容かを示す（messaging.md §3.6.1、run-history.md「一覧」。#5937）。 */}
-                {error !== null && !loading ? (
+                {failureShown ? (
                   listUnavailable ? (
                     <DataLoadFailure
                       error={error}
                       fallback={t("history.error.load")}
                       onRetry={() => void load(false, "retry")}
+                      retrying={retrying}
                       testId="history-list-error"
                     />
                   ) : (
@@ -403,6 +411,7 @@ function HistoryList({
                       error={error}
                       dataUpdatedAt={loadedAt}
                       onRetry={() => void load(false, "retry")}
+                      retrying={retrying}
                     />
                   )
                 ) : null}

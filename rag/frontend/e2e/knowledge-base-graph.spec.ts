@@ -657,6 +657,37 @@ test("関係の読み込みの失敗は詳細の同じ場所で再試行でき�
   await expect(page.getByRole("link", { name: "Wiki 検索" })).toHaveCount(0);
 });
 
+test("原文の照合の失敗の「再試行」の間は失敗の表示を残し、押した「再試行」だけが回る", async ({ page }, info) => {
+  await data(page);
+  // 後から登録した route が先に呼ばれる。1 件目の原文の照合を失敗させ、再試行の応答は止める（#5955）。
+  let failing = true;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(new RegExp(`/units/${hash(1)}(?:\\?|$)`), async (r) => {
+    if (failing) return r.fulfill({ status: 503, json: { detail: "一時的な失敗" } });
+    await held;
+    return r.fallback();
+  });
+  await begin(page);
+  // 照合に失敗すると選択は外れるので、check() ではなく押すだけにする。
+  await rowCheckbox(page, 1).click();
+  // 失敗の表示は検索結果の一覧の直前（一覧の領域の外）に出る。
+  const failure = page.getByRole("tabpanel", { name: "検索結果" }).locator("[data-failure-layout]");
+  const retry = failure.getByRole("button", { name: "再試行" });
+  await expect(retry).toBeVisible();
+  failing = false;
+  await retry.click();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  await expect(failure).toBeVisible();
+  await expect(page.locator(".pr-spinner")).toHaveCount(1);
+  await expect(retry.locator(".pr-spinner")).toHaveCount(1);
+  await info.attach("wiki-pick-retry", { body: await page.screenshot(), contentType: "image/png" });
+  release();
+  await expect(failure).toHaveCount(0);
+  await expect(rowCheckbox(page, 1)).toBeChecked();
+  await expect(page.getByTestId("selected-sources-count")).toHaveText("1 / 10 件");
+});
+
 test("検索中の回転は 1 つだけで、検索の条件の行のボタンは「検索」だけ", { tag: "@responsive" }, async ({ page }) => {
   await data(page);
   let release!: () => void;
