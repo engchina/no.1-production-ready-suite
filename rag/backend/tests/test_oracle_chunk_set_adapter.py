@@ -130,24 +130,22 @@ async def test_list_document_chunk_sets_serves_only_active_recipe_outputs() -> N
     recipe_id = str((await client.ensure_default_document_recipe(document_id))["recipe_id"])
     other_recipe_id = str((await client.create_document_recipe(document_id))["recipe_id"])
     cs_a, cs_b, cs_pending, cs_other = (_unique_id("cs_recipe") for _ in range(4))
-    for chunk_set_id, owner in ((cs_a, recipe_id), (cs_b, recipe_id), (cs_other, other_recipe_id)):
+
+    async def publish(chunk_set_id: str, owner: str, base: str | None) -> None:
         await client.upsert_chunk_set(
             chunk_set_id=chunk_set_id, document_id=document_id, recipe_id=owner
         )
-    for chunk_set_id in (cs_a, cs_b, cs_other):
         await client.mark_chunk_set_indexed(
             chunk_set_id=chunk_set_id, chunk_count=0, vector_count=0
         )
-    await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=cs_a, expected_base_chunk_set_id=None
-    )
-    await client.activate_recipe_chunk_set(
-        recipe_id=recipe_id, chunk_set_id=cs_b, expected_base_chunk_set_id=cs_a
-    )
-    await client.activate_recipe_chunk_set(
-        recipe_id=other_recipe_id, chunk_set_id=cs_other, expected_base_chunk_set_id=None
-    )
-    # 切替は一度も active にならなかった候補を消すので、取込途中の版は切替の後に作る。
+        await client.activate_recipe_chunk_set(
+            recipe_id=owner, chunk_set_id=chunk_set_id, expected_base_chunk_set_id=base
+        )
+
+    # 切替は一度も active にならなかった同じレシピの候補を消すので、版は 1 つずつ作って切り替える。
+    await publish(cs_a, recipe_id, None)
+    await publish(cs_b, recipe_id, cs_a)
+    await publish(cs_other, other_recipe_id, None)
     await client.upsert_chunk_set(
         chunk_set_id=cs_pending, document_id=document_id, recipe_id=recipe_id
     )
