@@ -33,7 +33,7 @@ from app.clients.oracle import (
     _with_tenant_bind,
 )
 from app.clients.wiki_graph_index import index_document
-from app.clients.wiki_reference_index import DocumentNames, ReferenceTargets, index_references
+from app.clients.wiki_reference_index import index_references
 from app.rag.cross_references import REFERENCE_TARGETS_KEY
 from app.rag.request_context import current_audit_request_context
 from app.rag.wiki_models import (
@@ -913,127 +913,6 @@ class WikiStore:
             binds,
         )
         return [WikiPage.model_validate(_json_loads(row["page_json"])) for row in rows]
-
-    async def cross_document_edges(
-        self, scope: WikiScope, roots: Mapping[str, WikiPage], budget: int
-    ) -> list[tuple[str, str, str]]:
-        """選んだ起点の公開済み参照だけを読み、参照先の本文を読む前に文書と章節を解決する。"""
-        names = DocumentNames(list(scope.catalog), await self.document_headings(scope))
-        references = await self.references(list(roots), scope)
-        targets = [
-            (source, doc, section, relation)
-            for source, name, section, relation in references
-            for doc in names.resolve(name, exclude=roots[source].unit.document_id)
-        ]
-        root_docs = {page.unit.document_id for page in roots.values()}
-        keys = sorted({key for doc in root_docs for key in names.keys(doc)})
-        aliases = sorted({key for doc in root_docs for key in names.aliases(doc)})
-        incoming = await self.incoming_references(scope, keys, aliases)
-        for source, source_doc, name, section, relation in incoming:
-            targets.extend(
-                (source, doc, section, relation)
-                for doc in names.resolve(name, exclude=source_doc)
-                if doc in root_docs
-            )
-        if not targets:
-            return []
-        where, binds = _scoped_where(scope)
-        clause, extra = _oracle_in_predicate(
-            "p.document_id", "wiki_target_doc", sorted({doc for _, doc, _, _ in targets})
-        )
-        rows = await self.oracle._fetch_all(
-            f"""SELECT p.unit_id,p.document_id,
-            JSON_QUERY(p.page_json,'$.unit.section_path' RETURNING CLOB) AS target_path
-            {WIKI_SCOPED_FROM} WHERE {where} AND {clause}
-            ORDER BY p.document_id,c.chunk_index,p.unit_id""",
-            {**binds, **extra},
-        )
-        target_paths = ReferenceTargets(rows)
-        found: list[tuple[str, str, str]] = []
-        for source, doc, section, relation in targets:
-            match = target_paths.resolve(doc, section)
-            if match:
-                edge = (source, match, relation)
-                if (source in roots or match in roots) and edge not in found:
-                    found.append(edge)
-            if len(found) >= budget:
-                break
-        return found
-
-    async def incoming_references(
-        self, scope: WikiScope, keys: list[str], aliases: list[str]
-    ) -> list[tuple[str, str, str, str, str]]:
-        """範囲内で起点の文書を指しうる索引行。名前と章節の一致は出る向きと共通。"""
-        if not keys and not aliases:
-            return []
-        where, binds = _scoped_where(scope)
-        conditions = []
-        if keys:
-            clause, extra = _oracle_in_predicate("r.target_key", "wiki_incoming_key", keys)
-            conditions.append(clause)
-            binds.update(extra)
-        for index, alias in enumerate(aliases):
-            bind = f"wiki_incoming_alias_{index}"
-            conditions.append(f"INSTR(:{bind},r.target_key)>0")
-            binds[bind] = alias
-        rows = await self.oracle._fetch_all(
-            f"""SELECT r.unit_id,p.document_id,r.target_name,r.target_section,r.relation
-            {WIKI_SCOPED_FROM} JOIN rag_wiki_references r ON r.page_id=p.page_id
-            WHERE {where} AND ({" OR ".join(conditions)})
-            ORDER BY p.document_id,r.unit_id,r.ordinal""",
-            binds,
-        )
-        return [
-            (
-                str(row["unit_id"]),
-                str(row["document_id"]),
-                str(row["target_name"]),
-                str(row.get("target_section") or ""),
-                str(row["relation"]),
-            )
-            for row in rows
-        ]
-
-    async def document_headings(self, scope: WikiScope) -> dict[str, list[str]]:
-        """範囲の文書ごとの先頭の見出し（文書名の照合に使う。題名かどうかは照合の側が決める）。"""
-        if not scope.sources:
-            return {}
-        where, binds = _scoped_where(scope)
-        rows = await self.oracle._fetch_all(
-            f"""SELECT DISTINCT p.document_id,
-            JSON_VALUE(p.page_json,'$.unit.section_path[0]') AS heading
-            {WIKI_SCOPED_FROM} WHERE {where}""",
-            binds,
-        )
-        found: dict[str, list[str]] = {}
-        for row in rows:
-            if row.get("heading"):
-                found.setdefault(str(row["document_id"]), []).append(str(row["heading"]))
-        return found
-
-    async def references(
-        self, unit_ids: Sequence[str], scope: WikiScope
-    ) -> list[tuple[str, str, str, str]]:
-        """単位の参照（単位 ID・参照先の名前・章節の表記・関係）。参照元が範囲の案内のものだけ。"""
-        if not unit_ids or not scope.sources:
-            return []
-        where, binds = _scoped_where(scope)
-        clause, added = _oracle_in_predicate("p.unit_id", "wiki_ref_unit", unit_ids)
-        rows = await self.oracle._fetch_all(
-            f"""SELECT r.unit_id,r.target_name,r.target_section,r.relation
-            {WIKI_SCOPED_FROM} JOIN rag_wiki_references r ON r.page_id=p.page_id
-            WHERE {where} AND {clause} ORDER BY r.unit_id,r.ordinal""",
-            {**binds, **added},
-        )
-        return [
-            (
-                str(row["unit_id"]),
-                str(row["target_name"]),
-                str(row.get("target_section") or ""),
-                str(row["relation"]),
-            )
-            for row in rows
-        ]
 
     async def _hydrate(self, ids: list[str], scope: WikiScope) -> list[WikiPage]:
         found = {page.unit.unit_id: page for page in await self.pages(scope, unit_ids=ids)}
