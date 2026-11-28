@@ -220,6 +220,12 @@ Agent では、モデルが回答を書く（#5867）。
 利用者がスキルを選んで業務 Agent を作る（RAG だけのスキルと組み合わせると、RAG の回答で Run を終えずにモデルが
 回答を書き、調べた内容をファイルにできる。`builtin_runtime.final_answer_tool_names`。#5867）。
 
+作ったファイル（成果物の kind `file`）は、Run が `completed` になってから利用者に渡す（#5950。`runtime.files_delivered`・
+`delivered_artifacts`・`delivered_run`）。実行中・承認や確認の待ち・失敗・取消の Run は、Run の詳細・会話・成果物の一覧と
+1 件・MCP の `RunOutput.files` に出さず、ダウンロードは 409。拒答の設定に関わらず全部の Run で同じ。渡さないファイルも
+保存先からは消さない（監査に残す。拒答の Run は #5912 のとおり成果物から除く）。判定は外へ返す境界だけで使い、Runtime の中
+（モデルへの入力・監査の記録）には使わない。
+
 - 6 個とも、モデルは既定（`model_id` は空）、データの範囲（`data_scopes`）は空（利用者が使えるすべての
   プロファイルから選ぶ）。Agent 管理が変えた内容は残る。
 

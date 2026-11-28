@@ -1056,6 +1056,33 @@ class RunViewer(BaseModel):
     cancellation: RunCancellationView | None = None
 
 
+def files_delivered(status: RunStatus) -> bool:
+    """Run のファイルの成果物（kind `FILE_ARTIFACT_KIND`）を利用者に渡すか（#5950）。
+
+    渡すのは完了した Run だけ。実行中・待ち（承認・確認）は回答が決まっていない（拒答の設定では、
+    最後に拒答になればファイルも出さない。#5912）ので渡さず、失敗・取消の Run も渡さない。渡さない
+    ファイルも保存先からは消さない（監査に残す）。判定は外へ返す境界（画面・MCP の応答、
+    ダウンロード）だけで使い、Runtime の中（モデルへの入力・監査の記録・拒答の削除）には使わない。
+    """
+    return status == RunStatus.COMPLETED
+
+
+def delivered_artifacts(status: RunStatus, artifacts: Sequence[Artifact]) -> list[Artifact]:
+    """利用者に渡す成果物（`files_delivered` でない Run はファイルの成果物を除く）。"""
+    if files_delivered(status):
+        return list(artifacts)
+    return [item for item in artifacts if item.kind != FILE_ARTIFACT_KIND]
+
+
+def delivered_run(run: RunState) -> RunState:
+    """外へ返す Run の写し（`delivered_artifacts` の成果物だけ。保存した Run は変えない）。"""
+    if files_delivered(run.status) or all(
+        item.kind != FILE_ARTIFACT_KIND for item in run.artifacts
+    ):
+        return run
+    return run.model_copy(update={"artifacts": delivered_artifacts(run.status, run.artifacts)})
+
+
 class RunView(RunViewer, RunState):
     """画面に返す Run（`RunState` と、見ている利用者から見た事実。#1954）。"""
 
