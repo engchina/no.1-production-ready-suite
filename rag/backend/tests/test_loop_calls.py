@@ -1,8 +1,9 @@
 """worker thread から event loop へ投げる処理が、await されない coroutine を残さない（#5764）。
 
-標準評価のケースが時間切れになった後も回答の thread は動き続け、工程の終わりを通知する。その後に
-loop を閉じて process を終えると、``asyncio.run_coroutine_threadsafe`` へ渡した coroutine が await されず
-``RuntimeWarning: coroutine '_call' was never awaited`` になっていた。遅いモデルは event で止めたスタブ。
+標準評価のケースが時間切れになった後も回答の thread は動き続け、工程の終わりを通知する。
+その後に loop を閉じて process を終えると、``asyncio.run_coroutine_threadsafe`` へ渡した
+coroutine が await されず ``RuntimeWarning: coroutine '_call' was never awaited`` になっていた。
+遅いモデルは event で止めたスタブ。
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ def _unawaited_warnings() -> Iterator[list[warnings.WarningMessage]]:
 
 
 def test_answer_thread_after_timeout_neither_notifies_nor_leaves_coroutines() -> None:
-    """時間切れの後に遅いモデルが返っても、工程の通知と I/O を loop へ投げず、loop を閉じても警告が出ない。"""
+    """時間切れの後にモデルが返っても、通知・I/O を loop へ投げず、閉じた loop で警告が出ない。"""
     notified: list[str] = []
     release = threading.Event()
     reached_model = threading.Event()
@@ -73,7 +74,9 @@ def test_answer_thread_after_timeout_neither_notifies_nor_leaves_coroutines() ->
     async def evaluate_case() -> None:
         loop = asyncio.get_running_loop()
         with pytest.raises(TimeoutError):
-            await asyncio.wait_for(run_answer_in_thread(slow_answer, loop, timeout_seconds=30.0), timeout=0.5)
+            await asyncio.wait_for(
+                run_answer_in_thread(slow_answer, loop, timeout_seconds=30.0), timeout=0.5
+            )
         assert reached_model.is_set()
 
     loop = asyncio.new_event_loop()
@@ -127,7 +130,10 @@ async def test_submit_to_loop_returns_the_result_and_the_error() -> None:
     async def failing() -> str:
         raise ValueError("合成の失敗")
 
-    assert await asyncio.to_thread(lambda: submit_to_loop(ok, loop).result(_THREAD_WAIT_SECONDS)) == "ok"
+    assert (
+        await asyncio.to_thread(lambda: submit_to_loop(ok, loop).result(_THREAD_WAIT_SECONDS))
+        == "ok"
+    )
     with pytest.raises(ValueError, match="合成の失敗"):
         await asyncio.to_thread(lambda: submit_to_loop(failing, loop).result(_THREAD_WAIT_SECONDS))
 
