@@ -1847,7 +1847,7 @@ test("線をクリックすると関係の詳細をノードと同じ詳細の�
   await page.screenshot({ path: testInfo.outputPath("node-details.png") });
 });
 
-test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter で 25 件ずつ足し、開いた直後と全体表示は図の全体を収める", { tag: "@responsive" }, async ({ page }, info) => {
+test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter で 25 件ずつ足し、開いた直後は名前を読める縮尺で、全体表示は図の全体を収める", { tag: "@responsive" }, async ({ page }, info) => {
   test.setTimeout(75000);
   const synthetic = Array.from({ length: 256 }, (_, i) => ({
     id: "n" + i, kind: "table", business_name_ja: "合成の対象 " + i, technical_name: "T_" + i,
@@ -1871,9 +1871,10 @@ test("256 節点の全体は探索の画布で隣接 12 件から始め、Enter 
   const count = (key: "graphNodes" | "graphEdges" | "graphZoom") => canvas.evaluate((el, name) => Number((el as HTMLElement).dataset[name] ?? 0), key);
   // n0 と同じ種類の隣接 12 件と「さらに展開」の点（隣接 255 件を 0 件にして消さない。#5908）。
   await expect.poll(() => count("graphNodes")).toBe(14);
-  // 開いた直後に図の全体（名前を含む）が画布に収まる（#5953）。
+  // 開いた直後は節点の名前を読める縮尺（0.65 以上）で表示する。その縮尺で収まらない図（狭い画面など）は中央を
+  // 表示し、下の「グラフ全体を表示」で全体を収める（#5973。収まる図は開いた直後から全体が収まる。#5953）。
   const contained = () => canvas.evaluate((el) => (el as HTMLElement).dataset.graphContained);
-  await expect.poll(contained).toBe("true");
+  await expect.poll(() => count("graphZoom")).toBeGreaterThanOrEqual(0.65);
   await expect(area.getByTestId("ontology-concept-graph-node-kinds")).toContainText("物理表・ビュー 13");
   await expect(area.getByTestId("ontology-neighbors")).toHaveCount(0);
   // 図内検索で n0 を選び、Enter で隣接を 25 件足す。

@@ -36,6 +36,10 @@ describe("graphReadableViewport", () => {
     const end = graphReadableViewport({ bounds, frame, padding: 20, align: { x: "end" } });
     expect(end.x).toBe(1000 - 20 - 4100 * GRAPH_READABLE_MIN_ZOOM);
     expect(end.y).toBe(start.y);
+    // 中央に合わせる（探索の図の初期表示。#5973）: 収まらない向きは、範囲の中央を余白の内側の中央に置く。
+    const center = graphReadableViewport({ bounds, frame, padding: 20, minZoom: 0.54, align: { x: "center", y: "center" } });
+    expect(center.zoom).toBe(0.54);
+    expect(center.x).toBeCloseTo(20 + (frame.width - 40) / 2 - (bounds.x + bounds.width / 2) * 0.54, 5);
   });
 
   it("keeps per-side padding clear (for controls over the canvas)", () => {

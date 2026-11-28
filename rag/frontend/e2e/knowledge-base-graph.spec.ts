@@ -198,6 +198,17 @@ const graphCount = (canvas: Locator, what: "nodes" | "edges") => canvas.evaluate
 const graphZoom = (canvas: Locator) => canvas.evaluate((el) => Number((el as HTMLElement).dataset.graphZoom ?? 0));
 /** 図の全体（名前を含む）が画布に収まっているか。 */
 const graphContained = (canvas: Locator) => canvas.evaluate((el) => (el as HTMLElement).dataset.graphContained);
+/**
+ * 開いた直後は、節点の名前を読める縮尺（0.65 以上）で表示する。その縮尺で全体が収まらない図（狭い画面など）は
+ * 中央を表示し、「全体表示」で全体を画布に収める（#5973。全体が収まる図は開いた直後から収まる。#5953）。
+ */
+async function expectOpensReadable(page: Page, canvas: Locator) {
+  await expect.poll(() => graphZoom(canvas)).toBeGreaterThanOrEqual(0.65);
+  if ((await graphContained(canvas)) === "true") return;
+  await page.getByRole("button", { name: "全体表示", exact: true }).click();
+  await expect.poll(() => graphContained(canvas)).toBe("true");
+  expect(await graphZoom(canvas)).toBeLessThan(0.65);
+}
 /** 辺の文字の出し方（all = すべて / focus = 選んだ・ホバーした節点の辺だけ）。 */
 const edgeLabels = (canvas: Locator) => canvas.evaluate((el) => (el as HTMLElement).dataset.graphEdgeLabels);
 /** 同じノードの組に複数あって、文字を曲線に沿って回している辺の数（#5959）。 */
@@ -234,8 +245,8 @@ test("Wiki 検索は結果で図を置き換え、結果の間の関係をつな
   await expect.poll(() => graphCount(canvas, "edges")).toBe(1);
   expect(control.calls.some((u) => u.pathname.endsWith("/connections"))).toBe(true);
   await expect(page.getByTestId("wiki-graph-node-kinds")).toContainText("原文 25");
-  // 開いた直後と全体表示で、図の全体が画布に収まる（#5953。手で縮める下限まで縮めてよい）。
-  await expect.poll(() => graphContained(canvas)).toBe("true");
+  // 開いた直後は名前を読める縮尺で、全体表示で図の全体が画布に収まる（#5953・#5973）。
+  await expectOpensReadable(page, canvas);
   await page.getByRole("button", { name: "拡大", exact: true }).click();
   await page.getByRole("button", { name: "拡大", exact: true }).click();
   await page.getByRole("button", { name: "全体表示", exact: true }).click();
@@ -293,7 +304,7 @@ test("ナレッジベース詳細は参照の多い文書の見本で開き、�
   await expect(area.getByTestId("wiki-graph-node-kinds")).toContainText("文書 25");
   await expect(area.getByText(/参照の多い 25 件の文書/)).toBeVisible();
   // 開いた直後に図の全体が画布に収まり（desktop・375px。#5953）、辺の少ない図はすべての辺に種類の文字を出す。
-  await expect.poll(() => graphContained(canvas)).toBe("true");
+  await expectOpensReadable(page, canvas);
   expect(await edgeLabels(canvas)).toBe("all");
   // 同じ組に 1 本ずつの辺は、文字を回さない（水平のまま）。
   expect(await parallelLabels(canvas)).toBe(0);
@@ -366,7 +377,7 @@ test("関係の多い図は全体が画布に収まり、辺の文字は選ん�
   await expect.poll(() => graphCount(canvas, "nodes")).toBe(25);
   await expect.poll(() => graphCount(canvas, "edges")).toBe(448);
   // 開いた直後に図の全体が画布に収まる（desktop・375px）。
-  await expect.poll(() => graphContained(canvas)).toBe("true");
+  await expectOpensReadable(page, canvas);
   // 文字つきの辺が多いので、何も選んでいない間は辺の文字を出さない（選んだ・ホバーしたノードの辺だけ）。
   expect(await edgeLabels(canvas)).toBe("focus");
   // 448 本は 283 組なので、同じ組に複数ある辺（文字を曲線に沿って回す辺）がある。
