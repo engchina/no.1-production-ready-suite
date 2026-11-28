@@ -1,3 +1,5 @@
+import { API_KEY_PRODUCTS, type ApiKeyProduct } from "./types";
+
 /**
  * API キーの画面の既定の文言（3 製品共通。#1805・#1874）。
  * 製品は `messages` で一部を上書きできる（同じ key）。
@@ -87,10 +89,11 @@ export const API_KEYS_MESSAGES = {
   "apiKeys.revoke": "削除",
   "apiKeys.rowActions": "{name} の操作",
   "apiKeys.revokeTitle": "「{name}」を削除しますか",
+  // {products} は削除するキーの使える製品（`apiKeyProductNames`。#3121）。
   "apiKeys.revokeDescription":
-    "キーはすぐに使えなくなり、元に戻せません。このキーを使っている MCP クライアントは RAG・NL2SQL・Agent を呼べなくなります。",
+    "キーはすぐに使えなくなり、元に戻せません。このキーを使っている MCP クライアントは {products} を呼べなくなります。",
   "apiKeys.revokeOwnerDescription":
-    "{owner} さんのキーです。キーはすぐに使えなくなり、元に戻せません。このキーを使っている MCP クライアントは RAG・NL2SQL・Agent を呼べなくなります。",
+    "{owner} さんのキーです。キーはすぐに使えなくなり、元に戻せません。このキーを使っている MCP クライアントは {products} を呼べなくなります。",
   "apiKeys.revoked": "API キーを削除しました",
   "apiKeys.operationFailed": "操作できませんでした。",
   "apiKeys.retry": "再試行",
@@ -117,4 +120,19 @@ export function apiKeysTranslator(messages?: ApiKeysMessages) {
     }
     return value;
   };
+}
+
+/**
+ * キーの使える製品（`API_KEY_PRODUCTS` の順。重複と知らない値は除く）。一覧の「使える製品」と削除の確認で同じ並びに
+ * する（#3121）。
+ */
+export function orderedApiKeyProducts(products: readonly string[]): ApiKeyProduct[] {
+  return API_KEY_PRODUCTS.filter((item) => products.includes(item));
+}
+
+/** キーの使える製品の表示名（例: 「RAG・Agent」。削除の確認の `{products}`。#3121）。 */
+export function apiKeyProductNames(products: readonly string[], t: ReturnType<typeof apiKeysTranslator>): string {
+  return orderedApiKeyProducts(products)
+    .map((item) => t(`apiKeys.product.${item}`))
+    .join("・");
 }

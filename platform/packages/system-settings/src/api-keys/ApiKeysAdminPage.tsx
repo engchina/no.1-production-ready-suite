@@ -19,7 +19,7 @@ import {
 } from "@production-ready/ui";
 
 import { ApiKeysTable } from "./ApiKeysTable";
-import { apiKeysTranslator, type ApiKeysMessages } from "./messages";
+import { apiKeyProductNames, apiKeysTranslator, type ApiKeysMessages } from "./messages";
 import { API_KEYS_ADMIN_QUERY_KEY, API_KEYS_QUERY_KEY, type ApiKey, type ApiKeysAdminApi } from "./types";
 
 export interface ApiKeysAdminPageProps {
@@ -63,6 +63,7 @@ export function ApiKeysAdminPage({ api, messages }: ApiKeysAdminPageProps) {
       title: t("apiKeys.revokeTitle", { name: key.name }),
       description: t("apiKeys.revokeOwnerDescription", {
         owner: key.owner_display_name || t("apiKeys.deletedUser"),
+        products: apiKeyProductNames(key.products, t),
       }),
       confirmLabel: t("apiKeys.revoke"),
       tone: "danger",

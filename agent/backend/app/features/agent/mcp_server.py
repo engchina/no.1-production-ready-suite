@@ -104,6 +104,7 @@ from app.features.agent.runtime import (
     RunStatus,
     ThreadNotFoundError,
     agent_unavailable_reason,
+    delivered_artifacts,
     run_answer_notice,
     run_answer_text,
     runtime_repository,
@@ -1015,9 +1016,12 @@ def _failure_message(run: RunState) -> str:
 
 
 def _run_files(run: RunState) -> list[RunFileOutput]:
-    """Run が作ったファイルの一覧（成果物の記録から。中身は読まない）。"""
+    """Run が作ったファイルの一覧（成果物の記録から。中身は読まない）。
+
+    画面と同じく、完了した Run のファイルだけを返す（`delivered_artifacts`。#5950）。
+    """
     files: list[RunFileOutput] = []
-    for artifact in run.artifacts:
+    for artifact in delivered_artifacts(run.status, run.artifacts):
         content = artifact.content
         if artifact.kind != FILE_ARTIFACT_KIND:
             continue
