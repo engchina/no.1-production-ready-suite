@@ -2813,6 +2813,9 @@ class IngestionPipeline:
         try:
             with ingestion_ai_calls(self._settings, "heading_levels", total=1) as caller:
                 raw = await caller.call(once, label="heading_levels")
+        except IngestionCancelledError:
+            # job の取消・lease の喪失(実行器の関門。#5696)は補助の失敗にせず止める。
+            raise
         except Exception:  # noqa: BLE001 - 見出しの階層は補助。失敗は今の階層のまま続ける。
             logger.warning("heading_level_inference_failed", extra={"trace_id": trace_id})
             return with_heading_level_report(extraction, plan, "failed")
@@ -2970,6 +2973,9 @@ class IngestionPipeline:
                     exc, checkpoints=self._field_checkpoints_enabled()
                 )
             ) from exc
+        except IngestionCancelledError:
+            # job の取消・lease の喪失(実行器の関門。#5696)は失敗の文にせずそのまま止める。
+            raise
         except Exception as exc:
             logger.warning(
                 "field_extraction_failed",
@@ -3471,6 +3477,9 @@ class IngestionPipeline:
                 raise IngestionUserError(
                     f"章節の要約を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
                 ) from exc
+            except IngestionCancelledError:
+                # job の取消・lease の喪失(実行器の関門。#5696)は失敗の文にせずそのまま止める。
+                raise
             except Exception as exc:
                 logger.warning("navigation_summary_failed", extra={"trace_id": trace_id})
                 raise IngestionUserError(
