@@ -678,7 +678,7 @@ export function RunHistoryTable<T>({
               data-run-history-compact-meta=""
             >
               <RunStatusBadge status={item.status} label={item.statusLabel} labels={labels.status} />
-              <span className="min-w-0 break-words [overflow-wrap:anywhere] tnum">
+              <span className="min-w-0 pr-break-anywhere tnum">
                 {joinMeta([
                   <time key="startedAt" dateTime={item.startedAt}>
                     {formatDateTime(item.startedAt)}

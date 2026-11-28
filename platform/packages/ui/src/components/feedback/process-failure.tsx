@@ -197,7 +197,7 @@ export function processFailureBannerItem({
       cause || explanation || next || details.length ? (
         <div className="min-w-0 space-y-2">
           {cause ? (
-            <p className="whitespace-pre-line break-words [overflow-wrap:anywhere]" data-process-failure-cause="">
+            <p className="whitespace-pre-line pr-break-anywhere" data-process-failure-cause="">
               {cause}
             </p>
           ) : null}

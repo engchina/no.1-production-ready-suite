@@ -23,7 +23,7 @@ export function RunStepSummary({step, size, statusLabel, bar, showBars = true, s
   const running = step.status === "running" && operationTimestampMs(step.startedAt) != null;
   const timing = useOperationTiming({active: running, operationKey: `step:${step.id}`, startedAt: step.startedAt});
   const view = runStepPresentation(step, statusLabel, formatDuration, running ? Math.floor(timing.elapsedMs / 1000) * 1000 : undefined);
-  const name = <span className="min-w-0 break-words [overflow-wrap:anywhere]">
+  const name = <span className="min-w-0 pr-break-anywhere">
     <span className={step.status === "failed" ? "text-danger-fg" : step.status === "pending" ? "text-fg-muted" : "text-fg"}
       {...(surface === "timeline" ? {"data-run-timeline-label": ""} : {"data-trace-record-label": ""})}>{step.label}</span>
     {step.product ? <RunTimelineProduct product={step.product} /> : null}

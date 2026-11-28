@@ -115,7 +115,7 @@ function McpConnectionNotice({ connection }: { connection: McpConnectionSettings
   return (
     <Banner severity="warning" title={t("settings.mcpConnections.notReady")}>
       {/* 環境変数名は長く区切りがないため、狭い幅では任意の位置で折り返す。 */}
-      <ul className="list-disc space-y-1 pl-5 break-words [overflow-wrap:anywhere]">
+      <ul className="list-disc space-y-1 pl-5 pr-break-anywhere">
         {missing.map((item) => (
           <li key={item}>{item}</li>
         ))}
@@ -154,7 +154,7 @@ function McpSharedCredentialStatus({ connection }: { connection: McpConnectionSe
     >
       {rows.map((row) => (
         <li key={row.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 space-y-0.5 break-words [overflow-wrap:anywhere]">
+          <div className="min-w-0 space-y-0.5 pr-break-anywhere">
             <p className="text-sm font-medium text-fg">{row.label}</p>
             <p className="text-xs leading-5 text-fg-muted">{row.hint}</p>
           </div>

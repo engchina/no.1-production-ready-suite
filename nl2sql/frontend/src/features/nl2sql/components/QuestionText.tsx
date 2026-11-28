@@ -73,7 +73,7 @@ export function QuestionText({
     <span className="grid w-full min-w-0 max-w-full gap-1 overflow-hidden">
       <span
         className={cn(
-          "block w-full min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]",
+          "block w-full min-w-0 max-w-full whitespace-pre-wrap pr-break-anywhere",
           VARIANT_CLASS[variant],
           clamped && lineClampClass(lines),
           className

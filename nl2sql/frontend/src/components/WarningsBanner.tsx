@@ -21,7 +21,7 @@ export function WarningsBanner({
       ) : (
         <ul className="grid list-disc gap-1 pl-5">
           {items.map((warning) => (
-            <li key={warning} className="break-words [overflow-wrap:anywhere]">
+            <li key={warning} className="pr-break-anywhere">
               {warning}
             </li>
           ))}
