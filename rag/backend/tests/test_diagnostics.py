@@ -195,6 +195,8 @@ _FINGERPRINT_EXEMPT_FIELDS = frozenset(
         # 資料を選び直す面で一度に選べる資料の数（#5981）。要求を受け付ける数の上限で、同じ入力の
         # 回答を変える設定ではない（超える選択は 422 で、回答を作らない）。
         "rag_file_review_max_files",
+        # 要求を受け付ける数の上限（#5981。超えた要求は 422。同じ入力の回答を変える設定ではない）。
+        "rag_wiki_selection_max_units",
         # 形式別の既定（#4732）のファイルの置き場所。値は path で、内容は取込の設定（結果は
         # chunk_set の id に残る）。
         "rag_file_type_defaults_file",

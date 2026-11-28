@@ -81,7 +81,12 @@ def explorer_router(scope_dependency: ScopeDependency) -> APIRouter:
     async def scope_info(
         scope: WikiExplorer = resolve_scope,
     ) -> ApiResponse[WikiSearchScope]:
-        return ApiResponse(data=WikiSearchScope(knowledge_bases=scope.knowledge_bases))
+        return ApiResponse(
+            data=WikiSearchScope(
+                knowledge_bases=scope.knowledge_bases,
+                selection_limit=get_settings().rag_wiki_selection_max_units,
+            )
+        )
 
     @router.get("/search")
     async def search(

@@ -260,6 +260,17 @@ KB 詳細の「文書構造索引の構築」のカードを外し、図を「Wi
   これらの API・表（`rag_graph_*`・`rag_structure_index_*`）・構築済みの索引は #5511 で削除した（上の手順）。
 - **見え方**: 図は保存済みの Wiki の案内だけを出す。案内の無い KB は「Wiki を構築すると、文書・章節・案内のつながりを図で見られます」を出す。
 
+## 既存環境の更新手順（#5981 Wiki 検索で選ぶ原文の上限と、選んだ原文だけで回答）
+
+Wiki 検索で選んでチャットへ渡せる原文単位に上限を付け、選んだ原文だけを根拠に回答できるようにした。
+
+- **設定**: `RAG_WIKI_SELECTION_MAX_UNITS`（既定 `10`、1〜200）を足した。`backend/.env` に書かなければ既定の 10 件。migration・DDL は無い。
+- **API**:
+  - `GET /api/wiki-search/profiles/{id}/scope`・`GET /api/knowledge-bases/{id}/wiki/explore/scope` の応答に `selection_limit`（上の設定の値）が入る。
+  - `POST /api/chat/conversations/{id}/messages/stream` の `wiki_sources` が上限を超えると 422（「一度に選べる原文は N 件までです。」）。今までの上限は 200 件。
+  - 同じ要求に `wiki_source_mode`（`only` / `mix`。既定 `only`）を足した。`only` は選んだ原文だけを根拠にする（通常検索・自動の Wiki 検索・検索拡張・根拠の拡張をしない）。`mix` は今までどおり、選んだ原文に検索の結果を足す。**指定しない要求は `only` になる**（今までは `mix` と同じ動き）。
+- **変えない**: 選んだ原文の版・ハッシュ・権限の照合し直し、安全チェック、回答の生成と引用の確認、`wiki_sources` を持たない要求の動き。
+
 ## 既存環境の更新手順（#5841・#5965 Wiki の検索で別の文書への参照を辿らない）
 
 Wiki の検索（チャット）は、起点の単位から同じ文書の依存だけを辿る。別の文書への参照は、出る向きも入る向きも辿らない（[Wiki ナビゲーション](./wiki-navigation.md)）。

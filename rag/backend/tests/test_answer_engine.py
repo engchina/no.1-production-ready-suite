@@ -1970,6 +1970,7 @@ async def _run_with_progress(
     history: list[Any] | None = None,
     materialize_images: bool = True,
     flow: AnswerFlow = BASIC_FLOW,
+    wiki_handoff: Any = None,
 ) -> tuple[Any, list[tuple[str, str]], list[str], SavingOracle]:
     """同じ stub の依存で pipeline を 1 回実行し、工程の開始・終了の列と LLM の schema を返す。"""
     import rag_engine.adapters.oci as engine_oci
@@ -1990,6 +1991,7 @@ async def _run_with_progress(
         genai=FakeGenAi(),  # type: ignore[arg-type]
         materialize_images=materialize_images,
         flow=flow,
+        wiki_handoff=wiki_handoff,
     )
     observed: list[tuple[str, str]] = []
 
