@@ -317,6 +317,7 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
               <SelectedSources
                 items={state.items}
                 label={t("wiki.search.selected")}
+                count={t("wiki.search.selectedCount", { count: state.items.length })}
                 removeLabel={(name) => t("fileReview.remove", { name })}
                 focusAfterLast={() => document.getElementById("wiki-question")?.focus()}
                 onRemove={(id) => patch({ items: state.items.filter((p) => p.id !== id) })}
