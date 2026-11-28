@@ -188,7 +188,12 @@ class ChatMessageRequest(BaseModel):
     """会話へのメッセージ送信リクエスト。"""
 
     content: str = Field(..., min_length=1, max_length=8000)
+    # Wiki 検索で選んだ原文（#5880）。数の上限は設定（`RAG_WIKI_SELECTION_MAX_UNITS`）で、route が
+    # 検証する。
     wiki_sources: list[WikiSourceRef] = Field(default_factory=list, max_length=200)
+    # 選んだ原文の使い方（#5981）。`only` = 選んだ原文だけを根拠にする（検索しない）、`mix` = 選んだ
+    # 原文に検索の結果を足す。`wiki_sources` が無いときは使わない。
+    wiki_source_mode: Literal["only", "mix"] = "only"
     question_context_token: str | None = Field(default=None, min_length=1, max_length=300000)
     # 複数指定でマルチモデル比較(設定済み OCI モデル間)。空なら既定モデル 1 系統。未登録のモデルが
     # あれば 422(落として既定のモデルで答えない。#4582)。

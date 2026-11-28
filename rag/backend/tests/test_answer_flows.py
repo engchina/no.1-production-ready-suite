@@ -290,3 +290,52 @@ async def test_only_expanded_flow_with_wiki_enabled_starts_wiki(
 
     assert wiki.await_count == int(flow == EXPANDED_FLOW and wiki_enabled)
     assert response.citations
+
+
+@pytest.mark.parametrize("only", [True, False])
+async def test_selected_wiki_sources_alone_or_with_search(
+    monkeypatch: MonkeyPatch, only: bool
+) -> None:
+    """選んだ原文だけで答えるとき(#5981)は、検索・自動の Wiki 検索・根拠の拡張をしない。"""
+    from dataclasses import dataclass
+
+    from app.rag.wiki_explorer import WikiHandoff
+    from app.schemas.search import RetrievedChunk
+
+    @dataclass(frozen=True)
+    class Handoff(WikiHandoff):
+        async def recheck(
+            self, oracle: Any, filters: Any
+        ) -> None:  # 権限・版の照合し直しは別のテスト
+            return None
+
+    selected = RetrievedChunk(
+        chunk_id="selected-1",
+        document_id="selected-doc",
+        file_name="synthetic-selected.md",
+        text="合成の選んだ原文。",
+        score=0.0,
+        metadata={"chunk_set_id": "cs-selected", "chunk_index": 0},
+    )
+    monkeypatch.setenv("RAG_WIKI_SEARCH_ENABLED", "true")
+    wiki = AsyncMock(return_value=[])
+    monkeypatch.setattr(AnswerEngine, "_wiki_sources", wiki)
+    calls: list[str] = []
+    _spy(monkeypatch, answering, "_expand_evidence", calls)
+    _spy(monkeypatch, AnswerEngine, "_search_expansions", calls)
+
+    response, _, _, _ = await _run_with_progress(
+        monkeypatch,
+        SearchRequest(query=QUESTION, search_answer_profile_id="profile-a"),
+        flow=EXPANDED_FLOW,
+        wiki_handoff=Handoff("profile-a", (), (selected,), only=only),
+    )
+
+    origins = {c.chunk_id: c.metadata.get("wiki_handoff_origin") for c in response.citations}
+    assert origins["selected-1"] == "selected"
+    if only:
+        # 根拠は選んだ原文だけ。自動の Wiki 検索・検索拡張・根拠の拡張は始めない。
+        assert set(origins) == {"selected-1"}
+        assert wiki.await_count == 0 and not [name for name in calls if name]
+    else:
+        assert "additional" in origins.values() and wiki.await_count == 1

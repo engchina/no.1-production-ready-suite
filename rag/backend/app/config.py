@@ -1309,6 +1309,15 @@ class Settings(
         le=999,
         description="Wiki の検索で、同じ文書の依存を辿って足す原文単位の数の上限（全段の合計）。",
     )
+    rag_wiki_selection_max_units: int = Field(
+        default=10,
+        ge=1,
+        le=200,
+        description=(
+            "Wiki 検索で選んでチャットへ渡せる原文単位の数の上限。backend が検証し、画面へ返す"
+            "（`scope` の `selection_limit`）。"
+        ),
+    )
     rag_wiki_query_timeout_seconds: float = Field(
         default=180.0,
         ge=10.0,
