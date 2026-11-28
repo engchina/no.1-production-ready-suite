@@ -6196,8 +6196,8 @@ def _office_xlsx_sheet_text_and_table(
             col_index = detected_col_index if detected_col_index is not None else fallback_col_index
             value_text = _xlsx_cell_text(cell, shared_strings=shared_strings)
             formula_text = _xlsx_cell_formula(cell)
-            if formula_text and not value_text:
-                value_text = f"={formula_text}"
+            # キャッシュ値の無い数式は値が分からない。数式の文字列は値ではないので表のセル
+            # (本文)にしない。数式そのものは数式の要素と metadata に残る(#6006)。
             if value_text:
                 cell_values[col_index] = value_text
             if formula_text:
@@ -6434,7 +6434,7 @@ def _xlsx_formula_elements(
 
 def _xlsx_formula_element_text(formula_cell: _XlsxFormulaCell) -> str:
     text = f"{formula_cell.cell_ref} = {formula_cell.formula}"
-    if formula_cell.value and formula_cell.value != f"={formula_cell.formula}":
+    if formula_cell.value:
         return f"{text} (値: {formula_cell.value})"
     return text
 
