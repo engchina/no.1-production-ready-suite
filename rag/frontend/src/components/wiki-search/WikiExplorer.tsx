@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { BookOpen, Eraser, List, Maximize, Minimize, Network, PanelRight, Search, X } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
+import { BookOpen, Eraser, Info, List, Maximize, Minimize, Network, PanelRight, Search, X } from "lucide-react";
 import type { GraphExplorerHandle } from "@production-ready/ui/graph-explorer";
 import {
   Button,
@@ -18,7 +18,6 @@ import {
   SearchField,
   SideSheet,
   Skeleton,
-  StatusBadge,
   TabPanel,
   Tabs,
   staleContentClass,
@@ -35,7 +34,7 @@ import { documentLinks, documentNode, unitNode } from "./wiki-graph-loaders";
 import { useWikiGraph } from "./use-wiki-graph";
 import { WikiGraphView } from "./WikiGraphView";
 import { RelationInspector, SelectionSummary, WikiInspector } from "./WikiInspector";
-import { wikiApi, type WikiKb, type WikiMethod, type WikiPick, type WikiScope } from "./wiki-api";
+import { sourcePick, wikiApi, type WikiKb, type WikiMethod, type WikiPick, type WikiScope } from "./wiki-api";
 
 interface Props {
   scope: WikiScope;
@@ -44,6 +43,10 @@ interface Props {
   kbs: WikiKb[];
   picks?: WikiPick[];
   toggle?: (p: WikiPick) => void;
+  /** 選んだ原文を id で外す（Wiki 検索の図で、選んだ原文のノードを外したとき）。 */
+  unpick?: (ids: readonly string[]) => void;
+  /** 一度に選べる原文の上限（backend の `selection_limit`）。 */
+  selectionLimit: number;
   initialSelection?: string;
   onSelectUnit: (id: string) => void;
   initialOffset: number;
@@ -55,13 +58,21 @@ interface Props {
 // 詳細を図の右に並べても図の操作領域を保てる幅。サイドバーを除いた実寸で判定する。
 const SPLIT_MIN_WIDTH = 768;
 
+/** 選んだ原文を図の節点にする（名前と文書は選んだときに控えたもの。無い値で図の節点の内容を上書きしない）。 */
+function pickNode(pick: WikiPick): WikiGraphNode {
+  return { id: pick.id, kind: "unit", label: pick.label ?? pick.location, document_id: pick.documentId ?? "", document_name: pick.name };
+}
+
 /**
- * Wiki の関係図と一覧（#5922）。検索した結果（Wiki 検索）と、ナレッジベース詳細の参照の多い文書の見本を、
- * 共有の Cytoscape の画布に出す。「一覧」はいま図にある節点の表で、関係図と同じ集合の別の見方（Neo4j Browser の
- * Graph / Table。画布の内容を読み上げで追える。#5953）。Wiki 検索の結果はサーバー側でページを分け、順位と
- * ナレッジベースの名前を持つので、「検索結果」のタブに残す。
+ * Wiki の関係図と一覧（#5922）。「一覧」はいま図にある節点の表で、関係図と同じ集合の別の見方（Neo4j Browser の
+ * Graph / Table。画布の内容を読み上げで追える。#5953）。
+ *
+ * - ナレッジベース詳細: 参照の多い文書の見本から始め、図内検索の当たりを足す。
+ * - Wiki 検索（#5981）: 「検索結果」の一覧から始める。行のチェックボックスで原文を選び（上限は backend の
+ *   `selection_limit`）、「関係図」と「一覧」は選んだ原文とその次の段だけを出す。関係の照会は、図（関係図・一覧）を
+ *   開いている間だけ行う（検索結果のタブにいる間は呼ばない。#5966）。
  */
-export function WikiExplorer({ scope, question, method, kbs, picks, toggle, initialSelection, onSelectUnit, initialOffset, onOffset, searchButtonBusy = false }: Props) {
+export function WikiExplorer({ scope, question, method, kbs, picks, toggle, unpick, selectionLimit, initialSelection, onSelectUnit, initialOffset, onOffset, searchButtonBusy = false }: Props) {
   const base = ["wiki-explorer", scope] as const;
   const searchMode = Boolean(question.trim());
   const knowledgeBase = scope.kind === "kb";
@@ -69,7 +80,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   const camera = useRef<GraphExplorerHandle>(null);
   const [narrow, setNarrow] = useState(false);
   const wideScreen = useMediaQuery("(min-width: 768px)", false);
-  const [view, setView] = useState("graph");
+  const [view, setView] = useState(searchMode ? "results" : "graph");
   const [offset, setOffset] = useState(initialOffset);
   const [pageSize, setPageSize] = useState<number>(WIKI_GRAPH_SETTINGS.resultPage);
   const [listSize, setListSize] = useState<number>(WIKI_GRAPH_SETTINGS.resultPage);
@@ -80,7 +91,17 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   const [fullError, setFullError] = useState(false);
   const [find, setFind] = useState("");
   const [cursor, setCursor] = useState(0);
+  // 図に無いが詳細に出している原文（Wiki 検索の検索結果の行・詳細の関係の相手。図には足さない）。
+  const [inspected, setInspected] = useState<WikiGraphNode | null>(null);
+  // チェックボックスで選ぶ途中（原文を照合している）の行と、その失敗。
+  const [picking, setPicking] = useState<readonly string[]>([]);
+  const [pickFailure, setPickFailure] = useState<{ error: unknown; retry: () => void } | null>(null);
+  const limitId = useId();
+  const client = useQueryClient();
   const graph = useWikiGraph(scope);
+  const picked = useMemo(() => new Set((picks ?? []).map((item) => item.id)), [picks]);
+  // 照合の途中の行も数える（上限の直前で続けて押しても、上限を超えて足さない）。
+  const selectionFull = (picks?.length ?? 0) + picking.length >= selectionLimit;
 
   useLayoutEffect(() => {
     const panel = box.current;
@@ -117,19 +138,14 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     retry: false,
   });
 
-  // 検索の結果（ページ）ごとに図を置き換え、結果の間の関係をつなぐ（Wiki 検索は新しい検索で置き換える）。
+  // Wiki 検索の図は、選んだ原文とその次の段（#5981）。図（関係図・一覧）を開いている間だけそろえ、検索結果の
+  // タブにいる間は関係を照会しない（選ぶたびに読むと、原文の照合と重なって DB の読み取りの上限に当たる。#5966）。
   const placed = useRef("");
-  const { replace, add, place, run, reveal } = graph;
+  const { replace, add, place, run, reveal, syncPicked } = graph;
+  const figureOpen = view !== "results";
   useEffect(() => {
-    if (!searchMode || !hits.data || hits.isPlaceholderData) return;
-    const key = JSON.stringify([question, method, offset, pageSize]);
-    if (placed.current === key) return;
-    placed.current = key;
-    const nodes = hits.data.items.map((hit) => unitNode(hit));
-    // 置き換えると図のすべてが結果なので、一致の輪は付けない（足すときだけ、今の図の中の結果を強調する）。
-    const mode = WIKI_GRAPH_SETTINGS.wikiSearch;
-    void run(() => place(nodes, mode, mode === "add" ? nodes.map((node) => node.id) : []));
-  }, [hits.data, hits.isPlaceholderData, method, offset, pageSize, place, question, run, searchMode]);
+    if (searchMode && figureOpen) syncPicked((picks ?? []).map(pickNode));
+  }, [figureOpen, picks, searchMode, syncPicked]);
   // ナレッジベース詳細は、参照の多い文書の見本とその間の参照で開く。
   useEffect(() => {
     if (searchMode || !sample.data || placed.current === "sample") return;
@@ -165,7 +181,10 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   }
 
   const nodes = graph.state.nodes;
-  const selectedNodes = selection.map((id) => nodes.get(id) ?? (id.startsWith("more:") ? moreNode(id) : undefined)).filter((node): node is WikiGraphNode => Boolean(node));
+  const hitRows: WikiGraphNode[] = useMemo(() => (hits.data?.items ?? []).map((hit) => unitNode(hit)), [hits.data]);
+  // 選択は図の節点。Wiki 検索は、図に無い原文（検索結果の行・詳細から開いた関係の相手）も詳細に出せる。
+  const known = (id: string) => nodes.get(id) ?? (inspected?.id === id ? inspected : undefined) ?? (searchMode ? hitRows.find((row) => row.id === id) : undefined);
+  const selectedNodes = selection.map((id) => known(id) ?? (id.startsWith("more:") ? moreNode(id) : undefined)).filter((node): node is WikiGraphNode => Boolean(node));
   const selectedEdge = selection.length === 1 ? graph.state.edges.get(selection[0]) : undefined;
   const node = selectedNodes.length === 1 ? selectedNodes[0] : undefined;
   function moreNode(id: string): WikiGraphNode | undefined {
@@ -173,18 +192,44 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     return owner ? { id, kind: "more", label: "", owner: owner.id, remaining: remainingNeighbors(graph.state, owner.id), document_id: owner.document_id, document_name: owner.document_name } : undefined;
   }
 
-  function choose(ids: string[]) {
+  function choose(ids: string[], shown?: WikiGraphNode) {
     setSelection(ids);
-    const unit = ids.length === 1 ? nodes.get(ids[0]) : undefined;
+    const unit = ids.length === 1 ? shown ?? known(ids[0]) : undefined;
     onSelectUnit(unit?.kind === "unit" ? unit.id : "");
   }
-  /** 一覧・詳細から選ぶ。図に無ければ足してから選ぶ。 */
+  /**
+   * 一覧・詳細から選ぶ。ナレッジベース詳細は、図に無ければ足してから選ぶ。Wiki 検索は図に足さず（図は選んだ原文と
+   * その次の段だけ）、詳細にだけ出す。
+   */
   function pick(item: WikiGraphNode) {
-    if (!nodes.has(item.id)) add([item], []);
-    choose([item.id]);
+    if (!nodes.has(item.id)) {
+      if (searchMode) setInspected(item);
+      else add([item], []);
+    }
+    choose([item.id], item);
     setInspector(true);
     if (narrow) setSheet(true);
     requestAnimationFrame(() => camera.current?.focusNode(item.id));
+  }
+  /**
+   * 検索結果の行のチェックボックス（#5981）。選ぶときは原文を照合してから選択に足す（詳細と同じ照会を使い回す）。
+   * 上限に達している間は足さない（自動で入れ替えない）。
+   */
+  const latestPicked = useRef(picked);
+  useEffect(() => { latestPicked.current = picked; }, [picked]);
+  function togglePick(row: WikiGraphNode) {
+    if (!toggle) return;
+    const chosen = picks?.find((item) => item.id === row.id);
+    if (chosen) return toggle(chosen);
+    if (selectionFull || picking.includes(row.id)) return;
+    setPickFailure(null);
+    setPicking((old) => [...old, row.id]);
+    client.fetchQuery({ queryKey: ["wiki-explorer", scope, "original", row.id], queryFn: ({ signal }) => wikiApi.original(scope, row.id, signal), staleTime: 60_000 })
+      .then(
+        (original) => { if (!latestPicked.current.has(row.id)) toggle(sourcePick(original)); },
+        (error: unknown) => setPickFailure({ error, retry: () => togglePick(row) }),
+      )
+      .finally(() => setPicking((old) => old.filter((id) => id !== row.id)));
   }
   function changePage(next: number) {
     setOffset(next);
@@ -203,8 +248,13 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   // 「一覧」はいま図にある節点（名前の順）。図を置き換えたときだけ 1 ページ目へ戻す。
   const rows = useMemo(() => wikiGraphRows(graph.state), [graph.state]);
   const listPaging = usePagination(rows, listSize, { resetKey: graph.state.generation });
-  const hitRows: WikiGraphNode[] = (hits.data?.items ?? []).map((hit) => unitNode(hit));
   const mainQuery = searchMode ? hits : sample;
+  // Wiki 検索の図（関係図・一覧）は、選んだ原文が無ければ案内を出す。
+  const figureEmpty = searchMode && !picks?.length;
+  const figureGuide = (
+    <EmptyState title={t("wiki.search.figureEmpty")}
+      action={<Button variant="secondary" icon={Search} onClick={() => setView("results")}>{t("wiki.search.showHits")}</Button>} />
+  );
   const workingLabel = mainQuery.isFetching ? t(searchMode ? "wiki.search.loadingHits" : "wiki.graph.loadingSample")
     : found.isFetching ? t("wiki.graph.searching")
     : graph.pending ? t("wiki.graph.expanding") : undefined;
@@ -222,10 +272,13 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
       expanded={[...graph.state.owners.values()].includes(node.id)}
       focus={view === "graph" && nodes.has(node.id) ? () => { camera.current?.focusNode(node.id); if (narrow) setSheet(false); } : undefined}
       select={pick}
-      expand={() => { if (!nodes.has(node.id) && node.kind !== "more") add([node], []); graph.expand(node.kind === "more" ? moreId(node.owner!) : node.id); setView("graph"); if (narrow) setSheet(false); }}
+      // Wiki 検索の図は選んだ原文とその次の段だけなので、図に無い原文からは展開しない（選ぶと図に入る）。
+      expand={searchMode && node.kind !== "more" && !nodes.has(node.id) ? undefined
+        : () => { if (!nodes.has(node.id) && node.kind !== "more") add([node], []); graph.expand(node.kind === "more" ? moreId(node.owner!) : node.id); setView("graph"); if (narrow) setSheet(false); }}
       collapse={() => graph.collapse(node.id)}
       picks={picks}
       toggle={toggle}
+      selectionLimit={selectionLimit}
     />
   ) : selectedNodes.length > 1 ? (
     <SelectionSummary nodes={selectedNodes} onPick={pick} />
@@ -254,25 +307,24 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     </>
   ) : null;
 
-  const graphPanel = mainQuery.isPending ? (
+  const graphPanel = figureEmpty ? figureGuide : !searchMode && sample.isPending ? (
     // 読み込み中は画布の形の Skeleton（凡例の行と画布）。
     <div className="grid gap-2" aria-hidden data-testid="wiki-graph-skeleton">
       <Skeleton className="h-9 w-2/3 max-w-[32rem]" />
       <Skeleton className="h-[40rem] w-full max-sm:h-[65dvh]" />
     </div>
-  ) : mainQuery.isError && !mainQuery.data ? (
-    <ApiErrorState error={mainQuery.error} fallback={t("wiki.graph.error")} onRetry={() => void mainQuery.refetch()} />
+  ) : !searchMode && sample.isError && !sample.data ? (
+    <ApiErrorState error={sample.error} fallback={t("wiki.graph.error")} onRetry={() => void sample.refetch()} />
   ) : (
     <div className="grid gap-2">
       {!searchMode && sample.data && sample.data.total > 0 && (
         <p className="text-xs text-fg-muted">{t("wiki.graph.sampleHint", { count: sample.data.documents.length, total: sample.data.total })}</p>
       )}
+      {searchMode && <p className="text-xs text-fg-muted">{t("wiki.search.figureHint", { count: WIKI_GRAPH_SETTINGS.selectedNeighbors })}</p>}
       {graph.failure && <DataLoadFailure error={graph.failure.error} fallback={t("wiki.graph.expandError")} onRetry={graph.failure.retry} />}
       {found.isError && <DataLoadFailure error={found.error} fallback={t("wiki.graph.searchError")} onRetry={() => void found.refetch()} />}
       {!nodes.size && !searchMode && sample.data?.total === 0 ? (
         <EmptyState title={t("wiki.graph.empty")} />
-      ) : !nodes.size && searchMode && hits.data?.total === 0 ? (
-        <EmptyState title={t("search.noResults")} />
       ) : (
         <>
           {!nodes.size && !searchMode && <p className="text-sm text-fg-muted">{t("wiki.graph.cleared")}</p>}
@@ -284,11 +336,19 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
             onSelect={choose}
             onExpand={graph.expand}
             onCollapse={graph.collapse}
-            onRemove={(ids) => { graph.remove(ids); setSelection((old) => old.filter((id) => !ids.includes(id))); }}
-            onKeepOnly={graph.keep}
+            onRemove={(ids) => {
+              // Wiki 検索の図で選んだ原文を外すと、選択からも外す（図は選択に合わせて、その次の段も外す）。
+              const chosen = searchMode ? ids.filter((id) => picked.has(id)) : [];
+              if (chosen.length) unpick?.(chosen);
+              graph.remove(ids.filter((id) => !chosen.includes(id)));
+              setSelection((old) => old.filter((id) => !ids.includes(id)));
+            }}
+            // 「選択したノードだけ残す」は、選んだ原文をまとめて選択から外すことになるので、Wiki 検索の図では出さない。
+            onKeepOnly={searchMode ? undefined : graph.keep}
             onConnect={graph.connect}
             onOpen={(id) => { choose([id]); setInspector(true); if (narrow) setSheet(true); }}
             toolbar={toolbar}
+            markPicked={searchMode}
           />
         </>
       )}
@@ -296,15 +356,20 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   );
 
   // 「一覧」: いま図にある節点の表。行を選ぶと図と同じ節点が選ばれ、詳細が出る。
-  const kindLabel = (node: WikiGraphNode) => t(`wiki.graph.kind.${node.kind}`);
-  const listPanel = mainQuery.isPending ? (
+  // Wiki 検索は、選んだ原文を図と同じ「選んだ原文」の種類で出す（図の印を一覧でも読める）。
+  const kindLabel = (node: WikiGraphNode) => t(searchMode && node.kind === "unit" && graph.state.matched.has(node.id) ? "wiki.graph.kind.picked" : `wiki.graph.kind.${node.kind}`);
+  const listPanel = figureEmpty ? figureGuide : searchMode && !rows.length ? (
+    // 選んだ原文を図に置く前の一瞬。
     <ListSkeleton rows={{ base: 5, md: 8 }} />
-  ) : mainQuery.isError && !mainQuery.data ? (
-    <ApiErrorState error={mainQuery.error} fallback={t("wiki.graph.error")} onRetry={() => void mainQuery.refetch()} />
+  ) : !searchMode && sample.isPending ? (
+    <ListSkeleton rows={{ base: 5, md: 8 }} />
+  ) : !searchMode && sample.isError && !sample.data ? (
+    <ApiErrorState error={sample.error} fallback={t("wiki.graph.error")} onRetry={() => void sample.refetch()} />
   ) : !rows.length ? (
-    <EmptyState title={t(searchMode ? "search.noResults" : sample.data?.total === 0 ? "wiki.graph.empty" : "wiki.graph.cleared")} />
+    <EmptyState title={t(sample.data?.total === 0 ? "wiki.graph.empty" : "wiki.graph.cleared")} />
   ) : (
     <div className="grid gap-2">
+      {searchMode && graph.failure && <DataLoadFailure error={graph.failure.error} fallback={t("wiki.graph.expandError")} onRetry={graph.failure.retry} />}
       <ListCount total={rows.length} />
       <DataTable<WikiGraphRow>
         ariaLabel={t("wiki.graph.nodesList")}
@@ -352,7 +417,7 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
     </div>
   );
 
-  // 「検索結果」（Wiki 検索だけ）: サーバー側のページングの結果の一覧。ページを移ると、図をそのページの結果で置き換える。
+  // 「検索結果」（Wiki 検索だけ）: サーバー側のページングの結果の一覧。行のチェックボックスで原文を選び、行を押すと詳細を開く。
   const resultsPanel = hits.isPending ? (
     <ListSkeleton rows={{ base: 6, md: 8 }} />
   ) : hits.isError && !hits.data ? (
@@ -362,21 +427,38 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
   ) : (
     <div className={`grid gap-2 ${staleContentClass(hits.isPlaceholderData)}`} aria-busy={hits.isFetching || undefined}>
       <ListCount total={hits.data.total} />
+      {/* 押せない理由は常に出す（吹き出しに隠さない。messaging.md §3.8）。上限に達しても自動で入れ替えない。 */}
+      {toggle && selectionFull && (
+        <p id={limitId} role="status" className="flex items-start gap-1 text-xs text-fg-muted" data-testid="wiki-selection-limit">
+          <Info size={14} className="mt-0.5 shrink-0" aria-hidden />
+          <span>{t("wiki.search.selectionLimit", { count: selectionLimit })}{t("wiki.search.selectionLimitHint")}</span>
+        </p>
+      )}
+      {pickFailure && <DataLoadFailure error={pickFailure.error} fallback={t("wiki.graph.sourceError")} onRetry={pickFailure.retry} />}
       <ListScrollRegion label={t("wiki.search.resultsList")} testId="wiki-result-list">
         <ul className="divide-y divide-border">
           {hitRows.map((row, index) => {
             const hit = hits.data.items[index];
             const active = selection.includes(row.id);
+            const checked = picked.has(row.id) || picking.includes(row.id);
+            const blocked = !checked && selectionFull;
             return (
-              <li key={row.id}>
-                <button type="button" aria-pressed={active} data-surface-tint={active ? "accent" : undefined}
-                  className="grid w-full gap-0.5 px-3 py-2 text-left hover:bg-surface-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring border-l-2 border-l-transparent aria-pressed:border-l-accent-fg aria-pressed:bg-accent-muted" onClick={() => pick(row)}>
+              <li key={row.id} data-surface-tint={active ? "accent" : undefined}
+                className={`flex min-w-0 items-stretch border-l-2 ${active ? "border-l-accent-fg bg-accent-muted" : "border-l-transparent hover:bg-surface-hover"}`}>
+                {toggle && (
+                  // チェックボックスの押せる範囲は、行の高さ × タッチの最小の幅（44px）。
+                  <label className="flex min-w-[var(--control-height-touch)] shrink-0 cursor-pointer items-start justify-center pt-3 has-[:disabled]:cursor-not-allowed">
+                    <input type="checkbox" checked={checked} disabled={blocked} aria-busy={picking.includes(row.id) || undefined}
+                      aria-label={t("wiki.search.pickRow", { name: row.label })} aria-describedby={blocked ? limitId : undefined}
+                      className="cursor-pointer accent-accent-emphasis disabled:cursor-not-allowed" onChange={() => togglePick(row)} />
+                  </label>
+                )}
+                <button type="button" aria-pressed={active}
+                  className={`grid min-w-0 flex-1 gap-0.5 py-2 pr-3 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus-ring ${toggle ? "" : "pl-3"}`} onClick={() => pick(row)}>
                   <span className="grid min-w-0 gap-0.5">
                     <span className="flex min-w-0 gap-2">
                       <span className="text-xs tabular-nums text-fg-muted">{offset + index + 1}</span>
                       <strong className="min-w-0 text-sm [overflow-wrap:anywhere]">{row.label}</strong>
-                      {/* 質問に追加済みの行（選んだ原文が多いと、どれを選んだかが一覧で分からない。#5978）。 */}
-                      {picks?.some((pick) => pick.id === row.id) && <StatusBadge variant="success" label={t("wiki.search.added")} className="ml-auto shrink-0" />}
                     </span>
                     <span className="flex min-w-0 items-center gap-1 text-xs font-normal text-fg-muted">
                       <BookOpen size={14} className="shrink-0" aria-hidden />
@@ -405,10 +487,11 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
           <h2 className="font-semibold">{title}</h2>
           <div className="flex min-w-0 flex-wrap items-center gap-1">
             <Tabs idPrefix="wiki-view" ariaLabel={title} value={view} onChange={setView}
+              // Wiki 検索は一覧から始めるので、「検索結果」を先頭に置く（最初に開くタブ = 先頭。選ぶ → 図を見るの順）。
               items={[
+                ...(searchMode ? [{ id: "results", label: t("wiki.search.hits"), icon: Search }] : []),
                 { id: "graph", label: t("wiki.search.graph"), icon: Network },
                 { id: "list", label: t("wiki.search.list"), icon: List },
-                ...(searchMode ? [{ id: "results", label: t("wiki.search.hits"), icon: Search }] : []),
               ]} />
             {!narrow && !inspector && (
               <Button variant="ghost" size="sm" iconOnly icon={PanelRight} aria-label={t("wiki.search.openDetail")} onClick={() => setInspector(true)} />
@@ -426,9 +509,9 @@ export function WikiExplorer({ scope, question, method, kbs, picks, toggle, init
         )}
         <div className={`grid min-w-0 gap-3 p-3 ${showInspector ? "lg:grid-cols-[minmax(0,1fr)_minmax(17rem,22rem)]" : ""}`}>
           <div className="min-w-0">
+            {searchMode && <TabPanel id="results" value={view} idPrefix="wiki-view">{resultsPanel}</TabPanel>}
             <TabPanel id="graph" value={view} idPrefix="wiki-view">{graphPanel}</TabPanel>
             <TabPanel id="list" value={view} idPrefix="wiki-view">{listPanel}</TabPanel>
-            {searchMode && <TabPanel id="results" value={view} idPrefix="wiki-view">{resultsPanel}</TabPanel>}
           </div>
           {showInspector && (
             <aside aria-label={t("wiki.search.detail")} className="flex min-h-0 min-w-0 flex-col rounded-md border border-border max-lg:max-h-[40rem] lg:max-h-[46rem]">

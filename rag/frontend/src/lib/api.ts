@@ -1642,6 +1642,8 @@ export interface ConversationUpdateBody {
 
 export interface ChatMessageRequestBody {
   wiki_sources?: {unit_id: string; source_hash: string}[];
+  /** 選んだ原文だけで回答する（only。既定）か、通常の検索の結果に足す（mix）か。`wiki_sources` があるときだけ送る（#5981）。 */
+  wiki_source_mode?: "only" | "mix";
   content: string;
   question_context_token?: string;
   model_ids?: string[];

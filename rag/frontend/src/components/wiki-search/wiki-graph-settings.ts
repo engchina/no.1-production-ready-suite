@@ -5,7 +5,7 @@
  * - `expandBatch`: 1 回の展開で足す隣接の上限（超える分は「さらに展開」）。
  * - `resultPage`: 検索の結果・一覧の 1 ページの既定の件数（3 製品の一覧の既定）。
  * - `knowledgeBaseSearch`: ナレッジベース詳細の図内検索の結果を今の図に足す（add）か置き換える（replace）か。
- * - `wikiSearch`: Wiki 検索の新しい検索で図を置き換えるか。
+ * - `selectedNeighbors`: Wiki 検索の図で、選んだ原文ごとに最初に出す次の段の上限（超える分は「さらに展開」。#5981）。
  * - `activate`: ダブルクリックと Enter で隣接を展開する（expand）か詳細を開く（details）か。
  */
 export interface WikiGraphSettings {
@@ -13,7 +13,7 @@ export interface WikiGraphSettings {
   expandBatch: number;
   resultPage: number;
   knowledgeBaseSearch: "add" | "replace";
-  wikiSearch: "add" | "replace";
+  selectedNeighbors: number;
   activate: "expand" | "details";
 }
 
@@ -22,7 +22,7 @@ export const WIKI_GRAPH_SETTINGS: Readonly<WikiGraphSettings> = {
   expandBatch: 25,
   resultPage: 25,
   knowledgeBaseSearch: "add",
-  wikiSearch: "replace",
+  selectedNeighbors: 10,
   activate: "expand",
 };
 

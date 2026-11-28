@@ -29,6 +29,9 @@ export interface WikiPick {
   name: string;
   location: string;
   fullLocation?: string;
+  /** 原文の名前と文書（関係図の節点に使う。#5981）。 */
+  label?: string;
+  documentId?: string;
   source: SourceRef;
 }
 export interface WikiOriginal extends WikiGraphUnitRef {
@@ -72,10 +75,15 @@ export interface WikiUnitConnection {
 export const WIKI_RELATIONS_LIMIT = 500;
 /** `connections` が 1 回で受け付ける単位の数（backend の上限）。 */
 export const WIKI_CONNECTIONS_LIMIT = 200;
+/** 選んだ原文だけで回答する（only。既定）か、通常の検索の結果に足す（mix）か（#5981）。 */
+export type WikiSourceMode = "only" | "mix";
 export interface WikiDraft {
   knowledgeBaseId?: string;
   profileId: string;
   items: WikiPick[];
+  /** 一度に選べる原文の上限（backend の `selection_limit`）。 */
+  selectionLimit?: number;
+  mode?: WikiSourceMode;
 }
 export function isWikiDraft(value: unknown): value is WikiDraft {
   if (
@@ -84,6 +92,8 @@ export function isWikiDraft(value: unknown): value is WikiDraft {
     !("profileId" in value) ||
     typeof value.profileId !== "string" ||
     ("knowledgeBaseId" in value && typeof value.knowledgeBaseId !== "string") ||
+    ("selectionLimit" in value && value.selectionLimit !== undefined && !validLimit(value.selectionLimit)) ||
+    ("mode" in value && value.mode !== undefined && value.mode !== "only" && value.mode !== "mix") ||
     !("items" in value) ||
     !Array.isArray(value.items)
   )
@@ -95,11 +105,21 @@ export function isWikiDraft(value: unknown): value is WikiDraft {
       typeof item.name === "string" &&
       typeof item.location === "string" &&
       (item.fullLocation === undefined || typeof item.fullLocation === "string") &&
+      (item.label === undefined || typeof item.label === "string") &&
+      (item.documentId === undefined || typeof item.documentId === "string") &&
       item.source?.unit_id === item.id &&
       typeof item.source.source_hash === "string",
   );
 }
-export const MAX_WIKI_SELECTION = 200;
+/** 一度に選べる原文の上限の予備の値（backend の `selection_limit` が応答に無いとき。#5981）。 */
+export const WIKI_SELECTION_LIMIT_FALLBACK = 10;
+function validLimit(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+/** backend が返した上限（無い・不正なら予備の値）。 */
+export function wikiSelectionLimit(value: unknown): number {
+  return validLimit(value) ? value : WIKI_SELECTION_LIMIT_FALLBACK;
+}
 function get<T>(scope: WikiScope, path: string, params: Record<string, string> = {}, signal?: AbortSignal) {
   const id = encodeURIComponent(scope.id);
   const base =
@@ -109,7 +129,7 @@ function get<T>(scope: WikiScope, path: string, params: Record<string, string> =
   return request<T>(`${base}/${path}?${query}`, { signal });
 }
 export const wikiApi = {
-  scope: (s: WikiScope, signal?: AbortSignal) => get<{ knowledge_bases: WikiKb[] }>(s, "scope", {}, signal),
+  scope: (s: WikiScope, signal?: AbortSignal) => get<{ knowledge_bases: WikiKb[]; selection_limit?: number }>(s, "scope", {}, signal),
   hits: (s: WikiScope, q: string, method: WikiMethod, offset: number, limit: number, signal?: AbortSignal) =>
     get<{ items: WikiHit[]; total: number }>(
       s,
@@ -186,6 +206,8 @@ export function sourcePick(original: WikiOriginal): WikiPick {
   return {
     id: original.id,
     name: original.document_name,
+    label: original.label,
+    documentId: original.document_id,
     source: original.source,
     location: location.short,
     fullLocation: (path.at(-1) === location.full ? path : [...path, location.full]).join(" › "),

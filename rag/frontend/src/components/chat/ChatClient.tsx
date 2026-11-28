@@ -50,8 +50,8 @@ import {
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { FeedbackControls } from "@/components/feedback/FeedbackControls";
-import { SelectedSources } from "@production-ready/ui";
-import { isWikiDraft, type WikiDraft } from "@/components/wiki-search/wiki-api";
+import { RadioOptionGroup, SelectedSources } from "@production-ready/ui";
+import { isWikiDraft, wikiSelectionLimit, type WikiDraft, type WikiSourceMode } from "@/components/wiki-search/wiki-api";
 import { SearchAnswerProfileSelect, SearchAnswerProfileSelectSkeleton } from "@/components/search-answer-profiles/SearchAnswerProfileSelect";
 import { AnswerCitations } from "@/components/search/CitationList";
 import { answerNoticeItems } from "@/components/search/AnswerDetailsPanel";
@@ -829,7 +829,11 @@ export function ChatClient() {
   const [composer, setComposer] = useWorkspaceState("chat.composer", "");
   const [wikiDraft, setWikiDraft] = useWorkspaceState<WikiDraft | null>("chat.wikiSources", null,
     (value): value is WikiDraft | null => value === null || isWikiDraft(value));
-  const wikiItems = auth.hasPermission(MENU_PERMISSIONS.wikiSearch) && wikiDraft?.profileId === searchAnswerProfileId ? wikiDraft.items : [];
+  // 選べる数の上限は Wiki 検索が渡した値（backend の `selection_limit`）。超える分は送らない（backend は 422 にする）。
+  const wikiLimit = wikiSelectionLimit(wikiDraft?.selectionLimit);
+  const wikiItems = auth.hasPermission(MENU_PERMISSIONS.wikiSearch) && wikiDraft?.profileId === searchAnswerProfileId ? wikiDraft.items.slice(0, wikiLimit) : [];
+  // 選んだ原文だけで回答する（既定）か、通常の検索の結果に足すか。次の 1 問だけに効く（送ると選んだ原文と一緒に消える。#5981）。
+  const wikiMode: WikiSourceMode = wikiDraft?.mode ?? "only";
   // 回答の前に選ぶ類似の登録済みQ&A（選ぶまで送らない。#684）。選ぶ前に画面を離れても、戻ったとき・
   // 再読込で同じ質問と候補を出す（作業状態。#702）。検索・回答プロファイルを変えたら消す。
   const [faqChoice, setFaqChoice] = useWorkspaceState<FaqChoice | null>(
@@ -1442,7 +1446,7 @@ export function ChatClient() {
         ...(questionContextToken ? { question_context_token: questionContextToken } : {}),
         model_ids: [],
         client_message_id: clientMessageId,
-        ...(wikiItems.length ? { wiki_sources: wikiItems.map(item => item.source) } : {}),
+        ...(wikiItems.length ? { wiki_sources: wikiItems.map(item => item.source), wiki_source_mode: wikiMode } : {}),
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
         ...(approvedFaqId ? { approved_faq_id: approvedFaqId } : {}),
         ...(clarification ? { clarification } : {}),
@@ -1774,12 +1778,27 @@ export function ChatClient() {
                     会話の内容の読み込み中は書けて、送信だけを止める（#1188）。 */}
                 <ChatComposer
                   id="chat-composer"
-                  options={wikiItems.length ? <SelectedSources items={wikiItems} label={t("wiki.search.selected")} count={t("wiki.search.selectedCount", { count: wikiItems.length })}
-                    removeLabel={(name) => t("fileReview.remove", {name})}
-                    disabled={answerInProgress || sending}
-                    focusAfterLast={() => composerRef.current?.focus()}
-                    onRemove={(id) => setWikiDraft(previous => previous && ({...previous, items:previous.items.filter(item=>item.id!==id)}))}
-                    action={<Button variant="ghost" size="sm" onClick={() => navigate(wikiDraft?.knowledgeBaseId ? APP_ROUTES.knowledgeBases + "/" + encodeURIComponent(wikiDraft.knowledgeBaseId) + "#wiki-graph" : APP_ROUTES.wikiSearch)}>{t(wikiDraft?.knowledgeBaseId ? "wiki.search.returnToKnowledgeBase" : "wiki.search.return")}</Button>} /> : undefined}
+                  options={wikiItems.length ? (
+                    <div className="grid min-w-0 flex-1 gap-2" data-testid="chat-wiki-sources">
+                      <SelectedSources items={wikiItems} label={t("wiki.search.selected")} count={t("wiki.search.selectedCount", { count: wikiItems.length, limit: wikiLimit })}
+                        removeLabel={(name) => t("fileReview.remove", {name})}
+                        disabled={answerInProgress || sending}
+                        focusAfterLast={() => composerRef.current?.focus()}
+                        onRemove={(id) => setWikiDraft(previous => previous && ({...previous, items:previous.items.filter(item=>item.id!==id)}))}
+                        action={<Button variant="ghost" size="sm" onClick={() => navigate(wikiDraft?.knowledgeBaseId ? APP_ROUTES.knowledgeBases + "/" + encodeURIComponent(wikiDraft.knowledgeBaseId) + "#wiki-graph" : APP_ROUTES.wikiSearch)}>{t(wikiDraft?.knowledgeBaseId ? "wiki.search.returnToKnowledgeBase" : "wiki.search.return")}</Button>} />
+                      <RadioOptionGroup<WikiSourceMode>
+                        id="chat-wiki-source-mode"
+                        legend={t("wiki.search.sourceMode")}
+                        options={[
+                          { value: "only", label: t("wiki.search.sourceMode.only") },
+                          { value: "mix", label: t("wiki.search.sourceMode.mix") },
+                        ]}
+                        value={wikiMode}
+                        disabled={answerInProgress || sending}
+                        onValueChange={(mode) => setWikiDraft(previous => previous && ({ ...previous, mode }))}
+                      />
+                    </div>
+                  ) : undefined}
                   textareaRef={composerRef}
                   value={composer}
                   onValueChange={setComposer}
