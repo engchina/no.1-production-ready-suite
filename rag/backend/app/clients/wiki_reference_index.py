@@ -172,6 +172,12 @@ class DocumentNames:
             did: document_name_keys(file_name, self.headings[did])
             for did, file_name in self.files.items()
         }
+        # 逆引きの比較形も文書ごとに 1 回だけ作る。照合のたびに作り直すと、参照の数 × 文書の数だけ
+        # 名前を正規化する（参照が集まる文書の単位で、関係の読み取りが 10 秒を超えた。#5966）。
+        self.reference_keys = {
+            did: document_reference_keys(file_name, self.headings[did])
+            for did, file_name in self.files.items()
+        }
 
     def resolve(self, name: str, *, exclude: str) -> list[str]:
         """名前が指す範囲の文書（いちばん確かな当たり方の文書。自分の文書は除く）。"""
@@ -206,10 +212,7 @@ class DocumentNames:
 
     def keys(self, document_id: str) -> frozenset[str]:
         """この文書を指す参照の比較形の完全一致の候補（逆引き）。"""
-        file_name = self.files.get(document_id)
-        if file_name is None:
-            return frozenset()
-        return document_reference_keys(file_name, self.headings[document_id])
+        return self.reference_keys.get(document_id, frozenset())
 
     def aliases(self, document_id: str) -> frozenset[str]:
         """この文書の題名・見出しの別名（逆引きで、名前を含む別名を探す）。"""

@@ -113,6 +113,28 @@ def test_generic_names_resolve_to_titles_that_contain_them_in_the_scope() -> Non
     assert names.resolve("t.md", exclude="doc-1") == []
 
 
+def test_reverse_lookup_builds_the_reference_keys_once_per_document(monkeypatch) -> None:
+    """ファイル名の形の参照を何件照合しても、文書の比較形は作り直さない（#5966）。"""
+    import app.clients.wiki_reference_index as module
+
+    calls = 0
+    original = module.document_reference_keys
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "document_reference_keys", counted)
+    catalog = [{"document_id": f"doc-{i}", "title": f"t{i}.md"} for i in range(20)]
+    names = DocumentNames(catalog, {})
+    for i in range(20):
+        key = reference_name_key(f"t{i}.md")
+        assert names.resolve_key(key, exclude="doc-x") == [f"doc-{i}"]
+    assert names.keys("doc-none") == frozenset()
+    assert calls == len(catalog)
+
+
 def test_text_references_take_only_other_documents_from_chunk_metadata() -> None:
     targets = [
         {"label": "第3章", "kind": "chapter", "key": "3", "document_title": None},
