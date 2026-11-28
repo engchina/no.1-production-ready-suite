@@ -25,6 +25,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from time import perf_counter
+from types import MappingProxyType
 from typing import Any, Protocol, TypeVar, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -536,6 +537,9 @@ class SearchHits(list[RetrievedChunk]):
     status: str = "completed"
     error: str = ""
     failure: Exception | None = None
+    # ベクトルの分岐の実際の読み方と不足（``NativeSearchRows.vector_retrieval``）。回答の記録の
+    # 検索の段に残す（#4198）。ベクトルを読まない検索は空。
+    vector_retrieval: Mapping[str, object] = MappingProxyType({})
 
 
 # section_path が JSON_VALUE の既定の RETURNING VARCHAR2(4000) に入らない行(#4126・#4144)。
@@ -8079,6 +8083,8 @@ class OracleClient:
                     filters=filters,
                     native_scope=native_scope,
                 )
+                if isinstance(rows, NativeSearchRows):
+                    result.vector_retrieval = dict(rows.vector_retrieval)
                 for rank, (chunk, row) in enumerate(_distinct_text_hits(rows), 1):
                     metadata: dict[str, Any] = {"retrieval_mode": channel}
                     if channel == "hybrid":

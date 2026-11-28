@@ -1356,6 +1356,18 @@ def test_rrf_detail_record_uses_shared_safe_display_contract(native: bool) -> No
         ("synthetic-id",),
         native_scores=(0.016,) if native else (),
         sources=("原質問",),
+        # 原生索引で読んだ混合検索（ベクトルの読み方の記録。#4198）。
+        vector_retrieval={
+            "method": "native_index",
+            "scope_vector_chunks": 1,
+            "exact_max_chunks": 0,
+            "requested": 1,
+            "expected": 1,
+            "returned": 1,
+            "shortage": False,
+        }
+        if native
+        else {},
     )
     result = fuse_rankings([ranking], sources, weights, k=60)
     details = fusion_details(result, weights, sources, 60)

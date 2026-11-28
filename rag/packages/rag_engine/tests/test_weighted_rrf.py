@@ -211,3 +211,51 @@ def test_explicit_competition_ranks_survive_outer_fusion_and_duplicate_ids():
 def test_invalid_original_ranks_are_rejected(ranks):
     with pytest.raises(ValueError, match="原順位"):
         RankedList("q", "keyword", ("a", "b"), ranks=ranks)
+
+
+def _retrieval(method: str) -> dict[str, object]:
+    return {
+        "method": method,
+        "scope_vector_chunks": 12,
+        "exact_max_chunks": 50,
+        "requested": 5,
+        "expected": 5,
+        "returned": 4,
+        "shortage": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("method", "score_source", "oracle_fusion", "reading"),
+    [
+        ("exact_scope", "method_ranks", False, "範囲の行を距離順に読む"),
+        ("native_index", "oracle_wrrf", True, "原生索引の近似検索"),
+    ],
+    ids=["exact_scope", "native_index"],
+)
+def test_hybrid_list_records_the_vector_reading_and_the_real_score_source(method, score_source, oracle_fusion, reading):
+    """混合検索の一覧の寄与の出所とベクトルの読み方を、実際の経路に合わせて記録する（#4198）。"""
+    from rag_engine.retrieval.weighted_rrf import fusion_details
+
+    w = RrfWeights()
+    s = source_weights(["q"], w)
+    ranking = RankedList("q", "hybrid", ("x", "y"), sources=("原質問",), native_scores=(0.02, 0.01), vector_retrieval=_retrieval(method))
+    details = fusion_details(fuse_rankings([ranking], s, w, k=60), w, s, 60)
+
+    (entry,) = details["rrf"]["lists"]
+    assert entry["score_source"] == score_source
+    assert entry["vector_retrieval"] == _retrieval(method)
+    assert details["rrf"]["oracle_internal_fusion"] is oracle_fusion
+    assert f"ベクトルの読み方: {reading}" in details["lines"][0]
+    assert "候補不足" in details["lines"][0]
+    assert ("Oracle 内部融合（WRRF）" in details["lines"][0]) is oracle_fusion
+
+
+def test_ranked_lists_without_native_scores_keep_the_rank_source():
+    w = RrfWeights()
+    s = source_weights(["q"], w)
+    result = fuse_rankings([RankedList("q", "vector", ("x",), vector_retrieval=_retrieval("exact_scope"))], s, w, k=60)
+    diagnostics = result.diagnostics(w, s, 60)
+    (entry,) = diagnostics["lists"]
+    assert entry["score_source"] == "rank"
+    assert diagnostics["oracle_internal_fusion"] is False
