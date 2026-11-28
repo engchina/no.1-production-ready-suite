@@ -98,11 +98,13 @@ export function WikiInspector({ scope, node, remaining, expanded, focus, select,
     enabled: unit,
     retry: false,
   });
+  // 関係は「関係」のタブを開いたときに読む（選ぶたびに読むと、原文・線の照会と重なって DB の読み取りの
+  // 上限に当たる。#5966）。展開は別に読み、同じ鍵の結果を使い回す。
   const relations = useQuery({
     queryKey: relationsKey(scope, node.id),
     queryFn: ({ signal }) => wikiApi.allRelations(scope, node.id, signal),
     staleTime: 60_000,
-    enabled: unit,
+    enabled: unit && tab === "relations",
     retry: false,
   });
   const children = useQuery({
