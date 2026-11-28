@@ -36,7 +36,7 @@ DEFAULT_TIMEOUT_SECONDS = 600.0
 
 
 def _section_headers() -> tuple[str, ...]:
-    """回答本文の節見出し(rag_engine の grounded.render と同じ。言語資源の answer_labels)。
+    """回答本文の節見出し(rag_engine の grounded.render_with_citations と同じ。言語資源の answer_labels)。
 
     括弧付きの見出しもある。
     章節の拡張が上限で読めなかった章節(#1436)と、回答時間の上限で省いた処理(#1516)の節も含む。
