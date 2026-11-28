@@ -20,6 +20,16 @@ class HttpRetryConfig:
     max_delay_seconds: float = 4.0
 
 
+@dataclass
+class RetryAttempts:
+    """``request_with_retry`` が実際に送った回数（設定の上限ではない）。
+
+    失敗の診断に「何回試したか」を出すときに渡す。422 などの再試行しない応答は 1 回で終わる。
+    """
+
+    count: int = 0
+
+
 def retry_config_from_settings(settings: object) -> HttpRetryConfig:
     """Settings から全 HTTP service 共通 retry 設定を作る。"""
     return HttpRetryConfig(
@@ -43,11 +53,17 @@ def request_with_retry(
     retry: HttpRetryConfig,
     logger: logging.Logger,
     log_extra: dict[str, object] | None = None,
+    sent: RetryAttempts | None = None,
     **kwargs: Any,
 ) -> httpx.Response:
-    """同期 httpx request を retryable failure だけ指数退避で再試行する。"""
+    """同期 httpx request を retryable failure だけ指数退避で再試行する。
+
+    ``sent`` を渡すと、実際に送った回数を数える。
+    """
     attempts = max(1, retry.attempts)
     for attempt in range(1, attempts + 1):
+        if sent is not None:
+            sent.count = attempt
         try:
             response = client.request(method, url, **kwargs)
         except httpx.InvalidURL:
@@ -95,11 +111,17 @@ async def async_request_with_retry(
     retry: HttpRetryConfig,
     logger: logging.Logger,
     log_extra: dict[str, object] | None = None,
+    sent: RetryAttempts | None = None,
     **kwargs: Any,
 ) -> httpx.Response:
-    """非同期 httpx request を retryable failure だけ指数退避で再試行する。"""
+    """非同期 httpx request を retryable failure だけ指数退避で再試行する。
+
+    ``sent`` を渡すと、実際に送った回数を数える。
+    """
     attempts = max(1, retry.attempts)
     for attempt in range(1, attempts + 1):
+        if sent is not None:
+            sent.count = attempt
         try:
             response = await client.request(method, url, **kwargs)
         except httpx.InvalidURL:
