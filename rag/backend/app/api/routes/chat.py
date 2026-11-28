@@ -123,7 +123,12 @@ from app.rag.support_guide_runtime import (
 )
 from app.rag.trace_bodies import capture_trace_bodies, read_saved_trace_body
 from app.rag.trace_store import AnswerTrace, TraceSnapshot, TraceTerminal, trace_snapshot
-from app.rag.wiki_explorer import WikiExplorer, WikiHandoff, WikiHandoffOptions
+from app.rag.wiki_explorer import (
+    WikiExplorer,
+    WikiHandoff,
+    WikiHandoffOptions,
+    require_selection_within_limit,
+)
 from app.schemas.chat import (
     ChatAnswerCancelResult,
     ChatClarificationRecord,
@@ -523,6 +528,7 @@ async def stream_message(
         raise HTTPException(403, "Wiki 検索を利用する権限がありません。")
     if request.wiki_sources and request.approved_faq_id:
         raise HTTPException(422, "選んだ原文を使う場合は登録済み Q&A を同時に指定できません。")
+    require_selection_within_limit(len(request.wiki_sources), settings)
     context = current_audit_request_context()
     try:
         get_chat_answer_run_service().ensure_capacity(
@@ -1079,7 +1085,10 @@ async def _prepare_chat_turn(
         explorer = await WikiExplorer.for_profile(oracle, search_answer_profile_id)
         chunks = await explorer.selected(request.wiki_sources, effective_request.filters)
         wiki_handoff = WikiHandoff(
-            search_answer_profile_id, tuple(request.wiki_sources), tuple(chunks)
+            search_answer_profile_id,
+            tuple(request.wiki_sources),
+            tuple(chunks),
+            only=request.wiki_source_mode == "only",
         )
     user_message = await oracle.append_message(
         StoredMessage(

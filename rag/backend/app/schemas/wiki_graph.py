@@ -98,6 +98,8 @@ class WikiSearchHits(BaseModel):
 
 class WikiSearchScope(BaseModel):
     knowledge_bases: list[KnowledgeBaseRef]
+    # 選んでチャットへ渡せる原文単位の数の上限（`RAG_WIKI_SELECTION_MAX_UNITS`。#5981）。
+    selection_limit: int
 
 
 class WikiGraphSearchPage(BaseModel):

@@ -286,3 +286,48 @@ def test_wiki_runs_alongside_the_answer_flow_and_is_awaited_or_cancelled() -> No
     finally:
         loop.call_soon_threadsafe(loop.stop)
         worker.join(2.0)
+
+
+# ---- Wiki 検索で選んだ原文だけで答える（#5981） ----
+
+
+def _selected(only: bool) -> AnswerEngine:
+    from app.rag.wiki_explorer import WikiHandoff
+
+    chunk = RetrievedChunk(
+        chunk_id="c1", document_id="doc", file_name="合成.md", text="合成の原文。", score=0.0
+    )
+    # oracle・genai は属性を持たない代役（触れば AttributeError で落ちる）。
+    return AnswerEngine(
+        Settings(rag_wiki_search_enabled=True),
+        oracle=cast(Any, object()),
+        genai=cast(Any, object()),
+        wiki_handoff=WikiHandoff("p", (), (chunk,), only=only),
+    )
+
+
+@pytest.mark.asyncio
+async def test_selected_only_answers_without_search_or_expansion() -> None:
+    value = _selected(only=True)
+    # 根拠の拡張（検索拡張・自動の Wiki 検索を含む）をしない。
+    assert value._selected_only and not value._expand
+    # 検索は DB・埋め込みを呼ばずに空を返す（原文は additional_sources で足す）。
+    found = await value._search(request(), _SearchState(), retrieval_queries=["合成の質問"])
+    assert found.child_chunks == [] and found.all_chunks == []
+
+
+def test_selected_sources_with_search_keep_the_expanded_flow() -> None:
+    value = _selected(only=False)
+    assert not value._selected_only and value._expand
+
+
+def test_selection_over_the_limit_is_rejected() -> None:
+    from fastapi import HTTPException
+
+    from app.rag.wiki_explorer import require_selection_within_limit
+
+    settings = Settings(rag_wiki_selection_max_units=3)
+    require_selection_within_limit(3, settings)
+    with pytest.raises(HTTPException) as raised:
+        require_selection_within_limit(4, settings)
+    assert raised.value.status_code == 422 and "3 件まで" in str(raised.value.detail)
