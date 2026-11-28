@@ -1,9 +1,11 @@
+// @vitest-environment happy-dom
 import { ConfirmProvider } from "@production-ready/ui";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { act, type ReactNode } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   API_KEY_ADMIN_NAV_ITEM,
@@ -279,5 +281,109 @@ describe("API キーの画面（#1805）", () => {
     expect(html).toContain("削除されたユーザー");
     expect(html).toContain("期限切れ");
     expect(html).not.toContain("API キーを発行</");
+  });
+});
+
+// #3121: 削除の確認は、削除するキーの使える製品（`products`）だけを「呼べなくなる」製品として出す。
+describe("API キーの削除の確認（#3121）", () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const LOSS = "このキーを使っている MCP クライアントは ";
+
+  /** 画面を描き、キーの行の「削除」から確認を開く。確認の文（alertdialog）と、後で押すための操作を返す。 */
+  async function openRevoke(node: (revoke: (id: string) => Promise<void>) => ReactNode, data: { mine?: ApiKey[]; all?: ApiKey[] }) {
+    const revoke = vi.fn<(id: string) => Promise<void>>(() => Promise.resolve());
+    const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } });
+    if (data.mine) client.setQueryData(API_KEYS_QUERY_KEY, { keys: data.mine, public_base_url: "" });
+    if (data.all) client.setQueryData(API_KEYS_ADMIN_QUERY_KEY, { keys: data.all });
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <QueryClientProvider client={client}>
+            <ConfirmProvider>{node(revoke)}</ConfirmProvider>
+          </QueryClientProvider>
+        </MemoryRouter>
+      );
+    });
+    const key = (data.mine ?? data.all ?? [])[0];
+    const press = async (element: Element | null | undefined) => {
+      if (!(element instanceof HTMLElement)) throw new Error("押す対象が無い");
+      await act(async () => element.click());
+      await act(async () => undefined);
+    };
+    await press(host.querySelector(`[data-testid="api-key-row-actions-${key.id}-trigger"]`));
+    const menuItem = Array.from(document.querySelectorAll('[role="menuitem"]')).find((item) => item.textContent?.trim() === "削除");
+    await press(menuItem);
+    const dialog = document.querySelector('[role="alertdialog"]');
+    const button = (label: string) =>
+      Array.from(dialog?.querySelectorAll("button") ?? []).find((item) => item.textContent?.trim() === label);
+    return {
+      text: dialog?.textContent ?? "",
+      revoke,
+      cancel: () => press(button("キャンセル")),
+      confirm: () => press(button("削除")),
+      cleanup: () => {
+        act(() => root.unmount());
+        host.remove();
+      },
+    };
+  }
+
+  it.each([
+    { products: ["rag"] as ApiKey["products"], expected: "RAG" },
+    { products: ["agent"] as ApiKey["products"], expected: "Agent" },
+    // 保存の順に関わらず、一覧の「使える製品」と同じ並び（RAG・NL2SQL・Agent の順）。
+    { products: ["agent", "rag"] as ApiKey["products"], expected: "RAG・Agent" },
+    { products: ["rag", "nl2sql", "agent"] as ApiKey["products"], expected: "RAG・NL2SQL・Agent" },
+  ])("自分のキー: $expected だけを呼べなくなると説明する", async ({ products, expected }) => {
+    const opened = await openRevoke(
+      (revoke) => <MyApiKeysPanel api={{ ...myApi, revoke }} endpoints={[]} />,
+      { mine: [{ ...KEY, products }] }
+    );
+    try {
+      expect(opened.text).toContain("「会社の PC の Claude Code」を削除しますか");
+      expect(opened.text).toContain(`${LOSS}${expected} を呼べなくなります。`);
+      expect(opened.text).not.toContain("さんのキーです");
+      // キャンセルでは削除しない。
+      await opened.cancel();
+      expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+      expect(opened.revoke).not.toHaveBeenCalled();
+    } finally {
+      opened.cleanup();
+    }
+  });
+
+  it.each([
+    { products: ["rag"] as ApiKey["products"], expected: "RAG" },
+    { products: ["agent"] as ApiKey["products"], expected: "Agent" },
+    { products: ["nl2sql", "agent"] as ApiKey["products"], expected: "NL2SQL・Agent" },
+  ])("管理の画面: 持ち主と $expected だけを説明し、削除を押すと削除する", async ({ products, expected }) => {
+    const opened = await openRevoke(
+      (revoke) => <ApiKeysAdminPage api={{ ...adminApi, revoke }} />,
+      { all: [{ ...KEY, products }] }
+    );
+    try {
+      expect(opened.text).toContain(`山田 さんのキーです。`);
+      expect(opened.text).toContain(`${LOSS}${expected} を呼べなくなります。`);
+      await opened.confirm();
+      expect(opened.revoke).toHaveBeenCalledWith(KEY.id);
+    } finally {
+      opened.cleanup();
+    }
+  });
+
+  it("管理の画面: 持ち主が削除されたユーザーのキーも、キーの製品で説明する", async () => {
+    const opened = await openRevoke(
+      (revoke) => <ApiKeysAdminPage api={{ ...adminApi, revoke }} />,
+      { all: [{ ...KEY, owner_display_name: "", products: ["rag"] }] }
+    );
+    try {
+      expect(opened.text).toContain("削除されたユーザー さんのキーです。");
+      expect(opened.text).toContain(`${LOSS}RAG を呼べなくなります。`);
+    } finally {
+      opened.cleanup();
+    }
   });
 });

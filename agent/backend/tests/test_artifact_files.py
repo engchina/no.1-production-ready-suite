@@ -554,7 +554,161 @@ def test_mcp_run_result_without_files_has_an_empty_list(people: People) -> None:
     assert FILES_DOWNLOAD_MESSAGE not in output.message
 
 
-# ---- Oracle（偽の表） -----------------------------------------------------------------------
+# ---- 完了した Run だけに渡す（#5950） -------------------------------------------------------
+
+NOT_DELIVERED = "回答が完成してからダウンロードできます。"
+UNFINISHED = [
+    RunStatus.QUEUED,
+    RunStatus.RUNNING,
+    RunStatus.WAITING_APPROVAL,
+    RunStatus.WAITING_CONFIRMATION,
+    RunStatus.FAILED,
+    RunStatus.CANCELLED,
+]
+
+
+def _set_status(run_id: str, status: RunStatus) -> None:
+    repository: Any = runtime_repository
+    with repository._lock:
+        run = repository._runs[run_id]
+        run.status = status
+        repository._mark_run_changed(run)
+
+
+def _run_with_unfinished_file(people: People, status: RunStatus) -> tuple[str, str]:
+    """実行中に保存したファイルを持ち、状態が ``status`` の持ち主の Run。"""
+    run_id = _running_run(runtime_repository, agent_id=people.agent_id, user=people.owner)
+    artifact = runtime_repository.save_file_artifact(
+        run_id, file_name="集計 表", mime_type=XLSX, data=DATA
+    )
+    _set_status(run_id, status)
+    return run_id, artifact.id
+
+
+def _mcp_get_run(people: People, run_id: str) -> dict[str, Any]:
+    created = client.post(
+        "/api/account/api-keys",
+        json={"name": "外部のクライアント", "products": ["agent"]},
+        headers=login(people.logins["owner"]),
+    )
+    assert created.status_code == 200, created.text
+    response = client.post(
+        "/api/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "agent_get_run", "arguments": {"run_id": run_id, "wait_seconds": 0}},
+        },
+        headers={"authorization": f"Bearer {created.json()['data']['token']}"},
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result.get("isError") is not True, response.text
+    output: dict[str, Any] = result["structuredContent"]
+    return output
+
+
+def _delivered_files(people: People, run_id: str, artifact_id: str) -> dict[str, Any]:
+    """外へ返す経路ごとの、ファイルの成果物の見え方。"""
+    headers = login(people.logins["owner"])
+    thread_id = runtime_repository.get_run(run_id).thread_id
+
+    def files(artifacts: list[dict[str, Any]]) -> list[str]:
+        return [item["id"] for item in artifacts if item["kind"] == FILE_ARTIFACT_KIND]
+
+    detail = client.get(f"/api/runs/{run_id}", headers=headers)
+    thread = client.get(f"/api/threads/{thread_id}", headers=headers)
+    listed = client.get(f"/api/runs/{run_id}/artifacts", headers=headers)
+    for response in (detail, thread, listed):
+        assert response.status_code == 200, response.text
+    [thread_run] = [item for item in thread.json()["data"]["runs"] if item["id"] == run_id]
+    one = client.get(f"/api/runs/{run_id}/artifacts/{artifact_id}", headers=headers)
+    download = client.get(f"/api/runs/{run_id}/artifacts/{artifact_id}/download", headers=headers)
+    return {
+        "detail": files(detail.json()["data"]["artifacts"]),
+        "thread": files(thread_run["artifacts"]),
+        "listed": files(listed.json()["data"]["artifacts"]),
+        "one": one,
+        "download": download,
+        "mcp": run_output(runtime_repository.get_run(run_id)),
+    }
+
+
+@pytest.mark.parametrize("status", UNFINISHED, ids=[item.value for item in UNFINISHED])
+def test_files_of_unfinished_runs_are_not_delivered(people: People, status: RunStatus) -> None:
+    run_id, artifact_id = _run_with_unfinished_file(people, status)
+
+    seen = _delivered_files(people, run_id, artifact_id)
+
+    # 画面の Run・会話・成果物の一覧に出さず、1 件・ダウンロードは 409（中身を返さない）。
+    assert (seen["detail"], seen["thread"], seen["listed"]) == ([], [], [])
+    for response in (seen["one"], seen["download"]):
+        assert response.status_code == 409, response.text
+        assert response.json()["error_messages"] == [NOT_DELIVERED]
+        assert not _leaks(response.text)
+    # MCP の応答にもファイルを出さず、受け取り方の案内も付けない。
+    assert seen["mcp"].files == []
+    assert FILES_DOWNLOAD_MESSAGE not in seen["mcp"].message
+    # 渡さないだけで、保存したファイルと Run の記録は消さない（監査に残す）。
+    assert [item.id for item in runtime_repository.get_run(run_id).artifacts] == [artifact_id]
+    assert runtime_repository.read_artifact_file(run_id, artifact_id).data == DATA
+    audit = client.get(f"/api/runs/{run_id}/audit", headers=login(people.logins["owner"]))
+    assert audit.status_code == 200, audit.text
+
+
+def test_files_are_delivered_once_the_run_completes(people: People) -> None:
+    run_id, artifact_id = _run_with_unfinished_file(people, RunStatus.RUNNING)
+    running = _delivered_files(people, run_id, artifact_id)
+    assert running["detail"] == [] and running["download"].status_code == 409
+    assert _mcp_get_run(people, run_id)["files"] == []
+
+    _set_status(run_id, RunStatus.COMPLETED)
+    completed = _delivered_files(people, run_id, artifact_id)
+
+    assert (completed["detail"], completed["thread"], completed["listed"]) == (
+        [artifact_id],
+        [artifact_id],
+        [artifact_id],
+    )
+    assert completed["one"].status_code == 200, completed["one"].text
+    assert completed["download"].status_code == 200
+    assert completed["download"].content == DATA
+    assert [item.file_name for item in completed["mcp"].files] == ["集計 表.xlsx"]
+    assert _mcp_get_run(people, run_id)["files"] == [
+        {"file_name": "集計 表.xlsx", "mime_type": XLSX, "size_bytes": len(DATA)}
+    ]
+
+
+def test_cancel_response_does_not_deliver_the_files(people: People) -> None:
+    run_id, _ = _run_with_unfinished_file(people, RunStatus.RUNNING)
+
+    response = client.post(f"/api/runs/{run_id}/cancel", headers=login(people.logins["owner"]))
+
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["status"] == RunStatus.CANCELLED
+    assert [item for item in data["artifacts"] if item["kind"] == FILE_ARTIFACT_KIND] == []
+
+
+def test_other_artifacts_of_unfinished_runs_are_still_returned(people: People) -> None:
+    run_id, _ = _run_with_unfinished_file(people, RunStatus.RUNNING)
+    repository: Any = runtime_repository
+    with repository._lock:
+        table = Artifact(name="表", kind="structured_table", content={"rows": []})
+        repository._runs[run_id].artifacts.append(table)
+        repository._mark_run_changed(repository._runs[run_id])
+    headers = login(people.logins["owner"])
+
+    detail = client.get(f"/api/runs/{run_id}", headers=headers).json()["data"]
+    one = client.get(f"/api/runs/{run_id}/artifacts/{table.id}", headers=headers)
+
+    # 判定はファイルの成果物だけ（実行中の表の結果などは今までどおり返す）。
+    assert [item["kind"] for item in detail["artifacts"]] == ["structured_table"]
+    assert one.status_code == 200, one.text
+
+
+# ---- Oracle（偽の表）-----------------------------------------------------------------------
 
 
 def _oracle_run(table: CheckpointTable) -> tuple[AgentRuntimeOracleCheckpointRepository, str]:

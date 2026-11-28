@@ -32,7 +32,7 @@ import {
 
 import { ApiKeysTable } from "./ApiKeysTable";
 import { caCertificateUrl, mcpEndpointRows, mcpRegistrationCaUrl, mcpRegistrationExample } from "./endpoints";
-import { apiKeysTranslator, type ApiKeysMessages } from "./messages";
+import { apiKeyProductNames, apiKeysTranslator, type ApiKeysMessages } from "./messages";
 import {
   API_KEY_MAX_PER_USER,
   API_KEY_NAME_MAX_LENGTH,
@@ -156,7 +156,7 @@ export function MyApiKeysPanel({
   async function confirmRevoke(key: ApiKey) {
     const ok = await confirm({
       title: t("apiKeys.revokeTitle", { name: key.name }),
-      description: t("apiKeys.revokeDescription"),
+      description: t("apiKeys.revokeDescription", { products: apiKeyProductNames(key.products, t) }),
       confirmLabel: t("apiKeys.revoke"),
       tone: "danger",
     });
