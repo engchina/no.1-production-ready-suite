@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { MessagesSquare, Search, ListRestart, SlidersHorizontal } from "lucide-react";
+import { MessagesSquare, Search, SlidersHorizontal } from "lucide-react";
 import {
   Button,
   Card,
@@ -143,10 +143,6 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
 
     setRun((r) => r + 1);
   };
-  function newSearch() {
-    patch({ query: "", submitted: "", root: "", selectedUnit: "", items: [], offset: 0, appliedKb: state.kb, appliedMethod: state.method });
-    document.getElementById("wiki-question")?.focus();
-  }
   const pick = (p: WikiPick) =>
     setState((s) => ({
       ...s,
@@ -219,10 +215,6 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
       <div className="border-t border-border pt-4">
         <FieldActionRow
           actions={
-            <>
-            {manual && state.submitted && (
-              <Button size="lg" icon={ListRestart} variant="secondary" onClick={newSearch}>{t("wiki.search.new")}</Button>
-            )}
             <Button
               size="lg"
               icon={Search}
@@ -232,7 +224,6 @@ export function WikiWorkspace({ knowledgeBaseId }: { knowledgeBaseId?: string })
             >
               {t("search.button")}
             </Button>
-            </>
           }
         >
           <TextareaField

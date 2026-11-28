@@ -2235,7 +2235,6 @@ export const ja = {
   "wiki.search.edgeCount": "関係 {count} 件",
   "wiki.search.collapse": "展開を折りたたむ",
   "wiki.search.undoCollapse": "折りたたみを元に戻す",
-  "wiki.search.new": "新しい検索を開始",
   "wiki.search.loadingProfiles": "検索・回答プロファイルを読み込んでいます",
   "wiki.search.loadingScope": "検索対象のナレッジベースを読み込んでいます",
   "wiki.search.loadingHits": "Wiki の原文を検索しています",
