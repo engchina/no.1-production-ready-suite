@@ -6,7 +6,8 @@
 - 分数: 短い横線の真上と真下に、線の幅に収まり中央にそろった字がある（``a/(b-c)``）。線の高さの隣に演算子が
   ある線は式の中の線と言えるので、線の長さ・字との隙間の上限を広げ、折り返した分子・分母も含める。
 - 式の項: 線のある分数と演算子でつながる、線の高さを挟んだ複数行の字は折り返した 1 つの項にする（``P Q``）。
-  左右で対になる曲線の括弧も本文に戻す（``_expression_elements``）。
+  左右で対になる曲線の括弧も本文に戻す（``_expression_elements``）。式に入る語の真下の小さな字の行（単位など）は、
+  その語の直後に置く（``_annotations``。#4225）。
 - 根号: 線の左端に斜めの線がつながるなら分数の線ではなく、線の下の字を ``√(...)`` にする。
 - 線の無い分数: 同じページに線のある分数が無く、上下の字の並びの真ん中の高さに同じ式の行があり、演算子で
   隣り合い、字の配置で 2 行の式・行列・左そろえの並び・折り返しの行ではないと言えるものだけ
@@ -53,6 +54,9 @@ _TERM_REACH_RATIO = 2.5
 # 折り返した項の行間の下限（上付き・下付きを除く）と、行の真ん中と線の高さの差の許容（字の大きさに対する割合）。
 _TERM_MIN_PITCH_RATIO = 0.8
 _TERM_AXIS_RATIO = 0.5
+# 項の下の小さな字の行（単位など。#4225）。線の高さの字の真ん中から行の真ん中までの距離の上限（字の大きさに
+# 対する割合）。字の大きさは上付き・下付きと同じ上限（_SCRIPT_MAX_SIZE_RATIO）より小さいものだけ。
+_ANNOTATION_MAX_DROP_RATIO = 1.6
 # 曲線の括弧の両端の高さの差の許容（字の大きさに対する割合）。
 _BRACKET_PAIR_RATIO = 1.0
 # 分数を隣の演算子の高さにそろえる差の上限（字の大きさに対する割合）。
@@ -590,22 +594,110 @@ def _absorb_expression(
 ) -> tuple[list[_Token], set[str]]:
     """線のある分数と演算子でつながる項を 1 つの式にまとめる（字の並びと、まとめる塊の key を返す）。
 
-    折り返した項は 1 つの項にし、左右で対になる曲線の括弧は本文に戻す。
+    折り返した項は 1 つの項にし、左右で対になる曲線の括弧は本文に戻す。項の真下の小さな字の行（単位など）は、
+    その項が式に入るときだけ項の直後に置く（#4225）。
     """
-    elements = _expression_elements(fraction, tokens, other_paths)
+    annotations = _annotations(fraction, tokens)
+    annotated = {id(token) for _, line in annotations for token in line}
+    elements = _expression_elements(fraction, [token for token in tokens if id(token) not in annotated], other_paths)
     accepted = [
         *_walk_expression(fraction, elements, heights, rightward=False),
         *_walk_expression(fraction, elements, heights, rightward=True),
     ]
     replaced = {id(token) for element in accepted if element.kind == "term" for token in element.tokens}
+    in_atoms = {id(token) for element in accepted if element.kind == "atom" for token in element.tokens}
+    attached = [(head, line) for head, line in annotations if all(id(token) in in_atoms for token in head)]
+    replaced.update(id(token) for _, line in attached for token in line)
     result = [token for token in tokens if id(token) not in replaced]
     keys: set[str] = set()
     for element in accepted:
         keys.update(key for token in element.tokens for key in token.keys)
         if element.kind == "term":
             result.append(_term_token(element.tokens, fraction.center))
+    for head, line in attached:
+        keys.update(key for token in line for key in token.keys)
+        result.append(_annotation_token(head, line))
     result.extend(_bracket_tokens(fraction, accepted, tokens))
     return result, keys
+
+
+def _annotations(fraction: _Token, tokens: Sequence[_Token]) -> list[tuple[list[_Token], list[_Token]]]:
+    """線の高さの語の真下にある小さな字の行（項の単位など）と、その語の組（#4225）。
+
+    行は語より小さな字で、語の字の下端より下にあり（下付きと区別する）、横の真ん中が語の幅の中にあり、
+    線の高さの語のうち 1 つだけの下にあるものに限る。語と行の間に別の字があるものは除く。
+    """
+    axis, size = fraction.center, fraction.size
+    plain = [token for token in tokens if not token.is_composite]
+    words = _axis_words(fraction, plain)
+    found: list[tuple[list[_Token], list[_Token]]] = []
+    used: set[int] = set()
+    for line in _baseline_runs(plain):
+        if line[0].size > _SCRIPT_MAX_SIZE_RATIO * size or _overlaps(line, fraction):
+            continue
+        drop = axis - line[0].center
+        if not 0 < drop <= _ANNOTATION_MAX_DROP_RATIO * size:
+            continue
+        left, right = line[0].left, line[-1].right
+        under = [word for word in words if word[0].left < right and word[-1].right > left]
+        if len(under) != 1:
+            continue
+        head = under[0]
+        middle = (left + right) / 2
+        top = max(token.high for token in line)
+        bottom = min(token.low for token in head)
+        if top > bottom or not head[0].left <= middle <= head[-1].right or id(head[0]) in used:
+            continue
+        line_ids = {id(token) for token in line}
+        between = any(
+            id(token) not in line_ids and token.left < right and token.right > left and top < token.center < bottom for token in plain
+        )
+        if between:
+            continue
+        used.add(id(head[0]))
+        found.append((head, line))
+    return found
+
+
+def _axis_words(fraction: _Token, tokens: Sequence[_Token]) -> list[list[_Token]]:
+    """線の高さの本文の大きさの字を、演算子と空白で区切った語にする（演算子は語に入れない）。"""
+    axis, size = fraction.center, fraction.size
+    words: list[list[_Token]] = []
+    for run in _baseline_runs(tokens):
+        if abs(run[0].center - axis) > _AXIS_OPERATOR_HEIGHT_RATIO * size or abs(run[0].size - size) > _STACK_SIZE_RATIO * size:
+            continue
+        current: list[_Token] = []
+        for token in run:
+            if token.text in _STACK_OPERATORS:
+                if current:
+                    words.append(current)
+                current = []
+                continue
+            if current and (token.space_before or token.left - current[-1].right >= _SPACE_GAP_RATIO * size):
+                words.append(current)
+                current = []
+            current.append(token)
+        if current:
+            words.append(current)
+    return words
+
+
+def _annotation_token(head: Sequence[_Token], line: Sequence[_Token]) -> _Token:
+    """小さな字の行を、語の直後の幅の無い 1 つの項にする（語との間は空白）。"""
+    text, _ = _line_text(sorted(line, key=lambda item: item.left))
+    anchor = head[-1]
+    return _Token(
+        text=text,
+        left=anchor.right,
+        right=anchor.right,
+        baseline=anchor.baseline,
+        size=anchor.size,
+        low=anchor.low,
+        high=anchor.high,
+        keys=frozenset(key for token in line for key in token.keys),
+        is_composite=True,
+        space_before=True,
+    )
 
 
 def _expression_elements(

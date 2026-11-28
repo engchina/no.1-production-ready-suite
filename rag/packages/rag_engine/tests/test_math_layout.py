@@ -336,17 +336,21 @@ def test_no_text_layer_returns_nothing() -> None:
 
 def _pdf_with_fraction(path: Path) -> Path:
     """実際の PDF の字と線（線は塗りの細い四角と線の 2 通り）。"""
-    stream = b"\n".join(
-        (
-            b"BT /F1 10 Tf 90 697 Td (A *) Tj ET",
-            b"BT /F1 10 Tf 120 703 Td (1) Tj ET",
-            b"BT /F1 10 Tf 112 689 Td (1-x) Tj ET",
-            b"110 699.7 24 0.6 re f",
-            b"BT /F1 10 Tf 80 650 Td (C = d) Tj ET",
-            b"BT /F1 6 Tf 104 654 Td (2) Tj ET",
-            b"0.5 w 80 600 m 90 600 l S",
-        )
+    return _pdf_with_stream(
+        path,
+        b"BT /F1 10 Tf 90 697 Td (A *) Tj ET",
+        b"BT /F1 10 Tf 120 703 Td (1) Tj ET",
+        b"BT /F1 10 Tf 112 689 Td (1-x) Tj ET",
+        b"110 699.7 24 0.6 re f",
+        b"BT /F1 10 Tf 80 650 Td (C = d) Tj ET",
+        b"BT /F1 6 Tf 104 654 Td (2) Tj ET",
+        b"0.5 w 80 600 m 90 600 l S",
     )
+
+
+def _pdf_with_stream(path: Path, *operations: bytes) -> Path:
+    """1 ページの内容（Helvetica の字と線の描画の命令）だけを持つ PDF。"""
+    stream = b"\n".join(operations)
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
         b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -857,3 +861,95 @@ def test_adapter_uses_a_heading_only_as_part_of_a_ruled_expression(tmp_path: Pat
         ("1", "Formula", "A = num/(1-x)"),
         ("3", "Section-header", "Plain heading"),
     ]
+
+
+# 以下は #4225。項の真下に小さな字の単位の行がある式（文字はすべて合成）。
+_UNIT_SIZE = 7.0
+
+
+def _unit_under(text: str, head_left: float, head_chars: int = 1, baseline: float = 487.0) -> list[PdfGlyph]:
+    """線の高さの語（head_left から head_chars 字）の真下に中央をそろえた小さな字の行。"""
+    middle = head_left + (head_chars * _SIZE * 0.6 - _SIZE * 0.1) / 2
+    width = len(text) * _UNIT_SIZE * 0.6
+    return _run(text, middle - width / 2, baseline, size=_UNIT_SIZE)
+
+
+def _unit_formula() -> list[PdfGlyph]:
+    parts, _ = _fraction("1", "S", 172.0, 500.0)
+    return [
+        *_axis_run("P", 100.0),
+        *_unit_under("(u)", 100.0),
+        *_axis_run("=", 112.0),
+        *_axis_run("Q", 124.0),
+        *_unit_under("(v)", 124.0),
+        *_axis_run("×", 136.0),
+        *_axis_run("R", 148.0),
+        *_axis_run("×", 160.0),
+        *parts,
+    ]
+
+
+def test_unit_lines_under_terms_follow_their_terms() -> None:
+    """項の下の小さな字の単位の行は、その項の直後に置き、式の項の順序を保つ。"""
+    _, rule = _fraction("1", "S", 172.0, 500.0)
+
+    restored = _text_of([_block("P Q R = × × 1 S (u) (v)")], _unit_formula(), rule)
+
+    assert restored == ["P (u) = Q (v) × R × 1/S"]
+
+
+@pytest.mark.parametrize(
+    ("extra", "text", "expected"),
+    [
+        # 下付き（字の下端が語の下端より上）は単位の行にせず、今までどおり下付きにする。
+        (_run("1", 154.0, 495.0, size=_UNIT_SIZE), "R × 1 1 S", "R_1× 1/S"),
+        # 2 つの語にまたがる小さな字の行（脚注など）は、どの項のものか言えないので項にしない。
+        (_run("note text", 136.0, 487.0, size=_UNIT_SIZE), "R × 1 S note text", None),
+        # 本文の大きさの行は単位の行ではない（折り返しの判定のまま）。
+        (_run("(u)", 146.0, 487.0), "R × 1 S (u)", None),
+    ],
+    ids=["subscript", "spanning_two_words", "body_size_line"],
+)
+def test_lines_that_are_not_unit_lines_are_not_attached(extra: list[PdfGlyph], text: str, expected: str | None) -> None:
+    parts, rule = _fraction("1", "S", 172.0, 500.0)
+    glyphs = [*_axis_run("R", 148.0), *_axis_run("×", 160.0), *parts, *extra]
+
+    restored = _text_of([_block(text)], glyphs, rule)
+
+    if expected is not None:
+        assert restored == [expected]
+    else:
+        assert all("(u) ×" not in item and "R (u)" not in item and "R note" not in item for item in restored)
+
+
+def test_unit_line_under_a_term_that_is_not_in_the_expression_is_left_alone() -> None:
+    """演算子でつながらない語の下の単位の行は、式に入れない（元の並びのまま）。"""
+    parts, rule = _fraction("1", "S", 172.0, 500.0)
+    glyphs = [*_axis_run("K", 140.0), *_unit_under("(w)", 140.0), *parts]
+
+    restored = _text_of([_block("K 1 S (w)")], glyphs, rule)
+
+    assert all("K (w)" not in item for item in restored)
+
+
+def test_adapter_restores_unit_lines_from_a_real_pdf(tmp_path: Path) -> None:
+    """text layer のある合成の PDF で、項の下の小さな字の単位の行を項の直後に戻す（#4225）。"""
+    pdf = _pdf_with_stream(
+        tmp_path / "units.pdf",
+        b"BT /F1 10 Tf 100 696.5 Td (P) Tj ET",
+        b"BT /F1 7 Tf 99 687 Td (\\(u\\)) Tj ET",
+        b"BT /F1 10 Tf 112 696.5 Td (=) Tj ET",
+        b"BT /F1 10 Tf 124 696.5 Td (Q) Tj ET",
+        b"BT /F1 7 Tf 123.6 687 Td (\\(v\\)) Tj ET",
+        b"BT /F1 10 Tf 138 696.5 Td (*) Tj ET",
+        b"BT /F1 10 Tf 148 696.5 Td (R) Tj ET",
+        b"BT /F1 10 Tf 160 696.5 Td (*) Tj ET",
+        b"BT /F1 10 Tf 174.2 703 Td (1) Tj ET",
+        b"BT /F1 10 Tf 173.7 689 Td (S) Tj ET",
+        b"172 699.7 10 0.6 re f",
+    )
+    records = [_record("1", "P = Q * R * 1 S (u) (v)", [190.0, 170.0, 380.0, 240.0], label="formula")]
+
+    restored = _restore_math_layout(records, pdf, {1: _PAGE})
+
+    assert [record.text for record in restored] == ["P (u) = Q (v) * R * 1/S"]

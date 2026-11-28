@@ -54,6 +54,12 @@ SERVICE_ADAPTER_BACKENDS = frozenset({"oci_document_understanding"})
 ExternalAdapterRunner = Callable[[str, bytes, "SourceProfile | None", str], "ParserRegistryResult"]
 
 
+# `POST /parse` が、要求の言語資源（``language_pack``）を読めないときに 422 の ``detail.code`` で
+# 返すエラーコード(#5685)。backend と解析サービスの版の食い違い（再起動していない旧プロセス）で
+# 起きるので、backend は一時的な障害ではなく版の確認を案内する。
+LANGUAGE_PACK_REJECTED_ERROR_CODE = "language_pack_rejected"
+
+
 @dataclass(frozen=True)
 class ParserRegistryResult:
     """parser registry の結果。None extraction は Enterprise AI fallback を意味する。"""
