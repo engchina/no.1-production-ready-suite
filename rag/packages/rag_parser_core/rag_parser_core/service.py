@@ -23,7 +23,7 @@ from pydantic import ValidationError
 
 from rag_parser_core.language import LanguagePack, LanguagePackError, bind_pack, pack_from_payload
 from rag_parser_core.registry import ParserRegistryResult, run_external_adapter
-from rag_parser_core.result import ParseHealth, ParseResponse
+from rag_parser_core.result import LANGUAGE_PACK_REJECTED_ERROR_CODE, ParseHealth, ParseResponse
 from rag_parser_core.source import SourceProfile
 
 # service 系 backend(OCI クラウド)の /parse ハンドラ。bytes + content_type +
@@ -79,11 +79,18 @@ def _runtime_health_ready(runtime_health: Callable[[], bool]) -> bool:
 
 
 def _language_pack(payload: str | None) -> LanguagePack | None:
-    """要求の言語資源の差(JSON)を読む。形の誤りは 422(backend は検証した値だけを送る)。"""
+    """要求の言語資源の差(JSON)を読む。読めなければ 422 と安定したエラーコードを返す。
+
+    backend は検証した値だけを送るので、読めないのは backend と解析サービスの版の食い違い
+    (#5685)。``detail.code`` で backend が原因を見分ける。
+    """
     try:
         return pack_from_payload(payload)
     except (ValueError, LanguagePackError) as exc:
-        raise HTTPException(status_code=422, detail=f"language_pack: {exc}") from exc
+        raise HTTPException(
+            status_code=422,
+            detail={"code": LANGUAGE_PACK_REJECTED_ERROR_CODE, "message": f"language_pack: {exc}"},
+        ) from exc
 
 
 def create_parse_app(
