@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from rag_parser_core.chunk_separators import separator_unit_spans
+from rag_parser_core.non_source_text import NON_SOURCE_RANGES_KEY, dump_ranges, join_ranges, load_ranges
 from rag_parser_core.vision_text import VISION_TEXT_PROJECTION_VERSION
 
 from rag_engine.chunking.constants import (
@@ -571,7 +572,10 @@ def _child_chunk(
     # 検索文の土台。Vision 成功時の図の OCR を外した本文で、_apply_contextual_child_search_text が
     # これに文脈を足して retrieval_text を確定する (#900)。回答用の text には OCR を残す。
     retrieval_body = _join_records_text(ordered_records, for_retrieval=True) or text
-    if not text:
+    # 本文の無い図・帳票の chunk は、画像の ID・ファイル・ページの標識を本文にする（検索と画像の対応に使う）。
+    # 標識は原文ではないので、本文の全体を原文に無い範囲として宣言する（引用・原文の抜粋に出さない。#5793）。
+    image_marker = not text
+    if image_marker:
         text = retrieval_body = _image_fallback_text(ordered_records, source_file_name)
     refs = [_source_record_ref(record) for record in ordered_records]
     pages = [ref["page"] for ref in refs]
@@ -600,6 +604,8 @@ def _child_chunk(
         if record.get("category") in {"Text", "List-item"} and start >= 0 and text.find(body, start + 1) < 0:
             native_ranges.append(dict(record_id=record.get("id"), page=record.get("page"), start=start, end=start + len(body)))
     metadata.setdefault("layout", {})["native_text_ranges"] = native_ranges
+    if image_marker and text:
+        metadata[NON_SOURCE_RANGES_KEY] = dump_ranges([(0, len(text))])
     return DocumentChunk(
         chunk_id=f"chunk-{source_engine_id}-c{chunk_seq:06d}",
         chunk_level=CHILD_CHUNK_LEVEL,
@@ -664,6 +670,13 @@ def _parent_chunk(
             native_ranges.append({**item, "start": offset + item["start"], "end": offset + item["end"]})
         cursor = offset + len(child.text)
     metadata.setdefault("layout", {})["native_text_ranges"] = native_ranges
+    # 子の原文に無い範囲（画像の標識。#5793）を、子を "\n\n" でつないだ親の本文の座標へ移す。
+    non_source = join_ranges(
+        [(child.text, load_ranges(child.metadata.get(NON_SOURCE_RANGES_KEY), len(child.text))) for child in children if child.text],
+        "\n\n",
+    )
+    if non_source:
+        metadata[NON_SOURCE_RANGES_KEY] = dump_ranges(non_source)
     return DocumentChunk(
         chunk_id=chunk_id,
         chunk_level=PARENT_CHUNK_LEVEL,
