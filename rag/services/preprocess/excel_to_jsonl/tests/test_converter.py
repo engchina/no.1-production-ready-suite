@@ -84,7 +84,7 @@ def _payload(source: bytes, **options: Any) -> dict[str, Any]:
     assert outcome.converted is True, outcome.warnings
     assert outcome.derived_bytes is not None
     assert outcome.derived_content_type == STRUCTURED_RECORDS_CONTENT_TYPE
-    assert outcome.converter_version == "v9"
+    assert outcome.converter_version == "v10"
     return _loaded(outcome.derived_bytes)
 
 
@@ -176,20 +176,30 @@ def test_values_keep_display_formats() -> None:
     }
 
 
-def test_formula_without_cached_value_is_diagnosed_not_blank() -> None:
+def test_formula_without_cached_value_is_diagnosed_not_put_in_text() -> None:
     """openpyxl が書いたファイルは数式のキャッシュ値を持たない（計算されていない）。
 
-    空にせず数式の文字列にし（no.1-rag と同じ）、セルの位置付きの診断を残す。
+    数式の文字列は値ではないので本文に入れず、件数とセルの位置を warning と診断に残す（#6006）。
     """
-    workbook = _workbook({"S": [["単価", "数量", "金額"], [100, 3, "=A2*B2"]]})
+    workbook = _workbook({"S": [["単価", "数量", "金額"], [100, 3, "=A2*B2"], [200, 2, "=A3*B3"]]})
     outcome = convert(_bytes(workbook), "", "excel_to_jsonl", None)
-    assert "excel_formula_without_cached_value:S:1" in outcome.warnings
+    assert "excel_formula_without_cached_value:S:2:C2,C3" in outcome.warnings
     assert outcome.derived_bytes is not None
+    assert b"=A2*B2" not in outcome.derived_bytes
     sheet = _loaded(outcome.derived_bytes)["sheets"][0]
-    assert sheet["blocks"][0]["values"]["金額"] == "=A2*B2"
+    assert "金額" not in sheet["blocks"][0]["values"]
+    assert sheet["blocks"][0]["values"]["単価"] == "100"
     assert sheet["diagnostics"] == [
-        {"code": "formula_without_cached_value", "cell": "C2", "detail": None}
+        {"code": "formula_without_cached_value", "cell": "C2", "detail": None},
+        {"code": "formula_without_cached_value", "cell": "C3", "detail": None},
     ]
+
+
+def test_sheet_of_only_uncached_formulas_still_warns() -> None:
+    """値のあるセルが無く表にならないシートでも、キャッシュ値の無い数式を知らせる。"""
+    workbook = _workbook({"S": [["見出し"]], "計算": [["=1+1", "=2+2"]]})
+    outcome = convert(_bytes(workbook), "", "excel_to_jsonl", None)
+    assert "excel_formula_without_cached_value:計算:2:A1,B1" in outcome.warnings
 
 
 def test_merged_header_and_merged_data_cells() -> None:

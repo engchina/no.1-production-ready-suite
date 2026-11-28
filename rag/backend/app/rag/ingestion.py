@@ -229,7 +229,8 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 16: PowerPoint の原本の図形と接続線を、図の読み取りの入力と図の説明に入れる。#5359。
 # 17: 原本の接続線の行に、両端の図形の文字も書く。#5386。
 # 18: 原本の位置(source_map)の範囲ごとに原本の行を記録する。#5450。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 19
+# 20: Excel のキャッシュ値の無い数式の文字列を表のセル(本文)にしない。#6006。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 20
 # 原本の図形と接続線を読む PowerPoint の形式（OOXML。Office→PDF で変換して解析するとき。#5359）。
 _PRESENTATION_SHAPE_EXTENSIONS = frozenset({".pptx", ".pptm"})
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。

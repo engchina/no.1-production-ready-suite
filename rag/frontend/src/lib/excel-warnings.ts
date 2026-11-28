@@ -19,9 +19,16 @@ export function excelWarningLabel(warning: string): string | null {
     case HEADER_LOW_CONFIDENCE:
       return t("documents.excelWarning.headerLowConfidence", { sheet: args.join(":") });
     case "excel_formula_without_cached_value": {
-      const count = args.length > 1 ? args[args.length - 1] : "";
-      const sheet = args.length > 1 ? args.slice(0, -1).join(":") : args.join(":");
-      return t("documents.excelWarning.formulaWithoutValue", { sheet, count });
+      // `<シート>:<件数>:<先頭のセル,…>`（#6006）。シート名は「:」を含みうるので末尾から取る。
+      const sheet = args.slice(0, -2).join(":");
+      const count = args.at(-2) ?? "";
+      const listed = (args.at(-1) ?? "").split(",").filter(Boolean);
+      const more = Number(count) > listed.length ? " …" : "";
+      return t("documents.excelWarning.formulaWithoutValue", {
+        sheet,
+        count,
+        cells: `${listed.join(", ")}${more}`,
+      });
     }
     case "excel_sheet_not_found":
       return t("documents.excelWarning.sheetNotFound", { sheet: args.join(":") });
