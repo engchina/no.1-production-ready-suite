@@ -265,10 +265,6 @@ class FakeWorkspaceOracle:
         # 実装は JSON 列を読まない DocumentSummary を返す。fake は詳細(その上位型)で代用する。
         return self.documents.get(document_id)
 
-    async def get_document_serving_chunk_set_id(self, document_id: str) -> None:
-        _ = document_id
-        return None
-
     async def list_document_knowledge_base_configs(
         self, document_id: str
     ) -> list[tuple[str, object]]:

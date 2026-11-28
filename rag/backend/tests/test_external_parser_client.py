@@ -236,6 +236,38 @@ def test_openai_invalid_truncated_and_empty_results_fail_fast(
     assert exc_info.value.warning_code == warning_code
 
 
+@pytest.mark.parametrize(("status", "sends"), [(400, 1), (503, 3)], ids=["not_retried", "retried"])
+def test_http_error_reports_actual_attempts(
+    monkeypatch: pytest.MonkeyPatch, status: int, sends: int
+) -> None:
+    """失敗の試行回数は、設定の上限ではなく実際に送った回数(#5685)。"""
+    calls = 0
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(status, json={"detail": "synthetic"})
+
+    _install_transport(monkeypatch, handle)
+    parser = ExternalParserClient(
+        Settings(
+            rag_parser_dots_ocr_api_host="https://dots.example.com",
+            rag_parser_dots_ocr_model="dots-model",
+            rag_http_service_retry_attempts=3,
+            rag_http_service_retry_initial_delay_seconds=0,
+        )
+    )
+
+    with pytest.raises(ExternalParserCallError) as exc_info:
+        parser.parse(
+            "dots_ocr", b"png", _profile("scan.png", content_type="image/png"), "image/png"
+        )
+
+    assert exc_info.value.reason == "http_error"
+    assert calls == sends
+    assert exc_info.value.attempts == sends
+
+
 def test_api_key_is_not_exposed_in_error_or_logs(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

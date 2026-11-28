@@ -23,7 +23,11 @@ from pr_backend_core.logging import safe_exception_fields, safe_url
 from pr_backend_core.observability.request_context import outbound_correlation_headers
 from rag_parser_core.capabilities import ADAPTER_CAPABILITIES, supported_modalities
 from rag_parser_core.language import overrides_payload
-from rag_parser_core.result import ParseResponse, ParserRegistryResult
+from rag_parser_core.result import (
+    LANGUAGE_PACK_REJECTED_ERROR_CODE,
+    ParseResponse,
+    ParserRegistryResult,
+)
 from rag_parser_core.structured_records import STRUCTURED_RECORDS_REQUIRES_JSONL_BACKEND_WARNING
 
 from app.clients.external_parser import (
@@ -32,7 +36,7 @@ from app.clients.external_parser import (
     ExternalParserCallError,
     ExternalParserClient,
 )
-from app.clients.http_retry import request_with_retry, retry_config_from_settings
+from app.clients.http_retry import RetryAttempts, request_with_retry, retry_config_from_settings
 from app.config import Settings
 from app.rag.language_pack_releases import active_release
 from app.schemas.document import SourceProfile
@@ -103,6 +107,10 @@ def supported_formats_label(backend: str) -> str:
         _MODALITY_LABELS.get(modality.value, modality.value) for modality in modalities
     )
 
+
+# 解析サービスが要求の言語資源を読めなかったときの理由(#5685)。backend と解析サービスの版の
+# 食い違いで起き、再試行では直らない。
+LANGUAGE_PACK_REJECTED_REASON = LANGUAGE_PACK_REJECTED_ERROR_CODE
 
 # 準備中(ロードマップ)の解析エンジンが選ばれていたときの理由とエラーコード(#3374)。
 PARSER_ENGINE_ROADMAP_REASON = "engine_roadmap"
@@ -204,7 +212,7 @@ class ParserServiceClient:
                         exc.reason,
                         service_url=self._external_connection_url(backend),
                         status_code=exc.status_code,
-                        attempts=self._retry.attempts,
+                        attempts=exc.attempts,
                         warning_code=exc.warning_code,
                     ) from exc
                 return _fallback(
@@ -242,30 +250,45 @@ class ParserServiceClient:
         progress_id = _PARSE_PROGRESS_ID.get()
         if progress_id is not None:
             data["progress_id"] = progress_id
+        # 診断の試行回数は実際に送った回数(設定の上限ではない。#5685)。
+        sent = RetryAttempts()
         try:
             payload = self._post_parse_json(
-                backend, url, files=files, data=data, progress_id=progress_id
+                backend, url, files=files, data=data, progress_id=progress_id, sent=sent
             )
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code
+            reason = (
+                LANGUAGE_PACK_REJECTED_REASON
+                if _is_language_pack_rejection(exc.response)
+                else "http_error"
+            )
             logger.warning(
                 "parser service returned error status",
                 extra={
                     "parser_backend": backend,
                     "service_url": safe_url(url),
                     "status_code": status_code,
-                    "attempts": self._retry.attempts,
+                    "reason": reason,
+                    "attempts": sent.count,
                     **safe_exception_fields(exc),
                 },
             )
             if fail_fast:
                 raise ParserServiceUnavailableError(
                     backend,
-                    "http_error",
+                    reason,
                     service_url=url,
                     status_code=status_code,
-                    attempts=self._retry.attempts,
+                    attempts=sent.count,
+                    warning_code=(
+                        LANGUAGE_PACK_REJECTED_ERROR_CODE
+                        if reason == LANGUAGE_PACK_REJECTED_REASON
+                        else None
+                    ),
                 ) from exc
+            if reason == LANGUAGE_PACK_REJECTED_REASON:
+                return _fallback(backend, f"{backend}_adapter_{LANGUAGE_PACK_REJECTED_ERROR_CODE}")
             return _fallback(backend, f"{backend}_adapter_service_unreachable")
         except httpx.TimeoutException as exc:
             logger.warning(
@@ -273,7 +296,7 @@ class ParserServiceClient:
                 extra={
                     "parser_backend": backend,
                     "service_url": safe_url(url),
-                    "attempts": self._retry.attempts,
+                    "attempts": sent.count,
                     **safe_exception_fields(exc),
                 },
             )
@@ -282,7 +305,7 @@ class ParserServiceClient:
                     backend,
                     "timeout",
                     service_url=url,
-                    attempts=self._retry.attempts,
+                    attempts=sent.count,
                 ) from exc
             return _fallback(backend, f"{backend}_adapter_service_unreachable")
         except httpx.HTTPError as exc:
@@ -291,7 +314,7 @@ class ParserServiceClient:
                 extra={
                     "parser_backend": backend,
                     "service_url": safe_url(url),
-                    "attempts": self._retry.attempts,
+                    "attempts": sent.count,
                     **safe_exception_fields(exc),
                 },
             )
@@ -300,7 +323,7 @@ class ParserServiceClient:
                     backend,
                     "unreachable",
                     service_url=url,
-                    attempts=self._retry.attempts,
+                    attempts=sent.count,
                 ) from exc
             return _fallback(backend, f"{backend}_adapter_service_unreachable")
         except (json.JSONDecodeError, ValueError) as exc:
@@ -309,7 +332,7 @@ class ParserServiceClient:
                 extra={
                     "parser_backend": backend,
                     "service_url": safe_url(url),
-                    "attempts": self._retry.attempts,
+                    "attempts": sent.count,
                     **safe_exception_fields(exc),
                 },
             )
@@ -318,7 +341,7 @@ class ParserServiceClient:
                     backend,
                     "invalid_response",
                     service_url=url,
-                    attempts=self._retry.attempts,
+                    attempts=sent.count,
                 ) from exc
             return _fallback(backend, f"{backend}_adapter_service_invalid_response")
         try:
@@ -337,7 +360,7 @@ class ParserServiceClient:
                     backend,
                     "invalid_response",
                     service_url=url,
-                    attempts=self._retry.attempts,
+                    attempts=sent.count,
                 ) from exc
             return _fallback(backend, f"{backend}_adapter_service_invalid_response")
         if fail_fast and result.extraction is None:
@@ -348,7 +371,7 @@ class ParserServiceClient:
                 backend,
                 _parser_result_failure_reason(result),
                 service_url=url,
-                attempts=self._retry.attempts,
+                attempts=sent.count,
                 warning_code=warning_code,
                 error_detail=error_detail,
             )
@@ -384,8 +407,9 @@ class ParserServiceClient:
             "document_id": document_id,
             "prompt": prompt,
         }
+        sent = RetryAttempts()
         try:
-            payload = self._post_parse_json(backend, url, files=files, data=data)
+            payload = self._post_parse_json(backend, url, files=files, data=data, sent=sent)
         except httpx.HTTPStatusError as exc:
             logger.warning(
                 "parser service returned error status",
@@ -393,7 +417,7 @@ class ParserServiceClient:
                     "parser_backend": backend,
                     "service_url": safe_url(url),
                     "status_code": exc.response.status_code,
-                    "attempts": self._retry.attempts,
+                    "attempts": sent.count,
                     **safe_exception_fields(exc),
                 },
             )
@@ -404,7 +428,7 @@ class ParserServiceClient:
                 extra={
                     "parser_backend": backend,
                     "service_url": safe_url(url),
-                    "attempts": self._retry.attempts,
+                    "attempts": sent.count,
                     **safe_exception_fields(exc),
                 },
             )
@@ -415,7 +439,7 @@ class ParserServiceClient:
                 extra={
                     "parser_backend": backend,
                     "service_url": safe_url(url),
-                    "attempts": self._retry.attempts,
+                    "attempts": sent.count,
                     **safe_exception_fields(exc),
                 },
             )
@@ -426,7 +450,7 @@ class ParserServiceClient:
                 extra={
                     "parser_backend": backend,
                     "service_url": safe_url(url),
-                    "attempts": self._retry.attempts,
+                    "attempts": sent.count,
                     **safe_exception_fields(exc),
                 },
             )
@@ -452,11 +476,12 @@ class ParserServiceClient:
         files: Mapping[str, tuple[str, bytes, str]],
         data: Mapping[str, str],
         progress_id: str | None = None,
+        sent: RetryAttempts | None = None,
     ) -> object:
         if progress_id is not None:
             self._progress_urls[progress_id] = url
         try:
-            return self._post_parse_json_once(backend, url, files=files, data=data)
+            return self._post_parse_json_once(backend, url, files=files, data=data, sent=sent)
         finally:
             if progress_id is not None:
                 self._progress_urls.pop(progress_id, None)
@@ -492,6 +517,7 @@ class ParserServiceClient:
         *,
         files: Mapping[str, tuple[str, bytes, str]],
         data: Mapping[str, str],
+        sent: RetryAttempts | None = None,
     ) -> object:
         with httpx.Client(timeout=self._timeout, **http_client_options(url)) as client:
             response = request_with_retry(
@@ -505,11 +531,30 @@ class ParserServiceClient:
                     "service_url": safe_url(url),
                 },
                 headers=outbound_correlation_headers(),
+                sent=sent,
                 files=files,
                 data=data,
             )
             response.raise_for_status()
             return response.json()
+
+
+def _is_language_pack_rejection(response: httpx.Response) -> bool:
+    """解析サービスの 422 が、要求の言語資源を読めなかったものか(#5685)。
+
+    今の解析サービスは ``detail.code`` に安定したエラーコードを返す。更新前のプロセス(版の
+    食い違いで今まさに起きる側)は ``detail`` を ``language_pack:`` で始まる文で返していた。
+    応答の本文はログ・利用者向けの文に出さない。
+    """
+    if response.status_code != 422:
+        return False
+    try:
+        detail = response.json().get("detail")
+    except (ValueError, AttributeError):
+        return False
+    if isinstance(detail, Mapping):
+        return detail.get("code") == LANGUAGE_PACK_REJECTED_ERROR_CODE
+    return isinstance(detail, str) and detail.startswith("language_pack:")
 
 
 def _fallback(backend: str, warning: str) -> ParserRegistryResult:
@@ -711,6 +756,14 @@ def _service_unavailable_message(
             f"{retry_suffix}サービス管理画面で {service_id} が running か、"
             "対象ファイルの解析に時間がかかっていないか確認してください。"
             f"{suffix}"
+        )
+    if reason == LANGUAGE_PACK_REJECTED_REASON:
+        return (
+            f"選択した文書解析サービス（{label}）が、取込に使う言語資源を読み取れませんでした"
+            "（/parse が HTTP 422）。backend と解析サービスの版が揃っていない可能性が高く、"
+            "一時的な障害ではないため、そのまま再試行しても直りません。"
+            f"サービス管理画面で {service_id} を再起動して backend と同じ版にしてから"
+            f"再実行してください。{warning_suffix}"
         )
     if reason == "http_error":
         status_text = f"HTTP {status_code}" if status_code is not None else "HTTP error"
