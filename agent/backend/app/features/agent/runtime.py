@@ -626,7 +626,7 @@ class FeedbackRating(StrEnum):
 
 
 class FeedbackReason(StrEnum):
-    """役に立たなかった理由（RAG の回答の理由に、Agent のツールの使い方を足したもの。#774）。"""
+    """解決しなかった理由（RAG の回答の理由に、Agent のツールの使い方を足したもの。#774）。"""
 
     INCORRECT = "incorrect"
     INCOMPLETE = "incomplete"
@@ -640,7 +640,7 @@ FEEDBACK_COMMENT_MAX_CHARS = 1000
 
 
 class RunFeedbackRequest(BaseModel):
-    """チャットの回答への評価。役に立たなかったときは理由が必須（RAG と同じ。#774）。"""
+    """チャットの回答への評価。解決しなかったときは理由が必須（RAG と同じ。#774）。"""
 
     rating: FeedbackRating
     reason: FeedbackReason | None = None
@@ -651,7 +651,7 @@ class RunFeedbackRequest(BaseModel):
         if self.rating == FeedbackRating.NOT_HELPFUL:
             self.comment = self.comment.strip()
         else:
-            # 役に立った評価には理由・コメントを残さない（RAG と同じ）。
+            # 解決した評価には理由・コメントを残さない（RAG と同じ）。
             self.reason = None
             self.comment = ""
         return self

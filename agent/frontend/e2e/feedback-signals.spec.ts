@@ -404,7 +404,7 @@ test("評価の付いていない実行から、実行の詳細と評価ケー�
   const detail = page.getByRole("region", { name: "確かめるべき実行の詳細" });
   await expect(detail.getByTestId("signals-detail-signals")).toContainText("却下した承認: 1 件");
 
-  // 役に立たなかった評価が無くても評価ケースにできる。
+  // 解決しなかった評価が無くても評価ケースにできる。
   await detail.getByTestId("signals-add-case-toggle").click();
   await expect(detail.getByTestId("signals-add-case-form").getByLabel("質問")).toHaveValue("在庫の引当を更新して");
 

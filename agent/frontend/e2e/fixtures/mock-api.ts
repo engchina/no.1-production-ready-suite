@@ -2141,12 +2141,12 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       }
       return run;
     }
-    // チャットの回答への評価（#774）。役に立たなかったときは理由が必須。役に立った評価は理由・コメントを残さない。
+    // チャットの回答への評価（#774）。解決しなかったときは理由が必須。解決した評価は理由・コメントを残さない。
     // 管理者の評価（#774）。本人の評価とは別に残す。
     if (method === "PUT" && at("runs", "*", "admin-review")) {
       if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけ評価を付けられます。");
       const helpful = body.rating === "helpful";
-      if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
+      if (!helpful && !body.reason) throw new HttpError(422, "解決しなかった理由を選んでください。");
       run.admin_review = {
         rating: body.rating,
         reason: helpful ? null : body.reason,
@@ -2161,7 +2161,7 @@ function handle(state: MockApiState, method: string, path: string, query: URLSea
       if (!ownsRunContent(state, run)) throw new HttpError(403, OTHERS_CONTENT_FORBIDDEN_MESSAGE);
       if (run.status !== "completed") throw new HttpError(409, "回答が出た Run にだけフィードバックを付けられます。");
       const helpful = body.rating === "helpful";
-      if (!helpful && !body.reason) throw new HttpError(422, "役に立たなかった理由を選んでください。");
+      if (!helpful && !body.reason) throw new HttpError(422, "解決しなかった理由を選んでください。");
       run.feedback = {
         rating: body.rating,
         reason: helpful ? null : body.reason,
