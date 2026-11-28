@@ -887,6 +887,78 @@ test("一覧の読み込みに失敗したら一覧の位置に再試行付き�
   await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
 });
 
+test("一覧の「再試行」の取り直しの間は失敗の表示を残し、押した「再試行」だけが回る", async ({ page }, testInfo) => {
+  // 応答を止めるための鍵（再試行の取り直しの間の画面を確かめる。#5955）。
+  let failing = true;
+  let hold: Promise<void> | undefined;
+  let release = () => {};
+  const holdNext = () => {
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  };
+  await mockHistory(page, { fail: () => failing });
+  // 後から登録した route が先に呼ばれる。止める間だけ待ってから mockHistory の応答に渡す。
+  await page.route((url) => url.pathname === "/api/nl2sql/history", async (route) => {
+    const waiting = hold;
+    if (waiting) {
+      hold = undefined;
+      await waiting;
+    }
+    await route.fallback();
+  });
+  const card = page.getByTestId("history-list-card");
+  const spinners = page.locator(".pr-spinner");
+  const header = page.getByRole("button", { name: "最新情報を取得", exact: true });
+
+  // 一覧が無いままの失敗: 再試行の間も失敗の表示と「再試行」を残し、スピナーは押した「再試行」の 1 つだけ。
+  await page.goto("/history");
+  const error = page.getByTestId("history-list-error");
+  await expect(error).toBeVisible();
+  failing = false;
+  holdNext();
+  const retry = error.getByRole("button", { name: "再試行" });
+  await retry.click();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  await expect(error).toBeVisible();
+  await expect(page.getByTestId("history-list-loading")).toHaveCount(0);
+  await expect(retry.locator(".pr-spinner")).toHaveCount(1);
+  await expect(spinners).toHaveCount(1);
+  await card.screenshot({ path: testInfo.outputPath("history-retry-unavailable.png") });
+  release();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  await expect(error).toHaveCount(0);
+  await expect(spinners).toHaveCount(0);
+
+  // 一覧を出したままの失敗: 前の一覧と古い内容の案内を残し、スピナーは押した「再試行」の 1 つだけ。
+  failing = true;
+  await header.click();
+  const stale = card.locator("[data-failure-kind]");
+  await expect(stale).toContainText("時点の内容を表示しています");
+  failing = false;
+  holdNext();
+  const staleRetry = stale.getByRole("button", { name: "再試行" });
+  await staleRetry.click();
+  await expect(staleRetry).toHaveAttribute("aria-busy", "true");
+  await expect(stale).toBeVisible();
+  await expect(table(page).locator("[data-run-id]")).toHaveCount(3);
+  await expect(staleRetry.locator(".pr-spinner")).toHaveCount(1);
+  await expect(spinners).toHaveCount(1);
+  await expect(header).not.toHaveAttribute("aria-busy", "true");
+  await card.screenshot({ path: testInfo.outputPath("history-retry-stale.png") });
+  release();
+  await expect(stale).toHaveCount(0);
+  await expect(spinners).toHaveCount(0);
+
+  // 「最新情報を取得」の取り直しはヘッダーのボタンの 1 つだけ（変えない）。
+  holdNext();
+  await header.click();
+  await expect(header).toHaveAttribute("aria-busy", "true");
+  await expect(spinners).toHaveCount(1);
+  release();
+  await expect(header).not.toHaveAttribute("aria-busy", "true");
+});
+
 test("詳細の読み込みに失敗したら再試行付きの失敗を出し、前の内容があれば残す", async ({ page }) => {
   await mockHistory(page);
   let failing = true;

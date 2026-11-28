@@ -90,6 +90,63 @@ def _marker_run(marker: re.Pattern[str]) -> re.Pattern[str]:
     return re.compile(rf"(?:{marker.pattern})(?:{_padding()}(?:{marker.pattern}))*")
 
 
+# 括弧の無いラベルの前後に来ない字（英数字・識別子の区切り）。``ABC-E1``・``E1.1x`` などの英数字の符号の一部は読まない。
+_BARE_BEFORE = r"(?<![0-9A-Za-z._\-/])"
+_BARE_AFTER = r"(?![0-9A-Za-z_\-/]|\.[0-9A-Za-z])"
+
+
+def _sent_texts(catalog: SentUnitCatalog, question: str | None) -> tuple[str, ...]:
+    """この入力でモデルに見せた質問と根拠の字（本文・資料名・見出し）。"""
+    texts = [question or ""]
+    for snapshot in catalog.snapshots:
+        span = snapshot.span()
+        texts.extend(str(span.get(key) or "") for key in ("text", "source"))
+        texts.extend(str(part) for part in span.get("function") or () if part)
+    return tuple(text for text in texts if text)
+
+
+def bracket_bare_labels(body: str, catalog: SentUnitCatalog, question: str | None = None) -> str:
+    """角括弧を付け忘れた引用のラベル（``E1.1E2.1``）を、印の形（``[E1.1][E2.1]``）にそろえる（#5750）。
+
+    読むのは今回送った根拠と単位のラベルだけで、形式だけで決める（文の意味は解析しない）。次のどれかなら本文の
+    字として残す: 角括弧の付いた印の中、英数字の符号の一部（前後が英数字・区切り）、今回の根拠に無い単位、
+    そのラベルと同じ字が質問か根拠（本文・資料名・見出し）にある（原文の符号を印にしない）。
+    """
+    marker = citation_marker(catalog)
+    if marker is None:
+        return body
+    blocks = "|".join(re.escape(label) for label in sorted(catalog.block_labels, key=len, reverse=True))
+    label = rf"(?:{blocks})(?:\.[1-9][0-9]*)?"
+    run = re.compile(rf"{_BARE_BEFORE}(?:{label})+{_BARE_AFTER}")
+    token = re.compile(rf"({blocks})(?:\.([1-9][0-9]*))?")
+    texts = _sent_texts(catalog, question)
+    units = set(catalog.unit_labels)
+
+    def in_sent_text(name: str) -> bool:
+        pattern = re.compile(rf"{_BARE_BEFORE}{re.escape(name)}(?![0-9])")
+        return any(pattern.search(text) for text in texts)
+
+    def bracket(match: re.Match[str]) -> str:
+        names = [found.group(0) for found in token.finditer(match.group(0))]
+        if "".join(names) != match.group(0):
+            return match.group(0)
+        for found in token.finditer(match.group(0)):
+            if found.group(2) is not None and found.group(0) not in units:
+                return match.group(0)
+        if any(in_sent_text(name) for name in names):
+            return match.group(0)
+        return "".join(f"[{name}]" for name in names)
+
+    pieces: list[str] = []
+    cursor = 0
+    for found in marker.finditer(body):
+        pieces.append(run.sub(bracket, body[cursor : found.start()]))
+        pieces.append(found.group(0))
+        cursor = found.end()
+    pieces.append(run.sub(bracket, body[cursor:]))
+    return "".join(pieces)
+
+
 # 文の中の丸括弧の 1 組（入れ子にしない）と、その前の改行を除く空白（#5231）。印の角括弧は含まない。
 _ROUND_GROUP = r"[^\S\n]*[（(][^（）()\n]*[）)]"
 
@@ -155,6 +212,9 @@ def full_answer_model(catalog: SentUnitCatalog, *, question: str | None = None) 
     """
     marker = citation_marker(catalog)
 
+    def bare_labels(value: str) -> str:
+        return bracket_bare_labels(value, catalog, question)
+
     def known_units(value: str) -> str:
         if marker is None:
             return value
@@ -177,12 +237,13 @@ def full_answer_model(catalog: SentUnitCatalog, *, question: str | None = None) 
             raise CitationMissing()
         return value
 
+    # 括弧の無いラベルを印の形にそろえてから、単位の確認・引用の有無を見る（#5750）。
     validators: dict[str, Any] = {
+        "bare_labels": field_validator("answer_body")(bare_labels),
         "known_units": field_validator("answer_body")(known_units),
         "cites_evidence": model_validator(mode="after")(cites_evidence),
     }
-    # question は呼び出し側との互換のために受ける（本文はモデルが完成させる文章なので使わない。#5806）。
-    del question
+    # question は括弧の無いラベルと同じ字が質問にあるかの確認だけに使う（本文はモデルが完成させる文章。#5806・#5750）。
     return create_model("FullAnswerWire", __base__=FullAnswerWire, __validators__=validators)
 
 

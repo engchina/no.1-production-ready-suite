@@ -147,6 +147,7 @@ from app.rag.layer_fingerprint import (
     NAVIGATION_SUMMARY_MAX_NODES_ARTIFACT_KEY,
     field_schema_hash,
 )
+from app.rag.loop_calls import submit_to_loop
 from app.rag.navigation import (
     build_navigation_tree,
     navigation_summary_elements,
@@ -229,7 +230,9 @@ INGESTION_JOB_CANCELLED_MESSAGE = "利用者によりキャンセルされまし
 # 16: PowerPoint の原本の図形と接続線を、図の読み取りの入力と図の説明に入れる。#5359。
 # 17: 原本の接続線の行に、両端の図形の文字も書く。#5386。
 # 18: 原本の位置(source_map)の範囲ごとに原本の行を記録する。#5450。
-EXTRACTION_ARTIFACT_SCHEMA_VERSION = 19
+# 20: PDF の線のある分数の式で、項の下の小さな字の行(単位など)を項の直後に置く。#4225。
+# 21: Excel のキャッシュ値の無い数式の文字列を表のセル(本文)にしない。#6006。
+EXTRACTION_ARTIFACT_SCHEMA_VERSION = 21
 # 原本の図形と接続線を読む PowerPoint の形式（OOXML。Office→PDF で変換して解析するとき。#5359）。
 _PRESENTATION_SHAPE_EXTENSIONS = frozenset({".pptx", ".pptm"})
 # 観測用に正規化する知識文書カテゴリ。特定業務(帳票等)には固定しない。
@@ -2813,6 +2816,9 @@ class IngestionPipeline:
         try:
             with ingestion_ai_calls(self._settings, "heading_levels", total=1) as caller:
                 raw = await caller.call(once, label="heading_levels")
+        except IngestionCancelledError:
+            # job の取消・lease の喪失(実行器の関門。#5696)は補助の失敗にせず止める。
+            raise
         except Exception:  # noqa: BLE001 - 見出しの階層は補助。失敗は今の階層のまま続ける。
             logger.warning("heading_level_inference_failed", extra={"trace_id": trace_id})
             return with_heading_level_report(extraction, plan, "failed")
@@ -2970,6 +2976,9 @@ class IngestionPipeline:
                     exc, checkpoints=self._field_checkpoints_enabled()
                 )
             ) from exc
+        except IngestionCancelledError:
+            # job の取消・lease の喪失(実行器の関門。#5696)は失敗の文にせずそのまま止める。
+            raise
         except Exception as exc:
             logger.warning(
                 "field_extraction_failed",
@@ -3068,7 +3077,7 @@ class IngestionPipeline:
             if stop is not None and stop.is_set():
                 raise IngestionCancelledError("図・表の説明の先読みを止めました。")
             if cancel_checker is not None:
-                asyncio.run_coroutine_threadsafe(_raise_if_cancelled(cancel_checker), loop).result()
+                submit_to_loop(lambda: _raise_if_cancelled(cancel_checker), loop).result()
 
         # 図・表の説明の段の件数を job の進捗へ写す(#1999)。対象の検出(ページの描画)の間も
         # 段を出し、Vision モデルの応答を待っている対象(ページ・種類)を画面に示す。段ごとの
@@ -3471,6 +3480,9 @@ class IngestionPipeline:
                 raise IngestionUserError(
                     f"章節の要約を止めました。{exc} 別経路には切り替えずに取込を停止しました。"
                 ) from exc
+            except IngestionCancelledError:
+                # job の取消・lease の喪失(実行器の関門。#5696)は失敗の文にせずそのまま止める。
+                raise
             except Exception as exc:
                 logger.warning("navigation_summary_failed", extra={"trace_id": trace_id})
                 raise IngestionUserError(

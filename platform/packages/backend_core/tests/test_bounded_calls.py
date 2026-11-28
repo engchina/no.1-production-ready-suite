@@ -141,6 +141,7 @@ def make_caller(
     events: list[CallEvent] | None = None,
     random_value: float = 0.5,
     refresh: Callable[[], Awaitable[None] | None] | None = None,
+    before_attempt: Callable[[], Awaitable[None]] | None = None,
     **policy: Any,
 ) -> BoundedCaller:
     defaults: dict[str, Any] = {
@@ -158,6 +159,7 @@ def make_caller(
         random=lambda: random_value,
         on_event=events.append if events is not None else None,
         refresh_credentials=refresh,
+        before_attempt=before_attempt,
     )
 
 
@@ -634,6 +636,77 @@ async def test_server_error_retries_twice_then_final_retry_succeeds_after_all_it
     others_done = max(started for started, item in service.starts if item != "x") + 1.0
     assert starts[-1] >= others_done + 30.0 - 1e-9
     assert any(event.type == "final_retry" for event in events)
+
+
+class JobCancelled(Exception):
+    """送り手の job の取消（関門が出す例外のスタブ）。"""
+
+
+def cancel_after(service: Service, starts: int) -> Callable[[], Awaitable[None]]:
+    """``starts`` 回の送信の後に取り消される job の関門。何回確かめたかを ``checks`` に数える。"""
+
+    async def gate() -> None:
+        gate.checks += 1  # type: ignore[attr-defined]
+        if len(service.starts) >= starts:
+            raise JobCancelled
+
+    gate.checks = 0  # type: ignore[attr-defined]
+    return gate
+
+
+async def test_gate_stops_before_the_next_item_and_frees_the_slot() -> None:
+    """関門が止めたら次の件を送らず、以後の呼び出しも関門を待たずに同じ例外で止まる（#5696）。"""
+    vt = VirtualTime()
+    service = Service(vt)
+    gate = cancel_after(service, 1)
+    caller = make_caller(vt, max_concurrency=1, before_attempt=gate)
+
+    assert await vt.run(caller.call(functools.partial(service, "a"))) == "ok:a"
+    with pytest.raises(JobCancelled) as first:
+        await vt.run(caller.call(functools.partial(service, "b")))
+    with pytest.raises(JobCancelled) as again:
+        await vt.run(caller.call(functools.partial(service, "c")))
+
+    assert [item for _, item in service.starts] == ["a"]
+    assert again.value is first.value
+    assert gate.checks == 2  # type: ignore[attr-defined]
+    assert caller.status().in_flight == 0
+
+
+async def test_gate_runs_before_retries_and_the_final_retry() -> None:
+    """再試行・最後の再試行の待ちの間に取り消されたら、その送信をしない。"""
+    vt = VirtualTime()
+    service = Service(vt)
+    service.plan["x"] = [StubError(500)] * 3
+    gate = cancel_after(service, 3)
+    caller = make_caller(vt, before_attempt=gate)
+
+    with pytest.raises(BoundedCallFailed) as failed:
+        await vt.run(caller.call(functools.partial(service, "x")))
+    assert failed.value.final_retry
+    with pytest.raises(JobCancelled):
+        await vt.run(caller.call(functools.partial(service, "x"), final=True))
+    assert calls_of(service, "x") == 3  # 1 回 + 再試行 2 回。最後の再試行は送らない。
+
+    vt2 = VirtualTime()
+    service2 = Service(vt2)
+    service2.plan["x"] = [StubError(500)] * 3
+    gate2 = cancel_after(service2, 2)
+    with pytest.raises(JobCancelled):
+        await vt2.run(make_caller(vt2, before_attempt=gate2).call(functools.partial(service2, "x")))
+    assert calls_of(service2, "x") == 2
+
+
+async def test_gate_stop_in_parallel_map_raises_one_exception() -> None:
+    """並行の件が同時に止まっても、例外の group ではなく 1 つの例外を出す。"""
+    vt = VirtualTime()
+    service = Service(vt)
+    gate = cancel_after(service, 4)
+    caller = make_caller(vt, max_concurrency=4, before_attempt=gate)
+
+    with pytest.raises(JobCancelled):
+        await vt.run(caller.map(list(range(10)), service))
+    assert len(service.starts) == 4
 
 
 async def test_item_still_failing_after_final_retry_is_recorded_or_fails_the_job() -> None:

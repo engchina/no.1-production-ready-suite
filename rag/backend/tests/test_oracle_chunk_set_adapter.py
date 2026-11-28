@@ -6,6 +6,7 @@ membership 由来導出、save_index の chunk_set スコープ、抽出 artifac
 """
 
 import json
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -112,6 +113,56 @@ async def test_list_document_chunk_sets_derives_membership_and_serving() -> None
     assert rows[cs_b]["is_serving"] is False
     # 作成日時は API(診断行の chunk_set 作成表示)向けに全行で返す。
     assert all(row["created_at"] is not None for row in rows.values())
+
+
+@pytest.mark.usefixtures("oracle_db")
+async def test_list_document_chunk_sets_serves_only_active_recipe_outputs() -> None:
+    """レシピの版は検索と同じく active かつ索引済みだけが配信中(#5694)。
+
+    同じレシピの旧版 A・現行版 B は、どちらも旧い列 is_serving が既定の 1 のまま。B へ切り替えた
+    後は B だけが配信中で、A は履歴に残り、所属 KB は出すが配信先は空。取込途中の版は配信中に
+    しない。別のレシピの active な版はそれぞれ配信中になる。
+    """
+    client = OracleClient()
+    document_id = await _new_document(client)
+    kb = await client.create_knowledge_base(name="配信KB")
+    await client.assign_documents_to_knowledge_base(kb.id, [document_id])
+    recipe_id = str((await client.ensure_default_document_recipe(document_id))["recipe_id"])
+    other_recipe_id = str((await client.create_document_recipe(document_id))["recipe_id"])
+    cs_a, cs_b, cs_pending, cs_other = (_unique_id("cs_recipe") for _ in range(4))
+
+    async def publish(chunk_set_id: str, owner: str, base: str | None) -> None:
+        await client.upsert_chunk_set(
+            chunk_set_id=chunk_set_id, document_id=document_id, recipe_id=owner
+        )
+        await client.mark_chunk_set_indexed(
+            chunk_set_id=chunk_set_id, chunk_count=0, vector_count=0
+        )
+        await client.activate_recipe_chunk_set(
+            recipe_id=owner, chunk_set_id=chunk_set_id, expected_base_chunk_set_id=base
+        )
+
+    # 切替は一度も active にならなかった同じレシピの候補を消すので、版は 1 つずつ作って切り替える。
+    await publish(cs_a, recipe_id, None)
+    await publish(cs_b, recipe_id, cs_a)
+    await publish(cs_other, other_recipe_id, None)
+    await client.upsert_chunk_set(
+        chunk_set_id=cs_pending, document_id=document_id, recipe_id=recipe_id
+    )
+
+    rows = {
+        str(row["chunk_set_id"]): row for row in await client.list_document_chunk_sets(document_id)
+    }
+
+    assert {cs_a, cs_b, cs_pending, cs_other} <= set(rows)
+    assert kb.id in cast(list[str], rows[cs_a]["knowledge_base_ids"])
+    assert rows[cs_a]["is_serving"] is False
+    assert rows[cs_a]["serving_knowledge_base_ids"] == []
+    assert rows[cs_pending]["is_serving"] is False
+    assert rows[cs_pending]["serving_knowledge_base_ids"] == []
+    for served in (cs_b, cs_other):
+        assert rows[served]["is_serving"] is True
+        assert kb.id in cast(list[str], rows[served]["serving_knowledge_base_ids"])
 
 
 @pytest.mark.usefixtures("oracle_db")

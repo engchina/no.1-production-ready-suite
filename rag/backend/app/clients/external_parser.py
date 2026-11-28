@@ -18,7 +18,7 @@ from pr_backend_core.internal_http import http_client_options
 from rag_parser_core.extraction import ExtractionMetadataValue, ExtractionPage
 from rag_parser_core.result import ParserRegistryResult
 
-from app.clients.http_retry import request_with_retry, retry_config_from_settings
+from app.clients.http_retry import RetryAttempts, request_with_retry, retry_config_from_settings
 from app.config import Settings
 from app.rag.pdf_backend import PdfSource, SourceOpenError, png_bytes
 from app.schemas.document import SourceProfile
@@ -86,10 +86,13 @@ class ExternalParserCallError(RuntimeError):
         *,
         status_code: int | None = None,
         warning_code: str | None = None,
+        attempts: int = 1,
     ) -> None:
         self.reason = reason
         self.status_code = status_code
         self.warning_code = warning_code
+        # 失敗した要求を実際に送った回数(設定の上限ではない。#5685)。
+        self.attempts = attempts
         super().__init__(warning_code or reason)
 
 
@@ -352,6 +355,7 @@ class ExternalParserClient:
         headers = dict(kwargs.pop("headers", {}) or {})
         if connection.api_key:
             headers["Authorization"] = f"Bearer {connection.api_key}"
+        sent = RetryAttempts()
         try:
             with httpx.Client(
                 timeout=timeout or self._timeout, **http_client_options(url)
@@ -367,23 +371,29 @@ class ExternalParserClient:
                         "service_url": connection.endpoint,
                     },
                     headers=headers,
+                    sent=sent,
                     **kwargs,
                 )
                 response.raise_for_status()
                 return response
         except httpx.TimeoutException as exc:
             raise ExternalParserCallError(
-                "timeout", warning_code=f"{connection.backend}_external_timeout"
+                "timeout",
+                warning_code=f"{connection.backend}_external_timeout",
+                attempts=sent.count,
             ) from exc
         except httpx.HTTPStatusError as exc:
             raise ExternalParserCallError(
                 "http_error",
                 status_code=exc.response.status_code,
                 warning_code=f"{connection.backend}_external_http_error",
+                attempts=sent.count,
             ) from exc
         except httpx.HTTPError as exc:
             raise ExternalParserCallError(
-                "unreachable", warning_code=f"{connection.backend}_external_unreachable"
+                "unreachable",
+                warning_code=f"{connection.backend}_external_unreachable",
+                attempts=sent.count,
             ) from exc
 
     def _request_json(

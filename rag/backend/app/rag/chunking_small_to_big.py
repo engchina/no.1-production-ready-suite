@@ -973,6 +973,17 @@ def _backend_chunk(
             "chunk_group_id": group_id,
             "chunk_group_kind": "small_to_big_parent",
             "parent_text": parent.text if parent is not None else "",
+            # 本文・親の本文の中の原文に無い範囲（本文の無い図の画像の標識。#5793）。
+            **(
+                {NON_SOURCE_RANGES_KEY: metadata[NON_SOURCE_RANGES_KEY]}
+                if metadata.get(NON_SOURCE_RANGES_KEY)
+                else {}
+            ),
+            **(
+                {PARENT_NON_SOURCE_RANGES_KEY: parent.metadata[NON_SOURCE_RANGES_KEY]}
+                if parent is not None and parent.metadata.get(NON_SOURCE_RANGES_KEY)
+                else {}
+            ),
             **(
                 {
                     "parent_answer_text_projection_json": json.dumps(

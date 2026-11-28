@@ -821,12 +821,17 @@ Sleep = Callable[[float], Awaitable[None]]
 RandomSource = Callable[[], float]
 EventListener = Callable[[CallEvent], None]
 CredentialRefresher = Callable[[], Awaitable[None] | None]
+# 試行の送信の直前に待つ関門。例外を出すと、その試行を送らずに呼び出しを止める（job の取消など）。
+AttemptGate = Callable[[], Awaitable[None]]
 
 
 class BoundedCaller:
     """上限つきの並行で呼び出しを実行する（1 つの段・1 つの job ごとに作る）。
 
     ``label`` は利用者向けの文（「図・表の説明（Vision）」など）、``name`` はログの名前。
+    ``before_attempt`` は各試行（再試行・最後の再試行を含む）を送る直前、枠を取った後に待つ
+    関門。例外を出したらその試行を送らず、以後のこの実行器の呼び出しも同じ例外で止める
+    （送り手の job が取り消された後に、次の要求をモデルへ送らない。#5696）。
     """
 
     def __init__(
@@ -841,6 +846,7 @@ class BoundedCaller:
         random: RandomSource = _random.random,
         on_event: EventListener | None = None,
         refresh_credentials: CredentialRefresher | None = None,
+        before_attempt: AttemptGate | None = None,
     ) -> None:
         self.name = name
         self.label = label or name
@@ -851,6 +857,8 @@ class BoundedCaller:
         self._random = random
         self._listeners: list[EventListener] = [on_event] if on_event is not None else []
         self._refresh_credentials = refresh_credentials
+        self._before_attempt = before_attempt
+        self._gate_stopped: BaseException | None = None
         self._started_at = clock()
         self._limit = self.policy.max_concurrency
         self._in_flight = 0
@@ -956,6 +964,8 @@ class BoundedCaller:
         while True:
             if self._aborted is not None:
                 raise self._aborted
+            if self._gate_stopped is not None:
+                raise self._gate_stopped
             now = self._clock()
             if self._pause_until > now:
                 await self._wait(
@@ -1126,6 +1136,7 @@ class BoundedCaller:
                     kind=last_kind,
                 )
             probe = await self._acquire()
+            await self._pass_gate(probe=probe)
             self.calls += 1
             try:
                 awaitable = fn(Attempt(number, final, last_kind, adaptation))
@@ -1270,6 +1281,21 @@ class BoundedCaller:
             self._on_success(probe=probe, label=label)
             return value
 
+    async def _pass_gate(self, *, probe: bool) -> None:
+        """``before_attempt`` を待つ。止まったら枠を返し、以後の呼び出しも同じ例外で止める。"""
+        if self._before_attempt is None:
+            return
+        try:
+            await self._before_attempt()
+        except asyncio.CancelledError:
+            await self._release(probe=probe)
+            raise
+        except BaseException as exc:
+            await self._release(probe=probe)
+            if self._gate_stopped is None:
+                self._gate_stopped = exc
+            raise self._gate_stopped from None
+
     async def map[I, T](
         self,
         items: Sequence[I],
@@ -1337,9 +1363,14 @@ class BoundedCaller:
             aborted = [e for e in group_error.exceptions if isinstance(e, BoundedCallAborted)]
             if aborted:
                 raise aborted[0] from None
-            others = [
-                e for e in group_error.exceptions if not isinstance(e, asyncio.CancelledError)
-            ]
+            # 関門で止まった件は同じ例外を共有する（1 つにまとめて出す）。
+            others = list(
+                {
+                    id(e): e
+                    for e in group_error.exceptions
+                    if not isinstance(e, asyncio.CancelledError)
+                }.values()
+            )
             if len(others) == 1:
                 raise others[0] from None
             raise

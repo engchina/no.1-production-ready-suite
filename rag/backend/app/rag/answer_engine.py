@@ -140,6 +140,7 @@ from app.rag.entity_expansion import (
     expansion_metadata,
     plan_entity_expansion,
 )
+from app.rag.loop_calls import submit_to_loop
 from app.rag.reference_sections import OUTLINE_SELECTION_KEY, SKIP_SECTION_OVER_LIMIT
 from app.rag.step_details import step_details_payload
 from app.rag.stored_answer import stored_evaluation_input
@@ -1116,19 +1117,14 @@ class AnswerEngine:
             report_degraded=state.record_degraded,
         )
 
-        def notify_step(name: str, outcome: str, elapsed: float, record: Mapping[str, Any]) -> None:
-            # 工程の順序を保つため、イベントループで通知し終わるのを待つ(短い上限付き)。
-            if step_callback is not None:
-                asyncio.run_coroutine_threadsafe(
-                    _call(lambda: step_callback(name, outcome, elapsed, record)), loop
-                ).result(_STEP_NOTIFY_TIMEOUT_SECONDS)
-
         # 工程ごとの SQL の回数・行数・時間(#1490)。計測の範囲は工程の span(pipeline)が作る。
         db_stats = current_db_call_stats()
         with (
             bind_dependencies(dependencies),
             prompt_overrides(overrides or {}),
-            bind_step_listener(notify_step if step_callback is not None else None),
+            bind_step_listener(
+                _step_notifier(step_callback, loop) if step_callback is not None else None
+            ),
             bind_step_metrics(db_stats.step_snapshot if db_stats is not None else None),
             # 合わせ込みの前に終わった回答(確認の質問・根拠なし・失敗)では、Wiki の経路を止める。
             ExitStack() as cleanup,
@@ -4139,6 +4135,25 @@ class _LoopEmbedder:
         return _run_on_loop(lambda: self.genai.embed(list(texts), input_type=input_type), self.loop)
 
 
+def _step_notifier(
+    step_callback: StepCallback, loop: asyncio.AbstractEventLoop
+) -> Callable[[str, str, float, Mapping[str, Any]], None]:
+    """回答の thread の工程の開始・終了を、event loop の ``step_callback`` へ伝える listener。"""
+
+    def notify_step(name: str, outcome: str, elapsed: float, record: Mapping[str, Any]) -> None:
+        # 待つ側が抜けた(時間切れ・取り消し)後に thread が終える工程は通知しない。次の回答
+        # (評価の次のケース)の進捗に混ざり、止まった loop には届かない(#5764)。
+        deadline = current_deadline()
+        if deadline is not None and deadline.cancelled:
+            return
+        # 工程の順序を保つため、イベントループで通知し終わるのを待つ(短い上限付き)。
+        submit_to_loop(lambda: step_callback(name, outcome, elapsed, record), loop).result(
+            _STEP_NOTIFY_TIMEOUT_SECONDS
+        )
+
+    return notify_step
+
+
 def _run_on_loop[R](factory: Callable[[], Awaitable[R]], loop: asyncio.AbstractEventLoop) -> R:
     """回答の thread から、非同期 I/O を event loop で実行して待つ。
 
@@ -4154,7 +4169,7 @@ def _start_on_loop[R](
 ) -> concurrent.futures.Future[R]:
     """回答の thread から非同期 I/O を event loop で始め、待たずに返す(待つのは別の関数)。"""
     check_deadline()
-    return asyncio.run_coroutine_threadsafe(_call(factory), loop)
+    return submit_to_loop(factory, loop)
 
 
 def _wait_on_loop[R](future: concurrent.futures.Future[R]) -> R:
@@ -4175,10 +4190,6 @@ def _wait_on_loop[R](future: concurrent.futures.Future[R]) -> R:
             if deadline is not None and deadline.expired:
                 future.cancel()
                 deadline.check()
-
-
-async def _call[R](factory: Callable[[], Awaitable[R]]) -> R:
-    return await factory()
 
 
 def _json_list(value: object) -> list[Any]:
