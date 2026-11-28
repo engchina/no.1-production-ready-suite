@@ -21,6 +21,7 @@ const state = (rating: "helpful" | "not_helpful"): FileReviewState => ({
   seen: [],
   excluded: {},
   pending: {},
+  selection_limit: 5,
 });
 
 let host: HTMLDivElement;

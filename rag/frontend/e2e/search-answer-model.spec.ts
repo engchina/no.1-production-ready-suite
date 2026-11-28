@@ -179,10 +179,10 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   const search = dialog.getByRole("searchbox");
   await expect(search).toHaveAccessibleName("資料の名前で絞り込み");
   await expect(dialog.getByRole("heading", { name: "AI に渡した資料", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("status")).toHaveText("全 2 件・選択 1 件 今回外す 1 件・除外の合計 1 件");
+  await expect(dialog.getByRole("status")).toHaveText("全 2 件・選択 1 / 5 件 今回外す 1 件・除外の合計 1 件");
   await search.fill("ガイド");
   await expect(dialog.getByRole("checkbox")).toHaveCount(1);
-  await expect(dialog.getByRole("status")).toHaveText("1 件（全 2 件）・選択 1 件 今回外す 1 件（うち非表示 1 件）・除外の合計 1 件");
+  await expect(dialog.getByRole("status")).toHaveText("1 件（全 2 件）・選択 1 / 5 件 今回外す 1 件（うち非表示 1 件）・除外の合計 1 件");
   // 絞り込みの解除は検索欄の「絞り込みを解除」だけ（重複の「全件表示」は持たない。#5921）。
   await expect(dialog.getByRole("button", { name: "全件表示", exact: true })).toHaveCount(0);
   expect(await list.evaluate(element => element.clientHeight)).toBe(listHeight);
@@ -245,7 +245,8 @@ test(
       }));
     const base = reviewSnapshots("trace-model", "question").unresolved;
     const source = { ...base.versions[0].sources.question, citations: hits };
-    let state = { ...base, versions: [{ ...base.versions[0], sources: { question: source } }] };
+    // 選べる資料の上限は設定で変えられる（#5981。既定 5）。タグを 2 行以内に保つ確認のため、多い値にする。
+    let state = { ...base, selection_limit: 50, versions: [{ ...base.versions[0], sources: { question: source } }] };
     const commands: string[] = [];
     await mockApi(page, 0, true, hits);
     await page.route("**/api/feedback", (r) => r.fulfill({ json: envelope(r.request().postDataJSON()) }));

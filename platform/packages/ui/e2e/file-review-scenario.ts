@@ -38,6 +38,7 @@ export function reviewSnapshots(id: string, task: string) {
     seen: ["doc-a", "doc-b"],
     excluded: {},
     pending: {},
+    selection_limit: 5,
     versions: [{ id, answer: firstAnswer, sources: { [task]: source }, rating: null }],
   };
   const unresolved: FileReviewState = {
@@ -78,4 +79,27 @@ export function reviewSnapshots(id: string, task: string) {
     ],
   };
   return { initial, unresolved, pending, next };
+}
+
+/**
+ * 選べる数の上限を確かめる合成の状態（#5981）。`count` 件の資料を根拠に持つ「解決しなかった」回答で、
+ * `kept` を渡すと前の再回答から引き継いだ選択になる。
+ */
+export const limitFileNames = (count: number) =>
+  Array.from({ length: count }, (_, index) => "合成資料 " + String(index + 1).padStart(2, "0") + ".pdf");
+export function limitSnapshot(id: string, task: string, count: number, options: { limit?: number | null; kept?: string[] } = {}) {
+  const citations = limitFileNames(count).map((name, index) =>
+    hit("doc-" + (index + 1), name, 1, index + 1, "合成資料 " + (index + 1) + " の手順の説明です。", index === 0),
+  );
+  const source = { title: reviewQuestion, trace_id: id, citations, answer: firstAnswer };
+  const state: FileReviewState = {
+    revision: options.kept ? 2 : 0,
+    kept: options.kept ? { [task]: options.kept } : {},
+    seen: citations.map((item) => item.document_id),
+    excluded: {},
+    pending: {},
+    selection_limit: options.limit === undefined ? 5 : options.limit,
+    versions: [{ id, answer: firstAnswer, sources: { [task]: source }, rating: "not_helpful" }],
+  };
+  return { state, citations };
 }

@@ -35,12 +35,32 @@ export interface FileReviewState {
   excluded: Record<string, string>;
   pending: Record<string, ReviewSource>;
   method_tasks?: string[];
+  /** 一度に選べる資料の数の上限（RAG の設定。Agent は RAG から読めなかったとき null）。 */
+  selection_limit: number | null;
 }
+/** 再検索の方法。only: 選んだ資料だけで回答 / mix: 選んだ資料に追加して探す / replace: 別の資料を探す。 */
+export type FileReviewMethod = "only" | "mix" | "replace";
 export interface FileReviewAction {
   revision: number;
   task: string;
   action: "answer" | "discover" | "reset" | "restore" | "back";
   selected: string[];
+  /** 方法を選んで行う操作だけに付ける（候補の確認の面からの操作には付けない）。 */
+  method?: FileReviewMethod;
+}
+/** 状態が上限を持たないとき（RAG から読めなかった Agent の応答）に使う予備の値。 */
+export const FILE_REVIEW_DEFAULT_SELECTION_LIMIT = 5;
+/** 資料を選び直す面で一度に選べる資料の数。 */
+export function selectionLimit(state: Pick<FileReviewState, "selection_limit"> | null | undefined) {
+  const limit = state?.selection_limit;
+  return typeof limit === "number" && Number.isInteger(limit) && limit >= 1 ? limit : FILE_REVIEW_DEFAULT_SELECTION_LIMIT;
+}
+/**
+ * 選んだ資料の数に上限を掛けるか。選んだ資料を回答・次の検索へ持ち越す操作（選んだ資料だけで回答・
+ * 選んだ資料に追加して探す・候補の確認）に掛け、「別の資料を探す」には掛けない。
+ */
+export function selectionLimited(method: FileReviewMethod | null, pending: boolean) {
+  return pending || method !== "replace";
 }
 export const FILE_REVIEW_JA = {
   "fileReview.question": "この回答で質問は解決しましたか？",
@@ -87,6 +107,9 @@ export const FILE_REVIEW_JA = {
   "fileReview.showManage": "除外した資料を表示（{count} 件）",
   "fileReview.restore": "候補に戻す",
   "fileReview.selectionCount": "{scope}・選択 {keep} 件",
+  "fileReview.selectionCountLimited": "{scope}・選択 {keep} / {limit} 件",
+  "fileReview.selectionLimit": "一度に選べる資料は {limit} 件までです。",
+  "fileReview.selectionOver": "一度に選べる資料は {limit} 件までです。{over} 件外してください。",
   "fileReview.exclusionCount": "今回外す {remove} 件・除外の合計 {total} 件",
   "fileReview.exclusionWithHidden": "今回外す {remove} 件（うち非表示 {hidden} 件）・除外の合計 {total} 件",
   "fileReview.none": "新しい候補はありません。",

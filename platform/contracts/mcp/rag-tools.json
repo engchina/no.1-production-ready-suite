@@ -1670,6 +1670,42 @@
       }
     },
     {
+      "name": "rag_file_review_limits",
+      "title": "資料の選び直しの上限",
+      "description": "資料を選び直す面で一度に選べる資料の数の上限を返します。",
+      "inputSchema": {
+        "additionalProperties": false,
+        "description": "資料を選び直す面の上限を読む条件（引数は無い）。",
+        "properties": {},
+        "title": "FileReviewLimitsInput",
+        "type": "object"
+      },
+      "annotations": {
+        "readOnlyHint": true
+      },
+      "outputSchema": {
+        "properties": {
+          "schema_version": {
+            "default": 47,
+            "description": "出力の形の版（変わったら上がる）。",
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "selection_limit": {
+            "description": "資料を選び直す面で一度に選べる資料（ファイル）の数の上限。",
+            "minimum": 1,
+            "title": "Selection Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "selection_limit"
+        ],
+        "title": "FileReviewLimitsOutput",
+        "type": "object"
+      }
+    },
+    {
       "name": "rag_grep",
       "title": "文書の中の語の検索（字のとおり）",
       "description": "文書の本文から、語を字のとおりに含む行を探し、文書・章節（section_id）と前後 2 行を返します。意味の検索では当たりにくい語がどこにあるかを確かめるときに、document_ids で文書を絞ってから使います。見つけた行の章節は、section_id を rag_read_section に渡して読みます。",

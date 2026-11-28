@@ -160,3 +160,80 @@ async def test_back_with_no_new_candidates_uses_no_retrieval_and_preserves_other
     legacy = await apply(FileReview.model_validate(saved_before_change), "back")
     assert legacy.excluded == none.excluded and not legacy.pending
     assert (await apply(legacy, "restore", "B")).excluded == {"A": "A"}
+
+
+def limited(state: FileReview, action: str, selected: str, method: str | None) -> ReviewAction:
+    return ReviewAction.model_validate(
+        dict(
+            revision=state.revision, action=action, selected=list(selected), task="a", method=method
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("action", "method"),
+    [("answer", "only"), ("discover", "mix"), ("answer", None), ("discover", None)],
+    ids=["only", "mix", "candidates-answer", "candidates-more"],
+)
+@pytest.mark.anyio
+async def test_selection_over_the_limit_is_rejected(action: str, method: str | None) -> None:
+    """選んだ資料を回答・次の検索へ持ち越す操作は、上限を超えた選択を受け付けない（#5981）。"""
+    first = initial(a="ABCD")
+    with pytest.raises(ValueError, match="一度に選べる資料は 3 件までです。"):
+        await advance_review(
+            first,
+            limited(first, action, "ABCD", method),
+            first.document_ids(),
+            retrieve,
+            compose,
+            selection_limit=3,
+        )
+    # 上限ちょうどは通る。
+    accepted = await advance_review(
+        first,
+        limited(first, action, "ABC", method),
+        first.document_ids(),
+        retrieve,
+        compose,
+        selection_limit=3,
+    )
+    assert accepted.kept["a"] == ["A", "B", "C"]
+
+
+@pytest.mark.anyio
+async def test_replace_and_unlimited_calls_are_not_limited() -> None:
+    """「別の資料を探す」（replace）と、上限を渡さない呼び出しには掛けない（#5981）。"""
+    first = initial(a="ABCD")
+    replaced = await advance_review(
+        first,
+        limited(first, "discover", "ABCD", "replace"),
+        first.document_ids(),
+        retrieve,
+        compose,
+        selection_limit=3,
+    )
+    assert replaced.kept["a"] == ["A", "B", "C", "D"]
+    unlimited = await advance_review(
+        first, limited(first, "answer", "ABCD", "only"), first.document_ids(), retrieve, compose
+    )
+    assert len(unlimited.versions) == 2
+    # 回答し直す操作は、方法の指定に関わらず上限を掛ける（replace を名乗っても通さない）。
+    with pytest.raises(ValueError, match="3 件まで"):
+        await advance_review(
+            first,
+            limited(first, "answer", "ABCD", "replace"),
+            first.document_ids(),
+            retrieve,
+            compose,
+            selection_limit=3,
+        )
+
+
+@pytest.mark.anyio
+async def test_stale_revision_wins_over_the_selection_limit() -> None:
+    first = initial(a="ABCD")
+    command = ReviewAction(revision=5, action="answer", selected=list("ABCD"), task="a")
+    with pytest.raises(StaleReview):
+        await advance_review(
+            first, command, first.document_ids(), retrieve, compose, selection_limit=3
+        )

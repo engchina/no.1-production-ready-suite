@@ -93,11 +93,29 @@ class FileReview(BaseModel):
         )
 
 
+class FileReviewView(FileReview):
+    """画面へ返す形。保存する状態に、一度に選べる資料の数の上限を足す（保存はしない）。"""
+
+    # 上限を決める製品（RAG）から読めなかったときは None（画面は予備の値を使う）。
+    selection_limit: int | None
+
+
 class ReviewAction(BaseModel):
     revision: int = Field(ge=0)
     action: Literal["answer", "discover", "restore", "reset", "back"]
     task: str = Field(min_length=1, max_length=128)
     selected: list[str] = Field(default_factory=list, max_length=10000)
+    # 画面で選んだ再検索の方法（only: 選んだ資料だけで回答 / mix: 選んだ資料に追加して探す /
+    # replace: 別の資料を探す）。候補の確認の面からの操作は方法を選ばないので None。
+    method: Literal["only", "mix", "replace"] | None = None
+
+    def selection_limited(self) -> bool:
+        """選んだ資料の数の上限が掛かる操作か。
+
+        選んだ資料を回答・次の検索へ持ち越す操作（回答し直す・候補を探す）に掛ける。
+        「別の資料を探す」（replace）は選ばなかった資料を外して探し直す操作なので掛けない。
+        """
+        return self.action == "answer" or (self.action == "discover" and self.method != "replace")
 
 
 class StaleReview(ValueError):
@@ -108,16 +126,32 @@ Retrieve = Callable[[str, list[str], list[str], bool], Awaitable[ReviewSource]]
 Compose = Callable[[dict[str, ReviewSource]], Awaitable[str]]
 
 
+def selection_limit_message(limit: int) -> str:
+    return f"一度に選べる資料は {limit} 件までです。"
+
+
 async def advance_review(
     previous: FileReview,
     command: ReviewAction,
     readable: Iterable[str],
     retrieve: Retrieve,
     compose: Compose,
+    *,
+    selection_limit: int | None = None,
 ) -> FileReview:
-    """版と選択の更新をまとめて返す。失敗・競合時には保存前の状態を使える。"""
+    """版と選択の更新をまとめて返す。失敗・競合時には保存前の状態を使える。
+
+    ``selection_limit`` を渡すと、選んだ資料の数がそれを超える操作を ``ValueError`` にする
+    （掛ける操作は ``ReviewAction.selection_limited``）。
+    """
     if command.revision != previous.revision:
         raise StaleReview("資料の選択が更新されました。開き直してください。")
+    if (
+        selection_limit is not None
+        and command.selection_limited()
+        and len(set(command.selected)) > selection_limit
+    ):
+        raise ValueError(selection_limit_message(selection_limit))
     state = previous.model_copy(deep=True)
     latest = state.versions[-1]
     key = command.task

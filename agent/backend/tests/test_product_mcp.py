@@ -182,9 +182,9 @@ def test_fake_product_mcp_follows_the_input_contracts() -> None:
                     )
             checked += 1
     # + nl2sql_list_profiles / nl2sql_recommend_profile / nl2sql_cancel_requirement（#1441）・
-    # nl2sql_cancel_job（#3318）と、画面が保存した根拠を確かめ直す内部のツール
-    # rag_readable_documents（#3252）。
-    assert checked == len(READ_ONLY) + 5
+    # nl2sql_cancel_job（#3318）と、画面だけが呼ぶ内部のツール rag_readable_documents（保存した
+    # 根拠の確かめ直し。#3252）・rag_file_review_limits（資料を選び直す面の上限。#5981）。
+    assert checked == len(READ_ONLY) + 6
 
 
 def test_fake_nl2sql_outputs_carry_the_contract_schema_version() -> None:
