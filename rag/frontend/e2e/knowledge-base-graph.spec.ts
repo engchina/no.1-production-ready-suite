@@ -274,8 +274,8 @@ test("Wiki 検索は結果で図を置き換え、結果の間の関係をつな
   // 戻るボタンは実際の戻り先（Wiki 検索）を示す。
   await page.getByRole("button", { name: "Wiki 検索に戻る" }).click();
   await expect(page.locator("#wiki-question")).toHaveValue("資料の確認方法");
-  await page.getByRole("button", { name: "新しい検索を開始" }).click();
-  await expect(page.locator("#wiki-question")).toHaveValue("");
+  // 質問・結果・選んだ原文をまとめて消すボタンは持たない（#5967）。
+  await expect(page.getByRole("button", { name: "新しい検索を開始" })).toHaveCount(0);
   await expectNoPageOverflow(page);
 });
 
@@ -429,7 +429,7 @@ test("関係の読み込みの失敗は詳細の同じ場所で再試行でき�
   await expect(page.getByRole("link", { name: "Wiki 検索" })).toHaveCount(0);
 });
 
-test("検索の条件の行の部品は同じ高さで、検索中の回転は 1 つだけ", { tag: "@responsive" }, async ({ page }) => {
+test("検索中の回転は 1 つだけで、検索の条件の行のボタンは「検索」だけ", { tag: "@responsive" }, async ({ page }) => {
   await data(page);
   let release!: () => void;
   const pending = new Promise<void>((resolve) => { release = resolve; });
@@ -442,7 +442,6 @@ test("検索の条件の行の部品は同じ高さで、検索中の回転は 1
   await expect(progress).toBeVisible();
   await expect(progress).toHaveAttribute("data-processing-activity-icon", "none");
   release();
-  await expect(page.getByRole("button", { name: "新しい検索を開始" })).toBeVisible();
-  const heights = await Promise.all(["新しい検索を開始", "検索"].map((name) => page.getByRole("button", { name, exact: true }).evaluate((el) => el.getBoundingClientRect().height)));
-  expect(Math.abs(heights[0] - heights[1])).toBeLessThanOrEqual(1);
+  await expect(page.getByRole("heading", { name: "検索結果と関係" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "新しい検索を開始" })).toHaveCount(0);
 });
