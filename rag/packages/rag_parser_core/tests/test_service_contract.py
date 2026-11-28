@@ -219,3 +219,21 @@ def test_service_failure_warning_hides_unsafe_detail() -> None:
     warning = service_failure_warning("oci_document_understanding", RuntimeError("secret://token"))
     # safe_for_user でない例外は型名のみ(情報漏えい回避)。
     assert warning == "oci_document_understanding_unavailable: RuntimeError"
+
+
+def test_service_failure_warning_reports_broken_input_as_invalid_input() -> None:
+    """解析サービス自身の解析で起きた破損ファイルの例外は入力の不正の code にする(#3217)。"""
+
+    class PdfiumError(Exception):
+        """pypdfium2 の例外と同じ名前(core は pypdfium2 を import しない)。"""
+
+    wrapped = RuntimeError("conversion failed")
+    wrapped.__cause__ = PdfiumError("Failed to load document (PDFium: Data format error).")
+
+    assert service_failure_warning("docling", PdfiumError("broken")) == (
+        "docling_adapter_invalid_input"
+    )
+    assert service_failure_warning("docling", wrapped) == "docling_adapter_invalid_input"
+    assert (
+        service_failure_warning("docling", ImportError("x")) == "docling_unavailable: ImportError"
+    )

@@ -3339,6 +3339,26 @@ test("手動更新の失敗通知はクエリ再描画で消えない", { tag: "
   await expect(notice).toBeVisible({ timeout: 3_000 });
   await page.waitForTimeout(1_000);
   await expect(notice).toBeVisible();
+
+  // 案内の「再試行」の取り直しの間は案内を残し、押した「再試行」だけが回る（スピナーは 1 つ。#5955）。
+  let releaseHead = () => {};
+  const headHeld = new Promise<void>((resolve) => {
+    releaseHead = resolve;
+  });
+  failHead = false;
+  await page.route("**/api/schema/catalog/head", async (route) => {
+    await headHeld;
+    await route.fallback();
+  });
+  const retry = page.getByRole("button", { name: "再試行", exact: true });
+  await retry.click();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  await expect(notice).toBeVisible();
+  await expect(retry.locator(".pr-spinner")).toHaveCount(1);
+  await expect(page.locator(".pr-spinner")).toHaveCount(1);
+  releaseHead();
+  await expect(notice).toHaveCount(0);
+  await expect(page.locator(".pr-spinner")).toHaveCount(0);
 });
 
 test("保存が成功したら実行確認語をクリアして保存ボタンを再ゲートする", { tag: "@responsive" }, async ({ page }, testInfo) => {

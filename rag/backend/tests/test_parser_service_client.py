@@ -10,9 +10,10 @@ import httpx
 import pytest
 from rag_parser_core.extraction import DocumentElement, StructuredExtraction
 from rag_parser_core.registry import ParserRegistryResult
-from rag_parser_core.result import ParseResponse
+from rag_parser_core.result import LANGUAGE_PACK_REJECTED_ERROR_CODE, ParseResponse
 
 from app.clients.parser_service import (
+    LANGUAGE_PACK_REJECTED_REASON,
     ParserServiceClient,
     ParserServiceUnavailableError,
     split_parser_warning,
@@ -247,6 +248,78 @@ def test_runner_fail_fast_reports_http_status_after_retries(
     assert exc_info.value.status_code == 503
     assert exc_info.value.attempts == 2
     assert "/parse が HTTP 503 を返しました" in str(exc_info.value)
+
+
+_LANGUAGE_PACK_DETAILS = [
+    {"code": LANGUAGE_PACK_REJECTED_ERROR_CODE, "message": "language_pack: snapshot: 合成"},
+    # 更新前の解析サービスのプロセスが返していた形(版の食い違いで今まさに返る側)。
+    "language_pack: snapshot: 合成",
+]
+
+
+@pytest.mark.parametrize("detail", _LANGUAGE_PACK_DETAILS, ids=["code", "legacy"])
+def test_runner_reports_language_pack_rejection_with_actual_attempts(
+    monkeypatch: pytest.MonkeyPatch, detail: object
+) -> None:
+    """言語資源を読めない 422 は版の食い違いとして案内し、試行回数は実際の 1 回(#5685)。"""
+    calls = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(422, json={"detail": detail})
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(
+            rag_parser_unstructured_service_url="http://127.0.0.1:18022",
+            rag_http_service_retry_attempts=5,
+            rag_http_service_retry_initial_delay_seconds=0,
+        )
+    )
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner("unstructured", b"abc", _profile(), "application/pdf", fail_fast=True)
+
+    assert calls == 1
+    assert exc_info.value.attempts == 1
+    assert exc_info.value.reason == LANGUAGE_PACK_REJECTED_REASON
+    assert exc_info.value.status_code == 422
+    message = str(exc_info.value)
+    assert "言語資源を読み取れませんでした" in message
+    assert "parser-unstructured を再起動" in message
+    assert "回試行しました" not in message
+    # 応答の本文(入力の値を含みうる)は利用者向けの文に出さない。
+    assert "合成" not in message
+
+    fallback = client.runner("unstructured", b"abc", _profile(), "application/pdf")
+    assert fallback.warnings == (f"unstructured_adapter_{LANGUAGE_PACK_REJECTED_ERROR_CODE}",)
+
+
+def test_runner_does_not_report_other_422_as_language_pack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """言語資源と関係の無い 422(要求の形の誤りなど)は、同じ原因として案内しない。"""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422, json={"detail": [{"loc": ["body", "file"], "msg": "Field required"}]}
+        )
+
+    _install_transport(monkeypatch, httpx.MockTransport(handle))
+    client = ParserServiceClient(
+        Settings(
+            rag_parser_unstructured_service_url="http://127.0.0.1:18022",
+            rag_http_service_retry_attempts=5,
+        )
+    )
+
+    with pytest.raises(ParserServiceUnavailableError) as exc_info:
+        client.runner("unstructured", b"abc", _profile(), "application/pdf", fail_fast=True)
+
+    assert exc_info.value.reason == "http_error"
+    assert exc_info.value.attempts == 1
+    assert "言語資源" not in str(exc_info.value)
 
 
 def test_runner_falls_back_on_5xx(monkeypatch: pytest.MonkeyPatch) -> None:

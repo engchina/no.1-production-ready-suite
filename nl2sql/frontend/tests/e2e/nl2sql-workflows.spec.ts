@@ -10357,6 +10357,53 @@ test("sql to question page shows a guided empty schema state", async ({ page }) 
   await expectNoHorizontalScroll(page);
 });
 
+test("sql to question の読込の失敗の「再試行」は押したときだけ回る（スピナーは 1 つ）", async ({ page }) => {
+  await mockNl2SqlApi(page);
+  // 業務プロファイルの一覧の読込を失敗させ、取り直しの応答を止めて取り直しの間の画面を確かめる（#5955）。
+  let release = () => {};
+  let hold: Promise<void> | null = null;
+  const holdNext = () => {
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  };
+  await page.route("**/api/nl2sql/profiles/search?*", async (route) => {
+    const waiting = hold;
+    hold = null;
+    if (waiting) await waiting;
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ data: null, error_messages: ["業務プロファイルの一覧を読み込めません。"] }),
+    });
+  });
+  await page.goto("/sql-to-question");
+  const failure = page.getByTestId("page-data-load-failed");
+  await expect(failure).toBeVisible();
+  const retry = failure.getByRole("button", { name: "再試行" });
+  const header = page.getByRole("button", { name: "最新情報を取得", exact: true });
+  const spinners = page.locator(".pr-spinner");
+
+  // ヘッダーの「最新情報を取得」: ヘッダーのボタンだけが回り、失敗の表示の「再試行」は回さない。
+  holdNext();
+  await header.click();
+  await expect(header).toHaveAttribute("aria-busy", "true");
+  await expect(retry).not.toHaveAttribute("aria-busy", "true");
+  await expect(spinners).toHaveCount(1);
+  release();
+  await expect(header).not.toHaveAttribute("aria-busy", "true");
+
+  // 失敗の表示の「再試行」: 失敗の表示を残したまま、押した「再試行」だけが回る。
+  holdNext();
+  await retry.click();
+  await expect(retry).toHaveAttribute("aria-busy", "true");
+  await expect(failure).toBeVisible();
+  await expect(header).not.toHaveAttribute("aria-busy", "true");
+  await expect(spinners).toHaveCount(1);
+  release();
+  await expect(retry).not.toHaveAttribute("aria-busy", "true");
+});
+
 test("sql to question page invalidates stale results when inputs change", async ({ page }) => {
   await mockNl2SqlApi(page);
   const alternateProfile = {

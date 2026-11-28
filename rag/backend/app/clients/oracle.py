@@ -3843,10 +3843,11 @@ class OracleClient:
                 WHERE {in_sql}
                   AND l.requested = 1
                   AND l.input_fingerprint IS NOT NULL
-                  AND (cs.is_active = 1 OR (cs.recipe_id IS NULL AND cs.is_serving = 1))
+                  AND {served_sql}
                   AND {document_access_sql}
                 """,
                 in_sql=in_sql,
+                served_sql=_SERVED_CHUNK_SET_SQL,
                 document_access_sql=_oracle_access_predicate_sql(alias="d"),
             ),
             _with_tenant_bind(binds),
@@ -3891,40 +3892,24 @@ class OracleClient:
             for row in rows
         ]
 
-    async def get_document_serving_chunk_set_id(self, document_id: str) -> str | None:
-        """文書の配信中(is_serving=1)chunk_set id を返す。無ければ None。
-
-        昇格済みで recipe が global と乖離していても DB の is_serving を正本にする
-        (実験時の候補 demote = 現 serving の再アサートに使う)。複数 serving の旧データは
-        created_at 最新を返す(安全側で1つに収束させる)。
-        """
-        row = await self._fetch_one(
-            """
-            SELECT chunk_set_id FROM rag_chunk_sets
-            WHERE document_id = :document_id AND is_serving = 1
-            ORDER BY created_at DESC, chunk_set_id
-            FETCH FIRST 1 ROWS ONLY
-            """,
-            {"document_id": document_id},
-        )
-        return str(next(iter(row.values()))) if row else None
-
     async def list_document_chunk_sets(self, document_id: str) -> list[dict[str, object]]:
         """文書の chunk_set 一覧(状態/件数/所属・配信 KB)を返す。variant 可視化に使う。
 
         3 層モデル: chunk_set は文書単位(KB 非依存)。所属 KB は文書の membership
-        (rag_document_knowledge_bases)で全 chunk_set 共通、配信中かは cs.is_serving=1 で決まる。
+        (rag_document_knowledge_bases)で全 chunk_set 共通。配信中かは検索・件数と同じ
+        ``_SERVED_CHUNK_SET_SQL`` で決める(レシピの版は active かつ索引済み、レシピの無い旧データ
+        だけ is_serving。退役した版・取込途中の版は配信中にしない。#5694)。
         created_at 昇順で安定。
         """
         rows = await self._fetch_all(
-            """
+            f"""
             SELECT cs.chunk_set_id AS chunk_set_id,
                    cs.recipe_id AS recipe_id,
                    cs.extraction_recipe_id AS extraction_recipe_id,
                    cs.status AS status,
                    cs.chunk_count AS chunk_count,
                    cs.vector_count AS vector_count,
-                   cs.is_serving AS is_serving,
+                   CASE WHEN {_SERVED_CHUNK_SET_SQL} THEN 1 ELSE 0 END AS is_serving,
                    cs.is_active AS is_active,
                    cs.created_at AS created_at,
                    cs.language_pack_release_id, cs.language_pack_ingest_hash,
@@ -3936,7 +3921,7 @@ class OracleClient:
              AND ex.extraction_recipe_id = cs.extraction_recipe_id
             WHERE cs.document_id = :document_id
             ORDER BY cs.created_at, cs.chunk_set_id
-            """,
+            """,  # nosec B608 - 埋め込むのは固定の条件だけ。値は bind。
             {"document_id": document_id},
         )
         member_kb_ids = [kb.id for kb in await self.list_document_knowledge_bases(document_id)]

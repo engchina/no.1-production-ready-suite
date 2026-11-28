@@ -1025,6 +1025,75 @@ for (const viewport of [
 }
 
 
+// --- 回答の列の見出し（回答モデル）は列が終わってから出す（#5753） ---
+
+const compareFirst = chatProgressStream("c1");
+const compareSecond = chatProgressStream("c2");
+
+/**
+ * 2 つのモデルで比べるチャットの SSE。両方の列が処理中の間を確かめてから、1 列目だけを終える。2 列目は終えない
+ * （確かめる間は作成中のまま）。
+ */
+const compareChatStream: TimedChunk[] = [
+  {
+    afterMs: 0,
+    text: [
+      sse("start", {
+        conversation_id: "conv-1",
+        user_message: userMessage,
+        columns: [
+          { model_id: "m1", label: "MODEL 1", message_id: "c1" },
+          { model_id: "m2", label: "MODEL 2", message_id: "c2" },
+        ],
+      }),
+      compareFirst.start("root", ragSpan.root()),
+      compareFirst.start("rewrite", ragSpan.stage("history_rewrite")),
+      compareSecond.start("root", ragSpan.root()),
+      compareSecond.start("rewrite", ragSpan.stage("history_rewrite")),
+    ].join(""),
+  },
+  {
+    afterMs: 3000,
+    text: [
+      compareFirst.finish("rewrite"),
+      compareFirst.finish("root"),
+      compareFirst.terminal("done"),
+      sse("metadata", { model_id: "m1", message_id: "c1", trace_id: "tc1", elapsed_ms: 3000, guardrail_warnings: [] }),
+      sse("delta", { model_id: "m1", text: okReply.content }),
+      sse("citations", { model_id: "m1", citations: [citation] }),
+      sse("done", { model_id: "m1", message_id: "c1" }),
+    ].join(""),
+  },
+  { afterMs: 60_000, text: sse("all_done", { conversation_id: "conv-1" }) },
+];
+
+test("作成中の回答の列には回答モデルの見出しだけの枠を出さず、終わった列にだけ見出しを出す", { tag: "@responsive" }, async ({ page }, testInfo) => {
+  await mockChatPage(page, [compareChatStream]);
+  await page.goto("/chat");
+  await selectSearchAnswerProfile(page, "経理ビュー");
+  await page.getByRole("button", { name: "新しい会話" }).click();
+  await page.getByRole("textbox").fill(userMessage.content);
+  await page.getByRole("button", { name: "送信" }).click();
+
+  const live = page.getByTestId("chat-live-turn");
+  const headings = live.getByTestId("chat-answer-model-heading");
+  const progress = live.getByTestId("chat-answer-progress");
+  // 両方の列が処理中: 処理の経過だけを出し、見出し・本文の無い回答の枠は出さない。
+  await expect(progress).toHaveCount(2);
+  await expect(headings).toHaveCount(0);
+  await expect(live.locator("[data-chat-answer-card]:visible")).toHaveCount(0);
+  await live.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("chat-compare-streaming.png") });
+
+  // 1 列目が終わる: 終わった列にだけ見出し（回答モデル）を出す。2 列目は処理中のまま見出しを出さない。
+  await expect(live.getByTestId("chat-answer-body")).toBeVisible({ timeout: 6_000 });
+  await expect(headings).toHaveCount(1);
+  await expect(headings).toContainText("MODEL 1");
+  await expect(live.locator("[data-chat-answer-card]:visible")).toHaveCount(1);
+  await expectNoPageOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("chat-compare-one-done.png") });
+});
+
 test("新規配信と保存したtraceでリランクの階層とスキップ理由の表示を保つ", { tag: "@responsive" }, async ({ page }, testInfo) => {
   const recorder = spanProgressRecorder("trace-rerank");
   const begin = [

@@ -162,7 +162,7 @@ def test_parse_service_binds_language_pack_from_request(monkeypatch: pytest.Monk
     from fastapi.testclient import TestClient
 
     import rag_parser_core.service as service
-    from rag_parser_core.result import ParserRegistryResult
+    from rag_parser_core.result import LANGUAGE_PACK_REJECTED_ERROR_CODE, ParserRegistryResult
 
     seen: list[str] = []
 
@@ -180,7 +180,10 @@ def test_parse_service_binds_language_pack_from_request(monkeypatch: pytest.Monk
     assert seen[0] != builtin_pack().hash
     assert seen[1] == builtin_pack().hash
     bad = json.dumps({"numbers": {"no_such": ["x"]}})
-    assert client.post("/parse", files=files, data={"language_pack": bad}).status_code == 422
+    rejected = client.post("/parse", files=files, data={"language_pack": bad})
+    # 読めない言語資源は、backend が見分けられる安定したエラーコードで返す(#5685)。
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == LANGUAGE_PACK_REJECTED_ERROR_CODE
 
 
 def test_xml_tree_labels_follow_the_pack() -> None:
