@@ -804,9 +804,6 @@ class _FakeRecipeJobOracle:
             uploaded_at=datetime.now(UTC),
         )
 
-    async def get_document_serving_chunk_set_id(self, document_id: str) -> str | None:
-        return None
-
     async def ensure_default_document_recipe(self, document_id: str) -> dict[str, object]:
         return await self.get_document_recipe(document_id, "recipe-1")
 
