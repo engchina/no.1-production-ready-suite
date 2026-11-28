@@ -119,7 +119,7 @@ variable "existing_oracle_password" {
 }
 
 variable "existing_oracle_dsn" {
-  description = "Optional Oracle DSN for an existing Autonomous AI Database. Leave blank to use lower(db_name)_high from the selected ADB."
+  description = "Optional Oracle DSN for an existing Autonomous AI Database. Leave blank to use lower(db_name)_tp from the selected ADB."
   type        = string
   default     = ""
 

@@ -168,7 +168,7 @@ _RULES: tuple[_Rule, ...] = (
         frozenset({"DPY-4000", "DPY-4017", "DPY-4018", "DPY-4021", "ORA-12154", "ORA-12262"}),
         "DSN（接続先の指定）が読めないか、Wallet の tnsnames.ora に見つかりません。",
         "platform/.env の PLATFORM_ORACLE_DSN が、Wallet の tnsnames.ora の別名（例: "
-        "<DB 名>_high）と同じかを確かめてください。",
+        "<DB 名>_tp）と同じかを確かめてください。",
     ),
     _Rule(
         "service_unavailable",

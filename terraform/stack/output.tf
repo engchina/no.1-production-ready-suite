@@ -16,13 +16,9 @@ output "autonomous_database_ocid" {
   value       = local.effective_adb_ocid
 }
 
-output "autonomous_database_high_connection_string" {
-  description = "Autonomous AI Database HIGH connection string."
-  value = local.create_new_adb ? lookup(
-    oci_database_autonomous_database.generated_database_autonomous_database[0].connection_strings[0].all_connection_strings,
-    "HIGH",
-    "unavailable",
-  ) : local.effective_oracle_dsn
+output "autonomous_database_service" {
+  description = "Wallet TNS alias that every deployed product connects to (PLATFORM_ORACLE_DSN)."
+  value       = local.effective_oracle_dsn
 }
 
 output "application_url" {
@@ -124,7 +120,8 @@ output "aidp_external_catalog_info" {
   value = var.deploy_aidp ? join(", ", [
     "Autonomous AI Database OCID: ${local.effective_adb_ocid}",
     "Database name: ${local.effective_adb_name}",
-    "Service: ${local.effective_oracle_dsn}",
+    # External Catalog は少数の重い分析の読み取りなので HIGH（3 製品の接続先 TP とは分ける。#6018）。
+    "Service: ${lower(local.effective_adb_name)}_high",
     "User name: ${local.aidp_db_user}",
   ]) : null
 }

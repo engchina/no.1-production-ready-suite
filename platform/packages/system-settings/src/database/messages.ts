@@ -139,7 +139,7 @@ export const DATABASE_MESSAGES = {
   "settings.database.placeholder.passwordSaved": "********",
   "settings.database.placeholder.secret": "更新する場合のみ入力",
   "settings.database.placeholder.serviceDsn": "DSN を選択してください",
-  "settings.database.placeholder.serviceDsnManual": "ragdb_high",
+  "settings.database.placeholder.serviceDsnManual": "ragdb_tp",
   "settings.database.saveError":
     "データベース設定の保存に失敗しました。入力値と platform/.env の書き込み権限を確認してください。",
   "settings.database.secrets.clearPassword": "保存済みパスワードを削除する",

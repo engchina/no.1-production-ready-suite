@@ -82,7 +82,7 @@ Resource Manager の画面では製品を選ばず、RAG / NL2SQL / Agent Contro
   - 新規: 既定の DB 名は `SUITEADB`、workload は `LH`（Lakehouse。#1558）、ECPU は `2`。
     選べる workload は `OLTP` / `AJD` / `LH` です。APEX Service は SQL*Net 接続を提供しないため、フォームと Terraform CLI では選べません。
     3製品を載せる場合は、負荷に合わせて ECPU 数とストレージを上げてください。
-  - 既存: SQL*Net 接続が使える ADB の OCID を選びます（APEX Service は利用できません）。`PLATFORM_ORACLE_DSN` は空なら `<db_name>_high` です。
+  - 既存: SQL*Net 接続が使える ADB の OCID を選びます（APEX Service は利用できません）。`PLATFORM_ORACLE_DSN` は空なら `<db_name>_tp` です（3 製品は短い照会を多数並行に投げるので TP のサービス。`_high` は同時に実行できる文が 3 で、並行の照会が待たされる。#6018）。
     stack は既存 ADB から Wallet を生成するだけで、ネットワーク・アクセス・mTLS・ACL は変更しません。
     アプリ用の DB ユーザーを使う（既定）ときは ADMIN のパスワード（`existing_adb_admin_password`）を、使わないときは
     全製品の `PLATFORM_ORACLE_USER` / `PLATFORM_ORACLE_PASSWORD` に書く値（`existing_oracle_user` / `existing_oracle_password`）を入力します。
@@ -1010,7 +1010,7 @@ Always Free ADB が必要な場合は、OCI コンソールで事前に手動作
 4. 既定のアプリ用 DB ユーザーを使う場合は、`existing_adb_admin_password` と
    `adb_app_user_name` / `adb_app_user_password` を指定します。使わない場合は、必要な権限を持つ
    `existing_oracle_user` / `existing_oracle_password` を指定します。
-   `existing_oracle_dsn` は空欄なら選択した ADB の DB 名から `<db_name>_high` を使います。
+   `existing_oracle_dsn` は空欄なら選択した ADB の DB 名から `<db_name>_tp` を使います。
 
 stack は既存 ADB の Wallet を生成して接続先へ渡します。既存 ADB の無料 / 有料の種別、
 CPU・容量・ネットワークは変更しません。無料枠の残量と制約、実際の接続・初期化・同時接続数・性能は

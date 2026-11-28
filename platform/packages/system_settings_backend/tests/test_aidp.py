@@ -23,7 +23,7 @@ AIDP_URL = "https://aidp.example.invalid/?ocid=" + AIDP_OCID
 # Wallet を使わない接続（TLS）の接続記述子。設定の判定（readiness）が Wallet のファイルを要らない。
 DSN = (
     "(description=(address=(protocol=tcps)(port=1522)(host=adb.example.invalid))"
-    "(connect_data=(service_name=prefix1_appdb_high.adb.example.invalid)))"
+    "(connect_data=(service_name=prefix1_appdb_tp.adb.example.invalid)))"
 )
 
 
@@ -151,7 +151,8 @@ def test_configured_returns_the_values_to_register_the_external_catalog(tmp_path
         "ocid": AIDP_OCID,
         "region": "ap-osaka-1",
         "adb_db_name": "appdb",
-        "adb_service_name": DSN,
+        # 3 製品の接続先（DSN）ではなく、分析の読み取りの HIGH のサービスの別名（#6018）。
+        "adb_service_name": "appdb_high",
         # 引用符なしで作る DB ユーザーの名前は大文字で保存される。
         "db_user": "ADB_AIDP_USER",
         "db_user_status": "exists",
