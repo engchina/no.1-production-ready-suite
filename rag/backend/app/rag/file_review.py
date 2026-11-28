@@ -7,6 +7,7 @@ from typing import Any, Literal, cast
 from fastapi import HTTPException, Request
 from pr_backend_core.file_review import (
     FileReview,
+    FileReviewView,
     ReviewAction,
     ReviewSource,
     ReviewVersion,
@@ -48,9 +49,11 @@ def _json_object(value: object) -> dict[str, Any]:
 
 async def review_answer(
     http_request: Request, trace_id: str, command: ReviewAction | None = None
-) -> FileReview:
+) -> FileReviewView:
     from app.api.routes.search import _answer_record_detail, _run_search_with_timeout
 
+    # 一度に選べる資料の数の上限（#5981）。保存する状態には入れず、応答のたびに今の設定を返す。
+    selection_limit = get_settings().rag_file_review_max_files
     oracle = OracleClient()
     row = await oracle.get_file_review(trace_id)
     record = await oracle.get_answer_record(trace_id)
@@ -100,12 +103,12 @@ async def review_answer(
         state.seen.update(state.versions[0].sources["question"].documents())
     owner = str(row.get("user_id_hash") or "")
 
-    async def projected(result: FileReview, readable: set[str]) -> FileReview:
+    async def projected(result: FileReview, readable: set[str]) -> FileReviewView:
         view = result.visible(readable)
         ratings = await oracle.file_review_ratings([v.id for v in view.versions], owner)
         for version in view.versions:
             version.rating = cast(Literal["helpful", "not_helpful"] | None, ratings.get(version.id))
-        return view
+        return FileReviewView(**dict(view), selection_limit=selection_limit)
 
     if command is None:
         return await projected(state, permitted)
@@ -178,7 +181,9 @@ async def review_answer(
 
     try:
         try:
-            updated = await advance_review(state, command, permitted, retrieve, compose)
+            updated = await advance_review(
+                state, command, permitted, retrieve, compose, selection_limit=selection_limit
+            )
             if command.action == "answer":
                 if not staged:
                     raise HTTPException(503, "再回答の根拠を保存できませんでした。")

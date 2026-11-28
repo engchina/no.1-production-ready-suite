@@ -2456,6 +2456,19 @@ class Settings(
         ),
     )
 
+    # --- 回答の後の資料の選び直し ---
+    rag_file_review_max_files: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        description=(
+            "回答の下の「資料を選んで再検索」で一度に選べる資料（ファイル）の数の上限（#5981）。"
+            "「選んだ資料だけで回答」「選んだ資料に追加して探す」と候補の確認に掛け、"
+            "「別の資料を探す」には掛けない。資料を選び直す面の状態の応答（selection_limit）で"
+            "画面へ返し、Agent の同じ面にも MCP の内部のツールで渡す。"
+        ),
+    )
+
     # --- レート制限（高コスト API の保護）---
     rate_limit_enabled: bool = Field(default=True)
     rate_limit_window_seconds: float = Field(default=60.0, gt=0.0, le=3600.0)

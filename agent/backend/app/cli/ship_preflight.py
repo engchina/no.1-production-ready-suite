@@ -374,8 +374,10 @@ def check_contract(user_uuid: str | None) -> list[Check]:
             )
             continue
         names = {tool.name for tool in listed}
-        # 一覧に出さない内部のツール（rag_readable_documents など）は Control Plane だけが呼ぶ。
-        missing = sorted(_contract_tool_names(product) - names - {"rag_readable_documents"})
+        # 一覧に出さない内部のツールは Control Plane だけが呼ぶ（保存した根拠の確かめ直しと、
+        # 資料を選び直す面の上限）。
+        internal = {"rag_readable_documents", "rag_file_review_limits"}
+        missing = sorted(_contract_tool_names(product) - names - internal)
         if missing:
             checks.append(
                 Check(

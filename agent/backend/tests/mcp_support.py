@@ -13,7 +13,7 @@ import json
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -124,6 +124,11 @@ class RagEvidenceRefIn(_ContractInput):
 class RagReadableDocumentsIn(_ContractInput):
     # 保存した根拠の文書を、見る人が今見られるかを確かめる内部のツール（#3252）。
     document_ids: list[str] = Field(min_length=1, max_length=200)
+
+
+class RagFileReviewLimitsIn(_ContractInput):
+    # 資料を選び直す面で一度に選べる資料の数の上限を読む内部のツール（#5981。引数は無い）。
+    pass
 
 
 class RagAnswerRangeIn(_ContractInput):
@@ -478,6 +483,9 @@ class FakeProductMcp:
                         input_model=RagReadableDocumentsIn,
                         handler=self._readable_documents,
                         listed=False,
+                    ),
+                    replace(
+                        self._tool("rag_file_review_limits", RagFileReviewLimitsIn), listed=False
                     ),
                 ],
             ),

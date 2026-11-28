@@ -235,6 +235,10 @@
         "doc-1"
       ]
     },
+    "rag_file_review_limits": {
+      "schema_version": 47,
+      "selection_limit": 5
+    },
     "rag_recommend_search_answer_profile": {
       "schema_version": 47,
       "recommended_profile_id": "bv-sales",

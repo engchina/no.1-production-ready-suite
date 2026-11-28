@@ -2863,3 +2863,22 @@ sudo -n ./platform/deploy/suite-update.sh
 ```
 
 回答の生成の指示の一覧に、追加の指示の Step の定型文が増えるため、回答の記録のプロンプトの版（`provenance.prompt_version`）は更新の前後で変わる（足す文が空のプロファイルに渡す指示の内容は変わらない）。
+
+## 資料を選び直す面で選べる資料の上限（#5981）
+
+回答の下の「資料を選んで再検索」で一度に選べる資料（ファイル）を、既定で 5 件までにした。DB migration は不要（上限は保存する状態に入れず、応答のたびに今の設定を返す）。
+
+- **新しい設定**: `RAG_FILE_REVIEW_MAX_FILES`（`rag/backend/.env`。既定 5、1〜50）。未設定なら 5 件で、既存の `.env` に足さなくてよい。変えるときだけ行を足して RAG の backend を再起動する。設定画面の項目・検索・回答プロファイルごとの設定は無い。Agent は自分の設定を持たず、RAG の値を読む。
+- **掛かる操作**: 「選んだ資料だけで回答」「選んだ資料に追加して探す」と、候補の確認の面の「選んだ資料で再回答」「さらに候補を探す」。「別の資料を探す」には掛けない。
+- **API の変更**（互換は持たない）:
+  - `GET` / `POST /api/search/answers/{trace_id}/review` の応答に `selection_limit`（今の上限）が増えた。
+  - `POST` の要求に `method`（`only` / `mix` / `replace`。画面で選んだ再検索の方法。候補の確認の面からの操作は付けない）が増えた。上限を超える選択の要求は 422（「一度に選べる資料は N 件までです。」）で、検索・生成・保存をしない。`method` が `replace` の `discover` だけ確かめない。
+  - MCP に内部のツール `rag_file_review_limits`（`tools/list` に出さない。出力は `selection_limit`）が増えた。Agent の画面の同じ面が、状態を読む・変えるたびに画面を見ている利用者として呼ぶ。契約は `platform/contracts/mcp/rag-tools.json`。既存のツールの入出力と出力の形の版は変えていない。
+  - Agent の `GET` / `POST /api/runs/{run_id}/review` の応答にも `selection_limit` が増えた（RAG から読めなかったときは `null` で、画面は 5 件で選ばせる。そのとき、選択を持ち越す `POST` は 502 で止める）。
+- **保存済みの選択**: 前の再回答から引き継いだ選択が上限より多い回答は、開いたときに選択を外さず、主ボタンを押せなくして外す数を案内する。
+
+RAG と Agent は同じ版で配備する（Agent が新しい内部のツールを呼ぶため）。repo の直下で通常の更新を行う。
+
+```bash
+sudo -n ./platform/deploy/suite-update.sh
+```

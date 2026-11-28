@@ -179,10 +179,10 @@ test("検索の回答で資料を選び、新候補を確認してから再回�
   const search = dialog.getByRole("searchbox");
   await expect(search).toHaveAccessibleName("資料の名前で絞り込み");
   await expect(dialog.getByRole("heading", { name: "AI に渡した資料", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("status")).toHaveText("全 2 件・選択 1 件 今回外す 1 件・除外の合計 1 件");
+  await expect(dialog.getByRole("status")).toHaveText("全 2 件・選択 1 / 5 件 今回外す 1 件・除外の合計 1 件");
   await search.fill("ガイド");
   await expect(dialog.getByRole("checkbox")).toHaveCount(1);
-  await expect(dialog.getByRole("status")).toHaveText("1 件（全 2 件）・選択 1 件 今回外す 1 件（うち非表示 1 件）・除外の合計 1 件");
+  await expect(dialog.getByRole("status")).toHaveText("1 件（全 2 件）・選択 1 / 5 件 今回外す 1 件（うち非表示 1 件）・除外の合計 1 件");
   // 絞り込みの解除は検索欄の「絞り込みを解除」だけ（重複の「全件表示」は持たない。#5921）。
   await expect(dialog.getByRole("button", { name: "全件表示", exact: true })).toHaveCount(0);
   expect(await list.evaluate(element => element.clientHeight)).toBe(listHeight);

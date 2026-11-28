@@ -1,6 +1,7 @@
 """利用者が指定した RAG の検索タスクだけを再実行する。"""
 
 import json
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ from agents import Agent, Runner
 from fastapi import HTTPException
 from pr_backend_core.file_review import (
     FileReview,
+    FileReviewView,
     ReviewAction,
     ReviewSource,
     ReviewVersion,
@@ -36,6 +38,12 @@ from app.features.agent.tool_grounding import is_grounding_tool
 from app.features.agent.tools import ExternalToolError, McpConnectionClient, ToolInvocationContext
 
 RAG_TOOLS = {"rag__rag_chat": "rag_chat", "rag__rag_search": "rag_search"}
+# 資料を選び直す面の上限を返す RAG の内部のツール（契約 rag-tools.json。`tools/list` に出ない）。
+FILE_REVIEW_LIMITS_TOOL = "rag_file_review_limits"
+# 画面の操作の印（RAG は Run の中のモデルの呼び出しと分けて記録する）。
+FILE_REVIEW_PURPOSE = "file_review"
+
+logger = logging.getLogger(__name__)
 
 
 def source_tasks(run: RunState) -> dict[str, RunStep]:
@@ -69,6 +77,47 @@ def _mark_cited(sources: dict[str, ReviewSource], steps: list[RunStep], answer: 
     for source in sources.values():
         for hit in source.citations:
             hit["cited"] = (hit["document_id"], hit["chunk_id"]) in cited
+
+
+def selection_limit(run: RunState, viewer: str) -> int | None:
+    """資料を選び直す面で一度に選べる資料の数の上限（同期。thread で呼ぶ。#5981）。
+
+    上限は RAG の設定 1 つで、Agent は自分の設定を持たない。画面を見ている利用者として RAG の
+    内部のツールで読み、そのまま画面へ渡す。読めないとき（RAG の接続が無い・失敗した・値の形が
+    違う）は None（画面は予備の値で選ばせ、選択を持ち越す操作は ``change_review`` が止める）。
+    """
+    from app.features.agent.rag_figures import RunFigureUrlError, _rag_service_client
+
+    try:
+        client, trace = _rag_service_client(run, viewer, FILE_REVIEW_PURPOSE)
+        output = client.call_tool(FILE_REVIEW_LIMITS_TOOL, {}, idempotent=True, trace_id=trace)
+    except RunFigureUrlError:
+        logger.warning(
+            "agent_file_review_limit_unavailable",
+            extra={"run_id": run.id, "error_code": "rag_connection_unavailable"},
+        )
+        return None
+    except ExternalToolError as exc:
+        logger.warning(
+            "agent_file_review_limit_unavailable",
+            extra={"run_id": run.id, "error_code": exc.details.get("error_code") or exc.code},
+        )
+        return None
+    value = output.get("selection_limit")
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    logger.warning(
+        "agent_file_review_limit_unavailable",
+        extra={"run_id": run.id, "error_code": "invalid_output"},
+    )
+    return None
+
+
+async def read_review(run: RunState, viewer: str) -> FileReviewView:
+    """資料を選び直す面の状態（見る人が今見られる資料だけ）と、RAG の上限。"""
+    state, readable = await load_review(run, viewer)
+    limit = await run_in_threadpool(selection_limit, run, viewer)
+    return FileReviewView(**dict(state.visible(readable)), selection_limit=limit)
 
 
 async def load_review(run: RunState, viewer: str) -> tuple[FileReview, set[str]]:
@@ -148,8 +197,13 @@ async def original_passages(
     return texts
 
 
-async def change_review(run: RunState, viewer: str, command: ReviewAction) -> FileReview:
+async def change_review(run: RunState, viewer: str, command: ReviewAction) -> FileReviewView:
     state, permitted = await load_review(run, viewer)
+    limit = await run_in_threadpool(selection_limit, run, viewer)
+    if limit is None and command.selection_limited():
+        # 上限を読めないまま、選んだ資料を回答・次の検索へ持ち越さない（RAG に届かないので、
+        # 続く再検索も同じ失敗になる）。
+        raise HTTPException(502, "資料の再検索に失敗しました。")
     tasks = source_tasks(run)
     profiles = await run_in_threadpool(runtime_repository.list_agents)
     profile = next((p for p in profiles if p.id == run.agent_id), None)
@@ -245,7 +299,9 @@ async def change_review(run: RunState, viewer: str, command: ReviewAction) -> Fi
         )
 
     try:
-        updated = await advance_review(state, command, permitted, retrieve, compose)
+        updated = await advance_review(
+            state, command, permitted, retrieve, compose, selection_limit=limit
+        )
         if command.action == "answer":
             latest = updated.versions[-1]
             latest.notice = await run_in_threadpool(current_answer_notice)
@@ -269,7 +325,8 @@ async def change_review(run: RunState, viewer: str, command: ReviewAction) -> Fi
         raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    return updated.visible(permitted | (updated.document_ids() - state.document_ids()))
+    view = updated.visible(permitted | (updated.document_ids() - state.document_ids()))
+    return FileReviewView(**dict(view), selection_limit=limit)
 
 
 async def _project_outcome(run: RunState, viewer: str, state: FileReview) -> RunState:

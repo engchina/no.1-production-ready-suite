@@ -53,7 +53,7 @@ from pr_backend_core.chat_history_window import (
     within_chat_history,
 )
 from pr_backend_core.chat_progress import CHAT_PROGRESS_SSE_HEADERS
-from pr_backend_core.file_review import FileReview, ReviewAction
+from pr_backend_core.file_review import FileReviewView, ReviewAction
 from pr_backend_core.llm_request_params_httpx import asend_dropping_parameters
 from pr_backend_core.logging import safe_exception_fields
 from pr_backend_core.observability.trace_bodies import BodyPage
@@ -2346,15 +2346,14 @@ async def delete_thread(thread_id: str, request: Request) -> ApiResponse[None]:
     return ApiResponse(data=None)
 
 
-@router.get("/runs/{run_id}/review", response_model=ApiResponse[FileReview])
+@router.get("/runs/{run_id}/review", response_model=ApiResponse[FileReviewView])
 async def get_file_review(
     run_id: str, request: Request, _: None = Depends(require_viewer)
-) -> ApiResponse[FileReview]:
-    from app.features.agent.file_review import load_review
+) -> ApiResponse[FileReviewView]:
+    from app.features.agent.file_review import read_review
 
     run = _readable_run(request, run_id)
-    state, visible = await load_review(run, _run_creator_user_uuid(request) or "")
-    return ApiResponse(data=state.visible(visible))
+    return ApiResponse(data=await read_review(run, _run_creator_user_uuid(request) or ""))
 
 
 @router.get("/runs/{run_id}/review/original", response_model=ApiResponse[dict[str, str]])
@@ -2374,10 +2373,10 @@ async def get_file_review_original(
     return ApiResponse(data=await original_passages(run, viewer, task, document_id))
 
 
-@router.post("/runs/{run_id}/review", response_model=ApiResponse[FileReview])
+@router.post("/runs/{run_id}/review", response_model=ApiResponse[FileReviewView])
 async def update_file_review(
     run_id: str, request: Request, action: ReviewAction, _: None = Depends(require_operator)
-) -> ApiResponse[FileReview]:
+) -> ApiResponse[FileReviewView]:
     from app.features.agent.file_review import change_review
 
     run = _readable_run(request, run_id)
