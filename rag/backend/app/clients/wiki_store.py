@@ -172,14 +172,21 @@ def wiki_scope(
         if require_build_enabled
         else ""
     )
-    enabled = f"""EXISTS (
-        SELECT 1 FROM rag_document_knowledge_bases wm
+    member_kb = f"""kb.status='ACTIVE' AND {requested}
+          AND {_oracle_knowledge_base_access_predicate_sql(alias="kb")}
+          {build}"""
+    # 所属する文書と、所属する重複の文書の正本の集合（chunk の行と相関させない）。相関の
+    # 副問い合わせの OR（所属する文書か、重複の正本か）は semi join にできず、案内の行ごとに
+    # 所属を結び直して、検証環境で範囲の照合 1 回が 4 秒近くかかった（#6020）。
+    enabled = f"""c.document_id IN (
+        SELECT wm.document_id FROM rag_document_knowledge_bases wm
+        JOIN rag_knowledge_bases kb ON kb.knowledge_base_id=wm.knowledge_base_id
+        WHERE {member_kb}
+        UNION ALL
+        SELECT member_doc.duplicate_of_document_id FROM rag_document_knowledge_bases wm
         JOIN rag_knowledge_bases kb ON kb.knowledge_base_id=wm.knowledge_base_id
         JOIN rag_documents member_doc ON member_doc.document_id=wm.document_id
-        WHERE (wm.document_id=c.document_id OR member_doc.duplicate_of_document_id=c.document_id)
-          AND kb.status='ACTIVE' AND {requested}
-          AND {_oracle_knowledge_base_access_predicate_sql(alias="kb")}
-          {build}
+        WHERE member_doc.duplicate_of_document_id IS NOT NULL AND {member_kb}
     )"""
     return f"({where}) AND {enabled}", binds
 

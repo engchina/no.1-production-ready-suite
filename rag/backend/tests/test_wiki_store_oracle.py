@@ -242,6 +242,22 @@ async def test_shared_document_cache_requires_enabled_current_membership_and_cas
     assert [row["document_id"] for row in reused.catalog] == [did]
     assert reused.sources == scope.sources
     assert len(await store.read_sources(await store.pages(reused), filters)) == len(pages)
+    # 取込を省いた重複（自前の索引が無い）だけが所属する KB からも、正本の案内を使う。所属の
+    # 照合は chunk の行と相関させない集合で行う（#6020）。
+    third = await oracle.create_knowledge_base(name=f"synthetic-wiki-c-{token}")
+    await oracle.create_document(
+        file_name=f"synthetic-duplicate-{token}.txt",
+        object_storage_path=f"local://synthetic-duplicate-{token}.txt",
+        content_type="text/plain",
+        duplicate_of_document_id=did,
+        knowledge_base_ids=[third.id],
+    )
+    await store.set_enabled(third.id, True)
+    via_duplicate = {"knowledge_base_id": third.id}
+    assert [row["document_id"] for row in (await store.resolve(via_duplicate)).catalog] == [did]
+    assert len(await store.read_sources(pages, via_duplicate)) == len(pages)
+    await store.set_enabled(third.id, False)
+    assert not (await store.resolve(via_duplicate)).catalog
     await store.set_enabled(first.id, False)
     # 無効にした KB からは読めないが、保存済みの案内は残り、別の有効な KB では使える。
     assert not await store.read_sources(pages, filters)
