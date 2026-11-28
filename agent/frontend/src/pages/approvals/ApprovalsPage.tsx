@@ -444,7 +444,7 @@ export function ApprovalsPage() {
                 <Card className="min-w-0">
                   <CardHeader className="flex-row flex-wrap items-start justify-between gap-4">
                     <div className="min-w-0 space-y-2">
-                      <CardTitle className="break-words [overflow-wrap:anywhere]">
+                      <CardTitle className="pr-break-anywhere">
                         {selected.approval.tool_call.name}
                       </CardTitle>
                       <StatusBadge {...approvalStatusView(selected.approval.status)} />

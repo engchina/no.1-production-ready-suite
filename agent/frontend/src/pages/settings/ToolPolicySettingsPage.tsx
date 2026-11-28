@@ -122,7 +122,7 @@ function ConnectionErrors({
         <div className="space-y-2">
           <ul className="space-y-1">
             {connections.map((connection) => (
-              <li key={connection.server_id} className="break-words [overflow-wrap:anywhere]">
+              <li key={connection.server_id} className="pr-break-anywhere">
                 {t("settings.toolPolicy.connectionError", { label: connection.label, error: connection.error ?? "" })}
               </li>
             ))}

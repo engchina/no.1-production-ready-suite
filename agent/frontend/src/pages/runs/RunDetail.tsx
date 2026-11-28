@@ -611,7 +611,7 @@ function auditToolItem(audit: RunAuditData, record: ToolAuditRecord): RunEventLo
     children:
       record.error || warnings.length ? (
         // エラーと警告はアイコン付きの FormStatus で出す（色だけに頼らない）。失敗・警告の行は最初から開く。
-        <div className="min-w-0 space-y-1 break-words [overflow-wrap:anywhere]">
+        <div className="min-w-0 space-y-1 pr-break-anywhere">
           {record.error ? <FormStatus tone="danger" message={record.error} /> : null}
           {warnings.map((warning) => (
             <FormStatus key={warning} tone="warning" message={warning} />

@@ -74,7 +74,7 @@ export function DefinitionValue({
       </dl>
     );
   return (
-    <span className="break-words [overflow-wrap:anywhere]">
+    <span className="pr-break-anywhere">
       {names[String(value)] ?? String(value)}
     </span>
   );
